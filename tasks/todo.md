@@ -4,9 +4,9 @@ Build `engine/` with full test coverage. Playable in terminal.
 
 ## Module Order
 
-- [ ] **dice.py** — Dice expressions ("2d6+3") → DiceResult
-- [ ] **character.py** — Classes, races, ability scores, levels, HP, AC
-- [ ] **inventory.py** — Items, equipment, weight, attunement
+- [x] **dice.py** — Dice expressions ("2d6+3") → DiceResult
+- [x] **character.py** — Classes, races, ability scores, levels, HP, AC
+- [x] **inventory.py** — Items, equipment, weight, attunement
 - [ ] **spells.py** — Spell definitions, slots, casting, effects
 - [ ] **conditions.py** — Status conditions and mechanical effects
 - [ ] **combat.py** — Initiative, attacks, damage, turns, death saves

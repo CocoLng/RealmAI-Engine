@@ -64,7 +64,6 @@ Background: STORY DIRECTOR every ~20 interactions
 
 - **Narrator**: `qwen3.5:9b` (6.6 GB, ~25-35 tok/s on M3 Pro) — immersive narrative
 - **Interpreter**: `qwen3.5:4b` (~3 GB, ~50-70 tok/s) — fast text-to-JSON parsing
-- **Cloud fallback**: env var `LLM_PROVIDER=ollama|anthropic|openai` switches endpoint
 
 Models are never loaded simultaneously to stay within memory budget.
 
