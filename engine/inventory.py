@@ -195,3 +195,54 @@ def compute_total_weight(inventory: Inventory) -> float:
 def is_encumbered(inventory: Inventory, strength: int, size: Size) -> bool:
     """Check if inventory exceeds carrying capacity."""
     return compute_total_weight(inventory) > compute_carrying_capacity(strength, size)
+
+
+def add_item(inventory: Inventory, item: Item) -> Inventory:
+    """Add an item to the inventory. Returns a new Inventory.
+
+    Stackable items with the same name merge quantities.
+    """
+    new_items = list(inventory.items)
+    if item.stackable:
+        for i, existing in enumerate(new_items):
+            if existing.name == item.name and existing.stackable:
+                merged = existing.model_copy(
+                    update={"quantity": existing.quantity + item.quantity},
+                )
+                new_items[i] = merged
+                return inventory.model_copy(update={"items": new_items})
+    new_items.append(item)
+    return inventory.model_copy(update={"items": new_items})
+
+
+def remove_item(
+    inventory: Inventory, item_name: str, quantity: int = 1,
+) -> tuple[Inventory, Item]:
+    """Remove an item by name. Returns (new_inventory, removed_item).
+
+    For stackable items, decrements quantity. Removes entirely if quantity reaches 0.
+
+    Raises:
+        ValueError: If item not found or insufficient quantity.
+    """
+    new_items = list(inventory.items)
+    for i, existing in enumerate(new_items):
+        if existing.name == item_name:
+            if existing.stackable and existing.quantity > quantity:
+                updated = existing.model_copy(
+                    update={"quantity": existing.quantity - quantity},
+                )
+                removed = existing.model_copy(update={"quantity": quantity})
+                new_items[i] = updated
+                return inventory.model_copy(update={"items": new_items}), removed
+            if existing.stackable and existing.quantity < quantity:
+                raise ValueError(
+                    f"Insufficient quantity of '{item_name}': "
+                    f"has {existing.quantity}, need {quantity}"
+                )
+            # Non-stackable or exact quantity match
+            removed = new_items.pop(i)
+            if existing.stackable:
+                removed = removed.model_copy(update={"quantity": quantity})
+            return inventory.model_copy(update={"items": new_items}), removed
+    raise ValueError(f"Item '{item_name}' not found in inventory")

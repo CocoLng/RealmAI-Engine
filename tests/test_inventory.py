@@ -15,10 +15,12 @@ from engine.inventory import (
     Weapon,
     WeaponCategory,
     WeaponProperty,
+    add_item,
     compute_carrying_capacity,
     compute_total_weight,
     create_inventory,
     is_encumbered,
+    remove_item,
 )
 
 
@@ -361,3 +363,107 @@ class TestIsEncumbered:
         exact = Item(name="Load", item_type=ItemType.ADVENTURING_GEAR, weight=150.0)
         inv = Inventory(items=[exact])
         assert is_encumbered(inv, 10, Size.MEDIUM) is False
+
+
+class TestAddItem:
+    """Adding items to inventory."""
+
+    def test_add_single_item(self) -> None:
+        inv = create_inventory()
+        torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        result = add_item(inv, torch)
+        assert len(result.items) == 1
+        assert result.items[0].name == "Torch"
+
+    def test_returns_new_inventory(self) -> None:
+        inv = create_inventory()
+        torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        result = add_item(inv, torch)
+        assert result is not inv
+
+    def test_add_stackable_increments_quantity(self) -> None:
+        arrows = Item(
+            name="Arrows",
+            item_type=ItemType.AMMUNITION,
+            weight=0.05,
+            stackable=True,
+            quantity=20,
+        )
+        inv = Inventory(items=[arrows])
+        more_arrows = Item(
+            name="Arrows",
+            item_type=ItemType.AMMUNITION,
+            weight=0.05,
+            stackable=True,
+            quantity=10,
+        )
+        result = add_item(inv, more_arrows)
+        assert len(result.items) == 1
+        assert result.items[0].quantity == 30
+
+    def test_add_non_stackable_duplicates(self) -> None:
+        torch1 = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        torch2 = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        inv = Inventory(items=[torch1])
+        result = add_item(inv, torch2)
+        assert len(result.items) == 2
+
+
+class TestRemoveItem:
+    """Removing items from inventory."""
+
+    def test_remove_item(self) -> None:
+        torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        inv = Inventory(items=[torch])
+        result, removed = remove_item(inv, "Torch")
+        assert len(result.items) == 0
+        assert removed.name == "Torch"
+
+    def test_returns_new_inventory(self) -> None:
+        torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        inv = Inventory(items=[torch])
+        result, _ = remove_item(inv, "Torch")
+        assert result is not inv
+
+    def test_remove_from_stack(self) -> None:
+        arrows = Item(
+            name="Arrows",
+            item_type=ItemType.AMMUNITION,
+            weight=0.05,
+            stackable=True,
+            quantity=20,
+        )
+        inv = Inventory(items=[arrows])
+        result, removed = remove_item(inv, "Arrows", quantity=5)
+        assert result.items[0].quantity == 15
+        assert removed.quantity == 5
+
+    def test_remove_entire_stack(self) -> None:
+        arrows = Item(
+            name="Arrows",
+            item_type=ItemType.AMMUNITION,
+            weight=0.05,
+            stackable=True,
+            quantity=20,
+        )
+        inv = Inventory(items=[arrows])
+        result, removed = remove_item(inv, "Arrows", quantity=20)
+        assert len(result.items) == 0
+        assert removed.quantity == 20
+
+    def test_not_found_raises(self) -> None:
+        inv = create_inventory()
+        with pytest.raises(ValueError, match="not found"):
+            remove_item(inv, "Ghost Item")
+
+    def test_insufficient_quantity_raises(self) -> None:
+        arrows = Item(
+            name="Arrows",
+            item_type=ItemType.AMMUNITION,
+            weight=0.05,
+            stackable=True,
+            quantity=5,
+        )
+        inv = Inventory(items=[arrows])
+        with pytest.raises(ValueError, match="Insufficient quantity"):
+            remove_item(inv, "Arrows", quantity=10)
