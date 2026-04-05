@@ -117,7 +117,6 @@ Build `engine/` with full test coverage. Playable in terminal.
 
 # Phase 3 — Discord Bot + Multiplayer
 
-> Unblocked: Phase 2 complete
 > Design spec: `docs/superpowers/specs/2026-04-05-discord-bot-ux-design.md`
 
 ## Phase 3a — Bot Foundation

@@ -195,11 +195,13 @@ realmAI-engine/
 │   ├── locations.py
 │   ├── quests.py
 │   └── factions.py
-├── bot/                     # Discord bot
-│   ├── bot.py
-│   ├── commands/
-│   ├── views/
-│   └── embeds/
+├── bot/                     # Discord bot (see Phase 3 section)
+│   ├── bot.py               # Bot setup, cog loading, intents
+│   ├── config.py            # GuildConfig (category per guild)
+│   ├── cogs/                # Slash commands by domain
+│   ├── views/               # Combat buttons + select menus
+│   ├── embeds/              # Embed builders
+│   └── utils/               # Channel manager
 ├── mcp_server/              # MCP server
 │   ├── server.py
 │   ├── tools.py
@@ -281,7 +283,78 @@ Interpreter, Narrator, 4-layer memory, quest/NPC generation, Story Director. Oll
 
 ## Phase 3 — Discord bot + multiplayer
 
-Slash commands, combat buttons, embeds, multi-player sessions, save/resume.
+> **Design spec:** `docs/superpowers/specs/2026-04-05-discord-bot-ux-design.md`
+
+### Architecture: Cogs by domain
+
+```
+bot/
+├── bot.py                  # Bot setup, cog loading, intents, on_ready
+├── config.py               # GuildConfig Pydantic model (category per guild)
+├── cogs/
+│   ├── session.py          # /start_campaign, /resume, /save, /end_campaign, /settings
+│   ├── character.py        # /create_character, /character, /level_up
+│   ├── inventory.py        # /inventory, /equip, /unequip, /use_item
+│   ├── combat.py           # Combat flow: posts embeds, attaches button views
+│   ├── exploration.py      # /look, /search, /talk, /move (requires AI layer)
+│   └── rolls.py            # /roll (free dice expression)
+├── views/
+│   ├── combat_view.py      # Buttons: Attack, Cast Spell, Defend, Flee
+│   ├── target_select.py    # Select menu for target choice
+│   └── spell_select.py     # Select menu for spell choice
+├── embeds/
+│   ├── character_embed.py  # Character sheet embed
+│   ├── inventory_embed.py  # Inventory embed (items, equipped, weight, gold)
+│   ├── combat_embed.py     # Combat status (initiative, HP bars, conditions)
+│   └── narrative_embed.py  # Narrative + raw mechanics dual embed
+└── utils/
+    └── channel_manager.py  # Channel creation, permissions, archival
+```
+
+Cogs import engine functions directly — no intermediate abstraction layer.
+
+### Channel Management
+
+- **Dedicated channel per campaign:** Bot creates a text channel at `/start_campaign` in a configurable Discord category (default: "RealmAI Sessions").
+- **Player invites:** The player who starts tags other players; only tagged players + bot have channel access (permission overrides).
+- **Category configurable:** `/settings category:"My Category"` (requires `manage_channels`). Stored per guild in SQLite.
+- **Archival:** `/end_campaign` moves the channel to "RealmAI Archives" category (read-only). History remains consultable.
+- **No human GM:** The bot AI is the sole Game Master. All players have equal permissions.
+
+### Slash Commands
+
+| Command | Cog | Parameters | Ephemeral | `public:` flag |
+|---------|-----|-----------|-----------|----------------|
+| `/start_campaign` | session | `theme: str`, `players: str` (mentions) | No | — |
+| `/resume` | session | — | No | — |
+| `/save` | session | — | Yes | — |
+| `/end_campaign` | session | — | No | — |
+| `/settings` | session | `category: str` | Yes | — |
+| `/create_character` | character | — (opens modal) | Yes | — |
+| `/character` | character | `public: bool = False` | Yes | Yes |
+| `/level_up` | character | `public: bool = False` | Yes | Yes |
+| `/inventory` | inventory | `public: bool = False` | Yes | Yes |
+| `/equip` | inventory | `item: str`, `slot: str` | Yes | — |
+| `/unequip` | inventory | `slot: str` | Yes | — |
+| `/use_item` | inventory | `item: str` | Yes | — |
+| `/roll` | rolls | `expression: str` | No (always public) | — |
+| `/look` | exploration | — | No | — |
+| `/search` | exploration | `target: str` | No | — |
+| `/talk` | exploration | `npc: str` | No | — |
+| `/move` | exploration | `direction: str` | No | — |
+
+**Visibility rule:** Personal commands (character, inventory) are ephemeral by default. The optional `public:` flag lets players share with the group. Session commands and rolls are always public.
+
+### Combat UX (Buttons + Select Menus)
+
+- **Trigger:** Engine detects combat → combat cog posts initiative embed with `CombatView`.
+- **Turn flow:** Bot mentions active player → 4 buttons (Attack / Cast Spell / Defend / Flee) → player clicks → select menu for target/spell → engine resolves → narrative + mechanics embed → next turn.
+- **Interaction guard:** Only the active player can use the buttons (check `interaction.user.id`).
+- **Timeout:** 2 min reminder, 5 min auto-Defend.
+
+### Required Bot Permissions
+
+`manage_channels`, `manage_roles`, `send_messages`, `embed_links`, `use_external_emojis`
 
 ## Phase 4 — MCP server + polish
 

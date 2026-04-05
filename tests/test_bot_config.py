@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from bot.config import GuildConfig
 from db.mappers import guild_config_from_db, guild_config_to_db
 from db.models import GuildConfigRow
+from db.repositories.guild_config_repo import GuildConfigRepository
 
 
 class TestGuildConfig:
@@ -93,9 +94,6 @@ class TestGuildConfigMappers:
         row = guild_config_to_db(original)
         restored = guild_config_from_db(row)
         assert restored.category_name == "RealmAI Sessions"
-
-
-from db.repositories.guild_config_repo import GuildConfigRepository
 
 
 class TestGuildConfigRepository:

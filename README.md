@@ -111,14 +111,6 @@ uv run ruff check .
 uv run mypy .
 ```
 
-## Development Phases
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 1. Game engine | **In progress** | Pure Python engine with full test coverage, playable in terminal |
-| 2. AI layer | Planned | Interpreter, Narrator, 4-layer memory, Ollama integration |
-| 3. Discord bot | Planned | Slash commands, combat buttons, embeds, multiplayer |
-| 4. MCP server + polish | Planned | MCP server, CI/CD, documentation |
 
 ## Design Principles
 
@@ -126,7 +118,3 @@ uv run mypy .
 - **Pydantic everywhere** — all data models use Pydantic v2 with strict types, no raw dicts
 - **Structured outputs** — LLM responses use `response_format={"type": "json_object"}`, never regex parsing
 - **Anti-cheat by design** — ActionValidator checks every action before the engine processes it; Discord shows both narrative and raw mechanics
-
-## License
-
-MIT

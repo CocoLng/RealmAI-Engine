@@ -172,11 +172,27 @@ realmAI-engine/
 │   ├── locations.py
 │   ├── quests.py
 │   └── factions.py
-├── bot/              # Discord bot
-│   ├── bot.py
-│   ├── commands/
-│   ├── views/
-│   └── embeds/
+├── bot/              # Discord bot (Phase 3)
+│   ├── bot.py        # Bot setup, cog loading, intents
+│   ├── config.py     # GuildConfig (category per guild)
+│   ├── cogs/         # Slash commands by domain
+│   │   ├── session.py      # /start_campaign, /resume, /save, /end_campaign, /settings
+│   │   ├── character.py    # /create_character, /character, /level_up
+│   │   ├── inventory.py    # /inventory, /equip, /unequip, /use_item
+│   │   ├── combat.py       # Combat flow with button views
+│   │   ├── exploration.py  # /look, /search, /talk, /move
+│   │   └── rolls.py        # /roll
+│   ├── views/        # Discord interactive components
+│   │   ├── combat_view.py  # Attack/Cast/Defend/Flee buttons
+│   │   ├── target_select.py
+│   │   └── spell_select.py
+│   ├── embeds/       # Embed builders
+│   │   ├── character_embed.py
+│   │   ├── inventory_embed.py
+│   │   ├── combat_embed.py
+│   │   └── narrative_embed.py
+│   └── utils/
+│       └── channel_manager.py  # Channel creation, permissions, archival
 ├── mcp_server/       # MCP server
 ├── db/               # SQLAlchemy models + database
 ├── tests/            # pytest (mirrors engine/ structure)
@@ -202,7 +218,9 @@ Interpreter, Narrator, 4-layer memory, quest/NPC generation, Story Director. Oll
 
 ### Phase 3 — Discord bot + multiplayer
 
-Slash commands, combat buttons, embeds, multi-player, save/resume.
+> Design spec: `docs/superpowers/specs/2026-04-05-discord-bot-ux-design.md`
+
+Cogs-by-domain architecture. Dedicated channel per campaign (created at `/start_campaign`, archived at `/end_campaign`). Slash commands for character/inventory/rolls with ephemeral responses (optional `public:` flag). Combat via buttons + select menus. No human GM — bot is the sole Game Master. See design spec for full details.
 
 ### Phase 4 — MCP server + polish
 
