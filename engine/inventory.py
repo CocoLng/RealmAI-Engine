@@ -95,3 +95,45 @@ class EquipmentSlot(StrEnum):
     NECK = "Neck"
     RING_1 = "Ring 1"
     RING_2 = "Ring 2"
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+
+class Item(BaseModel):
+    """Base model for all items."""
+
+    name: str = Field(min_length=1)
+    item_type: ItemType
+    weight: float = Field(ge=0.0)
+    value_gp: int = Field(default=0, ge=0)
+    rarity: Rarity = Rarity.COMMON
+    description: str = ""
+    requires_attunement: bool = False
+    magical: bool = False
+    stackable: bool = False
+    quantity: int = Field(default=1, ge=1)
+
+
+class Weapon(Item):
+    """A weapon with damage and properties."""
+
+    item_type: ItemType = ItemType.WEAPON
+    damage_dice: str = Field(min_length=1)
+    damage_type: DamageType
+    weapon_category: WeaponCategory
+    properties: list[WeaponProperty] = Field(default_factory=list)
+    range_ft: int | None = Field(default=None, gt=0)
+
+
+class Armor(Item):
+    """Armor with AC and category."""
+
+    item_type: ItemType = ItemType.ARMOR
+    armor_category: ArmorCategory
+    base_ac: int = Field(ge=10)
+    dex_cap: int | None = Field(default=None, ge=0)
+    strength_required: int = Field(default=0, ge=0)
+    stealth_disadvantage: bool = False
