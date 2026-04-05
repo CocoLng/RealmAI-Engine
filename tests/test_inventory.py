@@ -61,7 +61,7 @@ class TestDamageType:
     def test_all_members_exist(self) -> None:
         expected = {
             "SLASHING", "PIERCING", "BLUDGEONING", "FIRE", "COLD",
-            "LIGHTNING", "POISON", "RADIANT", "NECROTIC",
+            "LIGHTNING", "THUNDER", "POISON", "RADIANT", "NECROTIC", "FORCE",
         }
         assert set(DamageType.__members__) == expected
 

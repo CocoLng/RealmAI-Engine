@@ -1,0 +1,280 @@
+"""Action validation — checks legality before engine resolves.
+
+Pure deterministic Python (no LLM).
+"""
+
+from enum import StrEnum
+
+from pydantic import BaseModel, Field
+
+from engine.combat import CombatState, Combatant
+from engine.conditions import cannot_move, is_incapacitated
+from engine.inventory import EquipmentSlot, Weapon
+from engine.spells import SPELL_CATALOG, can_cast_spell
+
+
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
+
+
+class ActionType(StrEnum):
+    """The types of actions a combatant can take."""
+
+    ATTACK = "Attack"
+    CAST_SPELL = "Cast Spell"
+    DEFEND = "Defend"
+    FLEE = "Flee"
+    USE_ITEM = "Use Item"
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class Action(BaseModel):
+    """A player-requested action to be validated before resolution."""
+
+    actor_name: str = Field(min_length=1)
+    action_type: ActionType
+    target_name: str | None = None
+    weapon_name: str | None = None
+    spell_name: str | None = None
+    item_name: str | None = None
+
+
+class ValidationResult(BaseModel):
+    """The result of validating an action."""
+
+    is_valid: bool
+    error_message: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _find_combatant(name: str, state: CombatState) -> Combatant | None:
+    """Find a combatant by name."""
+    for c in state.combatants:
+        if c.name == name:
+            return c
+    return None
+
+
+def _is_actors_turn(actor_name: str, state: CombatState) -> bool:
+    """Check if it's the named actor's turn."""
+    current = state.combatants[state.current_turn_index]
+    return current.name == actor_name
+
+
+def _validate_common(action: Action, state: CombatState) -> ValidationResult | None:
+    """Common checks for all actions. Returns ValidationResult if failed, None if OK."""
+    actor = _find_combatant(action.actor_name, state)
+    if actor is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' is not in combat",
+        )
+    if not actor.is_alive:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' is dead",
+        )
+    if not _is_actors_turn(action.actor_name, state):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"It is not {action.actor_name}'s turn",
+        )
+    if is_incapacitated(actor.conditions):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' is incapacitated",
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public validators
+# ---------------------------------------------------------------------------
+
+
+def validate_action(action: Action, combat_state: CombatState) -> ValidationResult:
+    """Validate an action. Dispatches to specific validators based on action type."""
+    validators = {
+        ActionType.ATTACK: validate_attack,
+        ActionType.CAST_SPELL: validate_cast_spell,
+        ActionType.DEFEND: validate_defend,
+        ActionType.FLEE: validate_flee,
+        ActionType.USE_ITEM: validate_use_item,
+    }
+    validator = validators[action.action_type]
+    return validator(action, combat_state)
+
+
+def validate_attack(action: Action, state: CombatState) -> ValidationResult:
+    """Validate an attack action.
+
+    Checks: common checks + target exists + target alive + weapon equipped.
+    """
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+
+    # Target required
+    if action.target_name is None:
+        return ValidationResult(
+            is_valid=False, error_message="Attack requires a target"
+        )
+
+    target = _find_combatant(action.target_name, state)
+    if target is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Target '{action.target_name}' is not in combat",
+        )
+    if not target.is_alive:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Target '{action.target_name}' is already dead",
+        )
+
+    # Weapon check: need weapon_name and it must be equipped
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None  # already checked in common
+
+    if action.weapon_name is None:
+        return ValidationResult(
+            is_valid=False, error_message="Attack requires a weapon"
+        )
+
+    # Check weapon is equipped (in MAIN_HAND or OFF_HAND)
+    equipped_weapons: list[str] = []
+    for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
+        item = actor.inventory.equipped.get(slot)
+        if item is not None and isinstance(item, Weapon):
+            equipped_weapons.append(item.name)
+
+    if action.weapon_name not in equipped_weapons:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Weapon '{action.weapon_name}' is not equipped",
+        )
+
+    return ValidationResult(is_valid=True)
+
+
+def validate_cast_spell(action: Action, state: CombatState) -> ValidationResult:
+    """Validate a spell cast action.
+
+    Checks: common + is spellcaster + spell known + has slot.
+    """
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None
+
+    if actor.spellcaster is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' is not a spellcaster",
+        )
+
+    if action.spell_name is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message="Cast Spell requires a spell name",
+        )
+
+    spell = SPELL_CATALOG.get(action.spell_name)
+    if spell is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Spell '{action.spell_name}' does not exist",
+        )
+
+    if not can_cast_spell(actor.spellcaster, spell):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Cannot cast '{action.spell_name}' (unknown or no slots)",
+        )
+
+    # Non-Self spells that deal damage or apply conditions require a target
+    needs_target = (
+        spell.spell_range.value != "Self"
+        and (spell.damage_dice is not None or spell.condition_applied is not None)
+    )
+    if needs_target and action.target_name is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Spell '{spell.name}' requires a target",
+        )
+
+    # If a target is specified, verify it exists in combat
+    if action.target_name is not None:
+        target = _find_combatant(action.target_name, state)
+        if target is None:
+            return ValidationResult(
+                is_valid=False,
+                error_message=f"Target '{action.target_name}' is not in combat",
+            )
+
+    return ValidationResult(is_valid=True)
+
+
+def validate_defend(action: Action, state: CombatState) -> ValidationResult:
+    """Validate a defend action. Just common checks."""
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+    return ValidationResult(is_valid=True)
+
+
+def validate_flee(action: Action, state: CombatState) -> ValidationResult:
+    """Validate a flee action. Common + not restrained/grappled."""
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None
+
+    if cannot_move(actor.conditions):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' cannot move",
+        )
+
+    return ValidationResult(is_valid=True)
+
+
+def validate_use_item(action: Action, state: CombatState) -> ValidationResult:
+    """Validate a use item action. Common + item in inventory."""
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None
+
+    if action.item_name is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message="Use Item requires an item name",
+        )
+
+    # Check item is in inventory (carried or equipped)
+    all_items = [i.name for i in actor.inventory.items] + [
+        i.name for i in actor.inventory.equipped.values()
+    ]
+    if action.item_name not in all_items:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Item '{action.item_name}' not found in inventory",
+        )
+
+    return ValidationResult(is_valid=True)

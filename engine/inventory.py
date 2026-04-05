@@ -64,9 +64,11 @@ class DamageType(StrEnum):
     FIRE = "Fire"
     COLD = "Cold"
     LIGHTNING = "Lightning"
+    THUNDER = "Thunder"
     POISON = "Poison"
     RADIANT = "Radiant"
     NECROTIC = "Necrotic"
+    FORCE = "Force"
 
 
 class WeaponProperty(StrEnum):
