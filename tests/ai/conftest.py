@@ -1,10 +1,9 @@
 """Shared fixtures for ai/ tests."""
 
 import json
-import pytest
 
 
-def make_ollama_response(content: str | dict) -> dict:
+def make_ollama_response(content: str | dict) -> dict[str, object]:
     """Build a mock Ollama chat completion response."""
     if isinstance(content, dict):
         content = json.dumps(content)

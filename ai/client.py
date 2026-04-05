@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from openai import APIConnectionError, APITimeoutError, OpenAI
@@ -58,7 +58,9 @@ class OllamaClient:
                 temperature=temperature,
             )
         except (httpx.ConnectError, APIConnectionError, APITimeoutError) as exc:
-            raise OllamaUnavailableError(f"Cannot connect to Ollama at {self._client.base_url}") from exc
+            raise OllamaUnavailableError(
+                f"Cannot connect to Ollama at {self._client.base_url}"
+            ) from exc
 
         content = response.choices[0].message.content or ""
-        return json.loads(content)
+        return cast(dict, json.loads(content))
