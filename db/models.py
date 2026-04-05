@@ -110,3 +110,12 @@ class SummaryRow(Base):
     start_interaction: Mapped[int] = mapped_column(nullable=False)
     end_interaction: Mapped[int] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class GuildConfigRow(Base):
+    """Per-guild bot configuration."""
+
+    __tablename__ = "guild_configs"
+
+    guild_id: Mapped[int] = mapped_column(primary_key=True)
+    category_name: Mapped[str] = mapped_column(String(100), default="RealmAI Sessions")
