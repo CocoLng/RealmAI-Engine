@@ -47,5 +47,5 @@ class Narrator:
         data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
         return NarrativeResult(
             narrative=str(data.get("narrative", "")),
-            tone=str(data.get("tone", "dramatic")),
+            tone=data.get("tone", "dramatic"),  # type: ignore[arg-type]
         )

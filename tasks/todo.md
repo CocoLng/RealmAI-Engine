@@ -42,7 +42,7 @@ Build `engine/` with full test coverage. Playable in terminal.
 
 ---
 
-# Phase 2 — AI Layer [IN PROGRESS]
+# Phase 2 — AI Layer ✅ COMPLETE
 
 > Unblocked: Phase 1 complete
 
@@ -109,15 +109,15 @@ Build `engine/` with full test coverage. Playable in terminal.
 
 ### Quality Gates
 
-- [x] pytest: **626 tests passing** (593 + 33 new ai/ tests), **98% coverage** on ai/
+- [x] pytest: **627 tests passing** (593 + 34 new ai/ tests), **100% coverage** on ai/
 - [x] ruff check: clean (0 errors)
-- [x] mypy: clean (0 issues on 41 source files; pre-existing test errors in tests/ unchanged)
+- [x] mypy: clean (0 issues on ai/ + tests/ai/; 5 pre-existing test errors in tests/test_inventory.py + tests/conftest.py unchanged)
 
 ---
 
 # Phase 3 — Discord Bot + Multiplayer
 
-> Blocked by: Phase 2 completion (some cogs can scaffold earlier, combat/exploration need engine + AI)
+> Unblocked: Phase 2 complete
 > Design spec: `docs/superpowers/specs/2026-04-05-discord-bot-ux-design.md`
 
 ## Phase 3a — Bot Foundation

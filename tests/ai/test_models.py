@@ -50,7 +50,7 @@ def test_director_note_valid() -> None:
 
 def test_director_note_invalid_priority() -> None:
     with pytest.raises(ValidationError):
-        DirectorNote(coherence_issues=[], suggested_hooks=[], priority="extreme")
+        DirectorNote(coherence_issues=[], suggested_hooks=[], priority="extreme")  # type: ignore[arg-type]
 
 
 def test_npc_response_default_values() -> None:
