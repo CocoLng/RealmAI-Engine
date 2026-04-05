@@ -2,6 +2,7 @@
 
 import pytest
 
+from engine.character import Size
 from engine.inventory import (
     Armor,
     ArmorCategory,
@@ -14,7 +15,10 @@ from engine.inventory import (
     Weapon,
     WeaponCategory,
     WeaponProperty,
+    compute_carrying_capacity,
+    compute_total_weight,
     create_inventory,
+    is_encumbered,
 )
 
 
@@ -268,3 +272,92 @@ class TestInventory:
         data = inv.model_dump()
         restored = Inventory(**data)
         assert restored == inv
+
+
+class TestComputeCarryingCapacity:
+    """Carrying capacity = STR x 15, halved for Small."""
+
+    def test_strength_10_medium(self) -> None:
+        assert compute_carrying_capacity(10, Size.MEDIUM) == 150.0
+
+    def test_strength_20_medium(self) -> None:
+        assert compute_carrying_capacity(20, Size.MEDIUM) == 300.0
+
+    def test_strength_10_small(self) -> None:
+        assert compute_carrying_capacity(10, Size.SMALL) == 75.0
+
+    def test_strength_1_minimum(self) -> None:
+        assert compute_carrying_capacity(1, Size.MEDIUM) == 15.0
+
+    def test_strength_0_raises(self) -> None:
+        with pytest.raises(ValueError, match="Strength must be 1-30"):
+            compute_carrying_capacity(0, Size.MEDIUM)
+
+    def test_strength_31_raises(self) -> None:
+        with pytest.raises(ValueError, match="Strength must be 1-30"):
+            compute_carrying_capacity(31, Size.MEDIUM)
+
+
+class TestComputeTotalWeight:
+    """Total weight includes all items (inventory + equipped), respecting quantity."""
+
+    def test_empty_inventory(self) -> None:
+        inv = create_inventory()
+        assert compute_total_weight(inv) == 0.0
+
+    def test_items_only(self) -> None:
+        inv = Inventory(
+            items=[
+                Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0),
+                Item(name="Rope", item_type=ItemType.ADVENTURING_GEAR, weight=10.0),
+            ],
+        )
+        assert compute_total_weight(inv) == 11.0
+
+    def test_stackable_quantity(self) -> None:
+        inv = Inventory(
+            items=[
+                Item(
+                    name="Arrows",
+                    item_type=ItemType.AMMUNITION,
+                    weight=0.05,
+                    stackable=True,
+                    quantity=20,
+                ),
+            ],
+        )
+        assert compute_total_weight(inv) == pytest.approx(1.0)
+
+    def test_includes_equipped_items(self) -> None:
+        sword = Item(name="Sword", item_type=ItemType.WEAPON, weight=3.0)
+        inv = Inventory(
+            equipped={EquipmentSlot.MAIN_HAND: sword},
+        )
+        assert compute_total_weight(inv) == 3.0
+
+    def test_items_plus_equipped(self) -> None:
+        torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        sword = Item(name="Sword", item_type=ItemType.WEAPON, weight=3.0)
+        inv = Inventory(
+            items=[torch],
+            equipped={EquipmentSlot.MAIN_HAND: sword},
+        )
+        assert compute_total_weight(inv) == 4.0
+
+
+class TestIsEncumbered:
+    """Encumbered when total weight > carrying capacity."""
+
+    def test_not_encumbered(self) -> None:
+        inv = create_inventory()
+        assert is_encumbered(inv, 10, Size.MEDIUM) is False
+
+    def test_encumbered(self) -> None:
+        heavy = Item(name="Anvil", item_type=ItemType.ADVENTURING_GEAR, weight=200.0)
+        inv = Inventory(items=[heavy])
+        assert is_encumbered(inv, 10, Size.MEDIUM) is True
+
+    def test_exactly_at_capacity(self) -> None:
+        exact = Item(name="Load", item_type=ItemType.ADVENTURING_GEAR, weight=150.0)
+        inv = Inventory(items=[exact])
+        assert is_encumbered(inv, 10, Size.MEDIUM) is False

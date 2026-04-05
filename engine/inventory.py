@@ -156,3 +156,42 @@ class Inventory(BaseModel):
 def create_inventory() -> Inventory:
     """Create an empty inventory."""
     return Inventory()
+
+
+def compute_carrying_capacity(strength: int, size: Size) -> float:
+    """Compute carrying capacity in pounds. STR x 15, halved for Small.
+
+    Args:
+        strength: Strength score (1-30).
+        size: Creature size.
+
+    Returns:
+        Maximum weight in pounds.
+
+    Raises:
+        ValueError: If strength is out of range.
+    """
+    if not 1 <= strength <= 30:
+        raise ValueError(f"Strength must be 1-30, got {strength}")
+    capacity = strength * 15.0
+    if size == Size.SMALL:
+        capacity /= 2
+    return capacity
+
+
+def compute_total_weight(inventory: Inventory) -> float:
+    """Compute total weight of all items (carried + equipped).
+
+    Stackable items multiply weight by quantity.
+    """
+    total = 0.0
+    for item in inventory.items:
+        total += item.weight * item.quantity
+    for item in inventory.equipped.values():
+        total += item.weight * item.quantity
+    return total
+
+
+def is_encumbered(inventory: Inventory, strength: int, size: Size) -> bool:
+    """Check if inventory exceeds carrying capacity."""
+    return compute_total_weight(inventory) > compute_carrying_capacity(strength, size)
