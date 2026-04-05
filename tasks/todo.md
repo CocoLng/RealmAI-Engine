@@ -97,15 +97,21 @@ Build `engine/` with full test coverage. Playable in terminal.
 - [x] R7: `ContextBudget` model_validator enforces `total_max >= layer1_max`
 - [x] R8: New test `test_truncation_clamp_enforces_budget` covers actual truncation path
 
-## Phase 2c — AI Core [NEXT]
+## Phase 2c — AI Core ✅ COMPLETE
 
-- [ ] **ai/interpreter.py** — Qwen 3.5 4B, text → structured JSON (action, target, weapon)
-- [ ] **ai/narrator.py** — Qwen 3.5 9B, ActionResult → narrative text
-- [ ] **ai/story_director.py** — Periodic coherence check (~20 interactions)
-- [ ] **ai/npc_agent.py** — NPC dialogue and personality
-- [ ] **ai/quest_generator.py** — Dynamic quest generation
-- [ ] **ai/world_generator.py** — World/location generation
-- [ ] **ai/prompts/** — System prompt templates for all LLM roles
+- [x] **ai/interpreter.py** — Qwen 3.5 4B, text → structured JSON (action, target, weapon)
+- [x] **ai/narrator.py** — Qwen 3.5 9B, ActionResult → narrative text
+- [x] **ai/story_director.py** — Periodic coherence check (~20 interactions)
+- [x] **ai/npc_agent.py** — NPC dialogue and personality
+- [x] **ai/quest_generator.py** — Dynamic quest generation
+- [x] **ai/world_generator.py** — World/location generation
+- [x] **ai/prompts/** — System prompt templates for all LLM roles
+
+### Quality Gates
+
+- [x] pytest: **626 tests passing** (593 + 33 new ai/ tests), **98% coverage** on ai/
+- [x] ruff check: clean (0 errors)
+- [x] mypy: clean (0 issues on 41 source files; pre-existing test errors in tests/ unchanged)
 
 ---
 
