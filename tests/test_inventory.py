@@ -19,8 +19,10 @@ from engine.inventory import (
     compute_carrying_capacity,
     compute_total_weight,
     create_inventory,
+    equip_item,
     is_encumbered,
     remove_item,
+    unequip_item,
 )
 
 
@@ -467,3 +469,155 @@ class TestRemoveItem:
         inv = Inventory(items=[arrows])
         with pytest.raises(ValueError, match="Insufficient quantity"):
             remove_item(inv, "Arrows", quantity=10)
+
+
+class TestEquipItem:
+    """Equipping items to slots."""
+
+    def test_equip_weapon_to_main_hand(self) -> None:
+        sword = Weapon(
+            name="Longsword",
+            weight=3.0,
+            damage_dice="1d8",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+        )
+        inv = Inventory(items=[sword])
+        result = equip_item(inv, "Longsword", EquipmentSlot.MAIN_HAND)
+        assert EquipmentSlot.MAIN_HAND in result.equipped
+        assert result.equipped[EquipmentSlot.MAIN_HAND].name == "Longsword"
+        assert len(result.items) == 0
+
+    def test_returns_new_inventory(self) -> None:
+        sword = Weapon(
+            name="Longsword",
+            weight=3.0,
+            damage_dice="1d8",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+        )
+        inv = Inventory(items=[sword])
+        result = equip_item(inv, "Longsword", EquipmentSlot.MAIN_HAND)
+        assert result is not inv
+
+    def test_equip_armor_to_armor_slot(self) -> None:
+        leather = Armor(
+            name="Leather",
+            weight=10.0,
+            armor_category=ArmorCategory.LIGHT,
+            base_ac=11,
+        )
+        inv = Inventory(items=[leather])
+        result = equip_item(inv, "Leather", EquipmentSlot.ARMOR)
+        assert result.equipped[EquipmentSlot.ARMOR].name == "Leather"
+
+    def test_equip_shield_to_off_hand(self) -> None:
+        shield = Item(name="Shield", item_type=ItemType.SHIELD, weight=6.0)
+        inv = Inventory(items=[shield])
+        result = equip_item(inv, "Shield", EquipmentSlot.OFF_HAND)
+        assert result.equipped[EquipmentSlot.OFF_HAND].name == "Shield"
+
+    def test_swap_equipped_item(self) -> None:
+        sword1 = Weapon(
+            name="Longsword",
+            weight=3.0,
+            damage_dice="1d8",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+        )
+        sword2 = Weapon(
+            name="Shortsword",
+            weight=2.0,
+            damage_dice="1d6",
+            damage_type=DamageType.PIERCING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+            properties=[WeaponProperty.FINESSE, WeaponProperty.LIGHT],
+        )
+        inv = Inventory(
+            items=[sword2],
+            equipped={EquipmentSlot.MAIN_HAND: sword1},
+        )
+        result = equip_item(inv, "Shortsword", EquipmentSlot.MAIN_HAND)
+        assert result.equipped[EquipmentSlot.MAIN_HAND].name == "Shortsword"
+        assert any(i.name == "Longsword" for i in result.items)
+
+    def test_two_handed_clears_off_hand(self) -> None:
+        greataxe = Weapon(
+            name="Greataxe",
+            weight=7.0,
+            damage_dice="1d12",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+            properties=[WeaponProperty.HEAVY, WeaponProperty.TWO_HANDED],
+        )
+        shield = Item(name="Shield", item_type=ItemType.SHIELD, weight=6.0)
+        inv = Inventory(
+            items=[greataxe],
+            equipped={EquipmentSlot.OFF_HAND: shield},
+        )
+        result = equip_item(inv, "Greataxe", EquipmentSlot.MAIN_HAND)
+        assert EquipmentSlot.MAIN_HAND in result.equipped
+        assert EquipmentSlot.OFF_HAND not in result.equipped
+        assert any(i.name == "Shield" for i in result.items)
+
+    def test_item_not_found_raises(self) -> None:
+        inv = create_inventory()
+        with pytest.raises(ValueError, match="not found"):
+            equip_item(inv, "Ghost", EquipmentSlot.MAIN_HAND)
+
+    def test_weapon_in_armor_slot_raises(self) -> None:
+        sword = Weapon(
+            name="Longsword",
+            weight=3.0,
+            damage_dice="1d8",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+        )
+        inv = Inventory(items=[sword])
+        with pytest.raises(ValueError, match="Cannot equip"):
+            equip_item(inv, "Longsword", EquipmentSlot.ARMOR)
+
+    def test_armor_in_main_hand_raises(self) -> None:
+        leather = Armor(
+            name="Leather",
+            weight=10.0,
+            armor_category=ArmorCategory.LIGHT,
+            base_ac=11,
+        )
+        inv = Inventory(items=[leather])
+        with pytest.raises(ValueError, match="Cannot equip"):
+            equip_item(inv, "Leather", EquipmentSlot.MAIN_HAND)
+
+
+class TestUnequipItem:
+    """Unequipping items from slots."""
+
+    def test_unequip_returns_to_items(self) -> None:
+        sword = Weapon(
+            name="Longsword",
+            weight=3.0,
+            damage_dice="1d8",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+        )
+        inv = Inventory(equipped={EquipmentSlot.MAIN_HAND: sword})
+        result = unequip_item(inv, EquipmentSlot.MAIN_HAND)
+        assert EquipmentSlot.MAIN_HAND not in result.equipped
+        assert any(i.name == "Longsword" for i in result.items)
+
+    def test_returns_new_inventory(self) -> None:
+        sword = Weapon(
+            name="Longsword",
+            weight=3.0,
+            damage_dice="1d8",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+        )
+        inv = Inventory(equipped={EquipmentSlot.MAIN_HAND: sword})
+        result = unequip_item(inv, EquipmentSlot.MAIN_HAND)
+        assert result is not inv
+
+    def test_empty_slot_raises(self) -> None:
+        inv = create_inventory()
+        with pytest.raises(ValueError, match="Nothing equipped"):
+            unequip_item(inv, EquipmentSlot.MAIN_HAND)

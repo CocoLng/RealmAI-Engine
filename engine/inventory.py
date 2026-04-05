@@ -246,3 +246,84 @@ def remove_item(
                 removed = removed.model_copy(update={"quantity": quantity})
             return inventory.model_copy(update={"items": new_items}), removed
     raise ValueError(f"Item '{item_name}' not found in inventory")
+
+
+# Slot compatibility: which item types can go in which slots.
+_SLOT_COMPATIBILITY: dict[EquipmentSlot, set[ItemType]] = {
+    EquipmentSlot.MAIN_HAND: {ItemType.WEAPON},
+    EquipmentSlot.OFF_HAND: {ItemType.WEAPON, ItemType.SHIELD},
+    EquipmentSlot.ARMOR: {ItemType.ARMOR},
+    EquipmentSlot.HEAD: {ItemType.ADVENTURING_GEAR},
+    EquipmentSlot.HANDS: {ItemType.ADVENTURING_GEAR},
+    EquipmentSlot.FEET: {ItemType.ADVENTURING_GEAR},
+    EquipmentSlot.NECK: {ItemType.ADVENTURING_GEAR},
+    EquipmentSlot.RING_1: {ItemType.ADVENTURING_GEAR},
+    EquipmentSlot.RING_2: {ItemType.ADVENTURING_GEAR},
+}
+
+
+def equip_item(
+    inventory: Inventory, item_name: str, slot: EquipmentSlot,
+) -> Inventory:
+    """Equip an item from the items list into a slot. Returns a new Inventory.
+
+    If the slot is occupied, the previous item goes back to items.
+    Two-handed weapons clear the off-hand slot.
+
+    Raises:
+        ValueError: If item not found or slot incompatible.
+    """
+    # Find the item
+    item_index: int | None = None
+    for i, item in enumerate(inventory.items):
+        if item.name == item_name:
+            item_index = i
+            break
+    if item_index is None:
+        raise ValueError(f"Item '{item_name}' not found in inventory")
+
+    item = inventory.items[item_index]
+
+    # Validate slot compatibility
+    allowed = _SLOT_COMPATIBILITY.get(slot, set())
+    if item.item_type not in allowed:
+        raise ValueError(
+            f"Cannot equip {item.item_type} in {slot} slot"
+        )
+
+    new_items = list(inventory.items)
+    new_items.pop(item_index)
+    new_equipped = dict(inventory.equipped)
+
+    # Return previously equipped item to items
+    if slot in new_equipped:
+        new_items.append(new_equipped[slot])
+
+    # Two-handed weapons clear off-hand
+    if (
+        isinstance(item, Weapon)
+        and WeaponProperty.TWO_HANDED in item.properties
+        and slot == EquipmentSlot.MAIN_HAND
+    ):
+        off_hand = new_equipped.pop(EquipmentSlot.OFF_HAND, None)
+        if off_hand is not None:
+            new_items.append(off_hand)
+
+    new_equipped[slot] = item
+    return inventory.model_copy(update={"items": new_items, "equipped": new_equipped})
+
+
+def unequip_item(inventory: Inventory, slot: EquipmentSlot) -> Inventory:
+    """Unequip an item from a slot back to items. Returns a new Inventory.
+
+    Raises:
+        ValueError: If slot is empty.
+    """
+    if slot not in inventory.equipped:
+        raise ValueError(f"Nothing equipped in {slot} slot")
+
+    new_items = list(inventory.items)
+    new_equipped = dict(inventory.equipped)
+    item = new_equipped.pop(slot)
+    new_items.append(item)
+    return inventory.model_copy(update={"items": new_items, "equipped": new_equipped})
