@@ -2121,6 +2121,7 @@ dependencies = [
     { name = "discord-py" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "sqlalchemy" },
 ]
 
@@ -2140,6 +2141,7 @@ requires-dist = [
     { name = "discord-py", specifier = ">=2.7.1" },
     { name = "openai", specifier = ">=2.30.0" },
     { name = "pydantic", specifier = ">=2,<3" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "sqlalchemy", specifier = ">=2.0.49" },
 ]
 

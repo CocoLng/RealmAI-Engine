@@ -4,6 +4,7 @@ import logging
 import os
 
 import discord
+from dotenv import load_dotenv
 from discord.ext import commands
 
 from db.database import get_engine, get_session_factory, init_db
@@ -46,7 +47,8 @@ class RealmBot(commands.Bot):
 
 
 def run_bot() -> None:
-    """Entry point — read token from environment and start the bot."""
+    """Entry point — read token from .env / environment and start the bot."""
+    load_dotenv()
     token = os.environ["DISCORD_BOT_TOKEN"]
     bot = RealmBot()
     bot.run(token, log_handler=None)

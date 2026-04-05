@@ -84,6 +84,7 @@ class TestRunBot:
     def test_run_bot_requires_token_env(self) -> None:
         from bot.bot import run_bot
 
-        with patch.dict("os.environ", {}, clear=True), \
+        with patch("bot.bot.load_dotenv"), \
+             patch.dict("os.environ", {}, clear=True), \
              pytest.raises(KeyError, match="DISCORD_BOT_TOKEN"):
             run_bot()
