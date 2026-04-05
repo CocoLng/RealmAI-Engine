@@ -385,3 +385,43 @@ def unattune_item(inventory: Inventory, item_name: str) -> Inventory:
             new_attuned.pop(i)
             return inventory.model_copy(update={"attuned": new_attuned})
     raise ValueError(f"'{item_name}' is not attuned")
+
+
+def compute_ac_from_equipment(
+    equipped: dict[EquipmentSlot, Item], dex_modifier: int,
+) -> int:
+    """Compute AC from equipped armor and shield.
+
+    - No armor: 10 + DEX mod.
+    - Light armor: base_ac + DEX mod.
+    - Medium armor: base_ac + min(DEX mod, dex_cap).
+    - Heavy armor: base_ac (no DEX).
+    - Shield: +2.
+
+    Args:
+        equipped: Currently equipped items by slot.
+        dex_modifier: Character's DEX ability modifier.
+
+    Returns:
+        Computed armor class.
+    """
+    ac = 10 + dex_modifier
+
+    armor = equipped.get(EquipmentSlot.ARMOR)
+    if armor is not None and isinstance(armor, Armor):
+        if armor.dex_cap is None:
+            # Light armor: full DEX
+            ac = armor.base_ac + dex_modifier
+        elif armor.dex_cap == 0:
+            # Heavy armor: no DEX
+            ac = armor.base_ac
+        else:
+            # Medium armor: capped DEX
+            ac = armor.base_ac + min(dex_modifier, armor.dex_cap)
+
+    # Shield bonus
+    off_hand = equipped.get(EquipmentSlot.OFF_HAND)
+    if off_hand is not None and off_hand.item_type == ItemType.SHIELD:
+        ac += 2
+
+    return ac

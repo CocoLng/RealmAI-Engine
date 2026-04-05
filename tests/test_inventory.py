@@ -17,6 +17,7 @@ from engine.inventory import (
     WeaponProperty,
     add_item,
     attune_item,
+    compute_ac_from_equipment,
     compute_carrying_capacity,
     compute_total_weight,
     create_inventory,
@@ -729,3 +730,82 @@ class TestUnattuneItem:
         inv = create_inventory()
         with pytest.raises(ValueError, match="not attuned"):
             unattune_item(inv, "Ghost")
+
+
+class TestComputeACFromEquipment:
+    """AC computation from armor and shield."""
+
+    def test_no_armor(self) -> None:
+        assert compute_ac_from_equipment({}, dex_modifier=2) == 12  # 10 + 2
+
+    def test_light_armor_full_dex(self) -> None:
+        leather = Armor(
+            name="Leather",
+            weight=10.0,
+            armor_category=ArmorCategory.LIGHT,
+            base_ac=11,
+        )
+        equipped = {EquipmentSlot.ARMOR: leather}
+        assert compute_ac_from_equipment(equipped, dex_modifier=3) == 14  # 11 + 3
+
+    def test_medium_armor_dex_capped_at_2(self) -> None:
+        half_plate = Armor(
+            name="Half Plate",
+            weight=40.0,
+            armor_category=ArmorCategory.MEDIUM,
+            base_ac=15,
+            dex_cap=2,
+            stealth_disadvantage=True,
+        )
+        equipped = {EquipmentSlot.ARMOR: half_plate}
+        assert compute_ac_from_equipment(equipped, dex_modifier=4) == 17  # 15 + 2
+
+    def test_medium_armor_low_dex(self) -> None:
+        half_plate = Armor(
+            name="Half Plate",
+            weight=40.0,
+            armor_category=ArmorCategory.MEDIUM,
+            base_ac=15,
+            dex_cap=2,
+            stealth_disadvantage=True,
+        )
+        equipped = {EquipmentSlot.ARMOR: half_plate}
+        assert compute_ac_from_equipment(equipped, dex_modifier=1) == 16  # 15 + 1
+
+    def test_heavy_armor_no_dex(self) -> None:
+        chain_mail = Armor(
+            name="Chain Mail",
+            weight=55.0,
+            armor_category=ArmorCategory.HEAVY,
+            base_ac=16,
+            dex_cap=0,
+            strength_required=13,
+            stealth_disadvantage=True,
+        )
+        equipped = {EquipmentSlot.ARMOR: chain_mail}
+        assert compute_ac_from_equipment(equipped, dex_modifier=5) == 16  # flat 16
+
+    def test_shield_adds_2(self) -> None:
+        shield = Item(name="Shield", item_type=ItemType.SHIELD, weight=6.0, value_gp=10)
+        equipped = {EquipmentSlot.OFF_HAND: shield}
+        assert compute_ac_from_equipment(equipped, dex_modifier=2) == 14  # 10 + 2 + 2
+
+    def test_armor_plus_shield(self) -> None:
+        chain_mail = Armor(
+            name="Chain Mail",
+            weight=55.0,
+            armor_category=ArmorCategory.HEAVY,
+            base_ac=16,
+            dex_cap=0,
+            strength_required=13,
+            stealth_disadvantage=True,
+        )
+        shield = Item(name="Shield", item_type=ItemType.SHIELD, weight=6.0, value_gp=10)
+        equipped = {
+            EquipmentSlot.ARMOR: chain_mail,
+            EquipmentSlot.OFF_HAND: shield,
+        }
+        assert compute_ac_from_equipment(equipped, dex_modifier=2) == 18  # 16 + 2
+
+    def test_negative_dex_lowers_ac(self) -> None:
+        assert compute_ac_from_equipment({}, dex_modifier=-1) == 9  # 10 + (-1)
