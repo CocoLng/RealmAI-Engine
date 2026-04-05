@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from bot.config import GuildConfig
+from db.mappers import guild_config_from_db, guild_config_to_db
 from db.models import GuildConfigRow
 
 
@@ -64,3 +65,31 @@ class TestGuildConfigRow:
         db_session.add(GuildConfigRow(guild_id=111))
         with pytest.raises(IntegrityError):
             db_session.commit()
+
+
+class TestGuildConfigMappers:
+    """GuildConfig mapper round-trip tests."""
+
+    def test_to_db(self) -> None:
+        config = GuildConfig(guild_id=123456789, category_name="Custom")
+        row = guild_config_to_db(config)
+        assert row.guild_id == 123456789
+        assert row.category_name == "Custom"
+
+    def test_from_db(self) -> None:
+        row = GuildConfigRow(guild_id=987654321, category_name="Test")
+        config = guild_config_from_db(row)
+        assert config.guild_id == 987654321
+        assert config.category_name == "Test"
+
+    def test_round_trip(self) -> None:
+        original = GuildConfig(guild_id=555, category_name="Round Trip")
+        row = guild_config_to_db(original)
+        restored = guild_config_from_db(row)
+        assert restored == original
+
+    def test_default_category_round_trip(self) -> None:
+        original = GuildConfig(guild_id=777)
+        row = guild_config_to_db(original)
+        restored = guild_config_from_db(row)
+        assert restored.category_name == "RealmAI Sessions"

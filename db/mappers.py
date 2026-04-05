@@ -14,7 +14,8 @@ from world.quest import Quest, QuestObjective, QuestStatus
 
 from memory.models import CompressedSummary, ExchangeRole, NarrativeExchange
 
-from db.models import CampaignRow, ExchangeRow, LocationRow, NPCRow, QuestRow, SummaryRow
+from bot.config import GuildConfig
+from db.models import CampaignRow, ExchangeRow, GuildConfigRow, LocationRow, NPCRow, QuestRow, SummaryRow
 
 
 # ---------------------------------------------------------------------------
@@ -213,4 +214,25 @@ def summary_from_db(row: SummaryRow) -> CompressedSummary:
             if isinstance(row.created_at, datetime)
             else datetime.fromisoformat(row.created_at)
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# GuildConfig
+# ---------------------------------------------------------------------------
+
+
+def guild_config_to_db(config: GuildConfig) -> GuildConfigRow:
+    """Convert a GuildConfig domain model to a DB row."""
+    return GuildConfigRow(
+        guild_id=config.guild_id,
+        category_name=config.category_name,
+    )
+
+
+def guild_config_from_db(row: GuildConfigRow) -> GuildConfig:
+    """Convert a GuildConfigRow to a GuildConfig domain model."""
+    return GuildConfig(
+        guild_id=row.guild_id,
+        category_name=row.category_name,
     )
