@@ -93,3 +93,61 @@ class TestGuildConfigMappers:
         row = guild_config_to_db(original)
         restored = guild_config_from_db(row)
         assert restored.category_name == "RealmAI Sessions"
+
+
+from db.repositories.guild_config_repo import GuildConfigRepository
+
+
+class TestGuildConfigRepository:
+    """GuildConfigRepository CRUD tests."""
+
+    def test_save_and_get(self, db_session: Session) -> None:
+        repo = GuildConfigRepository(db_session)
+        config = GuildConfig(guild_id=123456789, category_name="Test")
+        repo.save(config)
+        db_session.commit()
+
+        result = repo.get(123456789)
+        assert result is not None
+        assert result.guild_id == 123456789
+        assert result.category_name == "Test"
+
+    def test_get_missing_returns_none(self, db_session: Session) -> None:
+        repo = GuildConfigRepository(db_session)
+        assert repo.get(999999) is None
+
+    def test_upsert_insert(self, db_session: Session) -> None:
+        repo = GuildConfigRepository(db_session)
+        config = GuildConfig(guild_id=111, category_name="New")
+        repo.upsert(config)
+        db_session.commit()
+
+        result = repo.get(111)
+        assert result is not None
+        assert result.category_name == "New"
+
+    def test_upsert_update(self, db_session: Session) -> None:
+        repo = GuildConfigRepository(db_session)
+        repo.save(GuildConfig(guild_id=222, category_name="Original"))
+        db_session.commit()
+
+        repo.upsert(GuildConfig(guild_id=222, category_name="Updated"))
+        db_session.commit()
+
+        result = repo.get(222)
+        assert result is not None
+        assert result.category_name == "Updated"
+
+    def test_delete(self, db_session: Session) -> None:
+        repo = GuildConfigRepository(db_session)
+        repo.save(GuildConfig(guild_id=333))
+        db_session.commit()
+
+        repo.delete(333)
+        db_session.commit()
+
+        assert repo.get(333) is None
+
+    def test_delete_missing_is_noop(self, db_session: Session) -> None:
+        repo = GuildConfigRepository(db_session)
+        repo.delete(999)  # should not raise
