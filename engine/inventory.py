@@ -327,3 +327,61 @@ def unequip_item(inventory: Inventory, slot: EquipmentSlot) -> Inventory:
     item = new_equipped.pop(slot)
     new_items.append(item)
     return inventory.model_copy(update={"items": new_items, "equipped": new_equipped})
+
+
+MAX_ATTUNEMENT = 3
+
+
+def attune_item(inventory: Inventory, item_name: str) -> Inventory:
+    """Attune to an item. Returns a new Inventory.
+
+    The item must be in the items list or equipped and require attunement.
+    Maximum 3 attuned items (SRD rule).
+
+    Raises:
+        ValueError: If at cap, item not found, already attuned, or doesn't need attunement.
+    """
+    if len(inventory.attuned) >= MAX_ATTUNEMENT:
+        raise ValueError(
+            f"Maximum attunement reached ({MAX_ATTUNEMENT} items)"
+        )
+
+    # Check if already attuned
+    for attuned in inventory.attuned:
+        if attuned.name == item_name:
+            raise ValueError(f"'{item_name}' is already attuned")
+
+    # Find the item in items or equipped
+    item: Item | None = None
+    for i in inventory.items:
+        if i.name == item_name:
+            item = i
+            break
+    if item is None:
+        for i in inventory.equipped.values():
+            if i.name == item_name:
+                item = i
+                break
+    if item is None:
+        raise ValueError(f"Item '{item_name}' not found in inventory")
+
+    if not item.requires_attunement:
+        raise ValueError(f"'{item_name}' does not require attunement")
+
+    new_attuned = list(inventory.attuned)
+    new_attuned.append(item)
+    return inventory.model_copy(update={"attuned": new_attuned})
+
+
+def unattune_item(inventory: Inventory, item_name: str) -> Inventory:
+    """Remove attunement from an item. Returns a new Inventory.
+
+    Raises:
+        ValueError: If item is not attuned.
+    """
+    new_attuned = list(inventory.attuned)
+    for i, item in enumerate(new_attuned):
+        if item.name == item_name:
+            new_attuned.pop(i)
+            return inventory.model_copy(update={"attuned": new_attuned})
+    raise ValueError(f"'{item_name}' is not attuned")

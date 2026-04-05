@@ -16,12 +16,14 @@ from engine.inventory import (
     WeaponCategory,
     WeaponProperty,
     add_item,
+    attune_item,
     compute_carrying_capacity,
     compute_total_weight,
     create_inventory,
     equip_item,
     is_encumbered,
     remove_item,
+    unattune_item,
     unequip_item,
 )
 
@@ -621,3 +623,109 @@ class TestUnequipItem:
         inv = create_inventory()
         with pytest.raises(ValueError, match="Nothing equipped"):
             unequip_item(inv, EquipmentSlot.MAIN_HAND)
+
+
+MAX_ATTUNEMENT = 3
+
+
+class TestAttuneItem:
+    """Attunement management (max 3)."""
+
+    def test_attune_item(self) -> None:
+        ring = Item(
+            name="Ring of Protection",
+            item_type=ItemType.ADVENTURING_GEAR,
+            weight=0.0,
+            magical=True,
+            requires_attunement=True,
+        )
+        inv = Inventory(items=[ring])
+        result = attune_item(inv, "Ring of Protection")
+        assert len(result.attuned) == 1
+        assert result.attuned[0].name == "Ring of Protection"
+
+    def test_returns_new_inventory(self) -> None:
+        ring = Item(
+            name="Ring of Protection",
+            item_type=ItemType.ADVENTURING_GEAR,
+            weight=0.0,
+            magical=True,
+            requires_attunement=True,
+        )
+        inv = Inventory(items=[ring])
+        result = attune_item(inv, "Ring of Protection")
+        assert result is not inv
+
+    def test_max_attunement_raises(self) -> None:
+        items = [
+            Item(
+                name=f"Ring {i}",
+                item_type=ItemType.ADVENTURING_GEAR,
+                weight=0.0,
+                magical=True,
+                requires_attunement=True,
+            )
+            for i in range(4)
+        ]
+        inv = Inventory(
+            items=[items[3]],
+            attuned=items[:3],
+        )
+        with pytest.raises(ValueError, match="Maximum attunement"):
+            attune_item(inv, "Ring 3")
+
+    def test_not_attuneable_raises(self) -> None:
+        torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
+        inv = Inventory(items=[torch])
+        with pytest.raises(ValueError, match="does not require attunement"):
+            attune_item(inv, "Torch")
+
+    def test_item_not_found_raises(self) -> None:
+        inv = create_inventory()
+        with pytest.raises(ValueError, match="not found"):
+            attune_item(inv, "Ghost")
+
+    def test_already_attuned_raises(self) -> None:
+        ring = Item(
+            name="Ring of Protection",
+            item_type=ItemType.ADVENTURING_GEAR,
+            weight=0.0,
+            magical=True,
+            requires_attunement=True,
+        )
+        inv = Inventory(items=[ring], attuned=[ring])
+        with pytest.raises(ValueError, match="already attuned"):
+            attune_item(inv, "Ring of Protection")
+
+
+class TestUnattuneItem:
+    """Removing attunement."""
+
+    def test_unattune_item(self) -> None:
+        ring = Item(
+            name="Ring of Protection",
+            item_type=ItemType.ADVENTURING_GEAR,
+            weight=0.0,
+            magical=True,
+            requires_attunement=True,
+        )
+        inv = Inventory(attuned=[ring])
+        result = unattune_item(inv, "Ring of Protection")
+        assert len(result.attuned) == 0
+
+    def test_returns_new_inventory(self) -> None:
+        ring = Item(
+            name="Ring of Protection",
+            item_type=ItemType.ADVENTURING_GEAR,
+            weight=0.0,
+            magical=True,
+            requires_attunement=True,
+        )
+        inv = Inventory(attuned=[ring])
+        result = unattune_item(inv, "Ring of Protection")
+        assert result is not inv
+
+    def test_not_attuned_raises(self) -> None:
+        inv = create_inventory()
+        with pytest.raises(ValueError, match="not attuned"):
+            unattune_item(inv, "Ghost")
