@@ -15,6 +15,7 @@ from engine.inventory import (
     Weapon,
     WeaponCategory,
     WeaponProperty,
+    ITEM_CATALOG,
     add_item,
     attune_item,
     compute_ac_from_equipment,
@@ -809,3 +810,73 @@ class TestComputeACFromEquipment:
 
     def test_negative_dex_lowers_ac(self) -> None:
         assert compute_ac_from_equipment({}, dex_modifier=-1) == 9  # 10 + (-1)
+
+
+class TestItemCatalog:
+    """Starter item catalog with SRD-accurate entries."""
+
+    def test_catalog_not_empty(self) -> None:
+        assert len(ITEM_CATALOG) >= 20
+
+    def test_longsword_stats(self) -> None:
+        sword = ITEM_CATALOG["Longsword"]
+        assert isinstance(sword, Weapon)
+        assert sword.damage_dice == "1d8"
+        assert sword.damage_type == DamageType.SLASHING
+        assert sword.weapon_category == WeaponCategory.MARTIAL_MELEE
+        assert WeaponProperty.VERSATILE in sword.properties
+        assert sword.weight == 3.0
+        assert sword.value_gp == 15
+
+    def test_chain_mail_stats(self) -> None:
+        armor = ITEM_CATALOG["Chain Mail"]
+        assert isinstance(armor, Armor)
+        assert armor.armor_category == ArmorCategory.HEAVY
+        assert armor.base_ac == 16
+        assert armor.dex_cap == 0
+        assert armor.strength_required == 13
+        assert armor.stealth_disadvantage is True
+
+    def test_shield_stats(self) -> None:
+        shield = ITEM_CATALOG["Shield"]
+        assert shield.item_type == ItemType.SHIELD
+        assert shield.weight == 6.0
+        assert shield.value_gp == 10
+
+    def test_healing_potion_stats(self) -> None:
+        potion = ITEM_CATALOG["Healing Potion"]
+        assert potion.item_type == ItemType.POTION
+        assert potion.value_gp == 50
+
+    def test_arrows_stackable(self) -> None:
+        arrows = ITEM_CATALOG["Arrows"]
+        assert arrows.stackable is True
+        assert arrows.quantity == 20
+        assert arrows.item_type == ItemType.AMMUNITION
+
+    def test_all_weapons_are_weapon_type(self) -> None:
+        for name, item in ITEM_CATALOG.items():
+            if isinstance(item, Weapon):
+                assert item.item_type == ItemType.WEAPON, f"{name} has wrong type"
+
+    def test_all_armors_are_armor_type(self) -> None:
+        for name, item in ITEM_CATALOG.items():
+            if isinstance(item, Armor):
+                assert item.item_type == ItemType.ARMOR, f"{name} has wrong type"
+
+    def test_dagger_has_finesse_light_thrown(self) -> None:
+        dagger = ITEM_CATALOG["Dagger"]
+        assert isinstance(dagger, Weapon)
+        assert set(dagger.properties) == {
+            WeaponProperty.FINESSE,
+            WeaponProperty.LIGHT,
+            WeaponProperty.THROWN,
+        }
+        assert dagger.range_ft == 20
+
+    def test_plate_armor(self) -> None:
+        plate = ITEM_CATALOG["Plate"]
+        assert isinstance(plate, Armor)
+        assert plate.base_ac == 18
+        assert plate.dex_cap == 0
+        assert plate.strength_required == 15
