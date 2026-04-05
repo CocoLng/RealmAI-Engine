@@ -137,3 +137,22 @@ class Armor(Item):
     dex_cap: int | None = Field(default=None, ge=0)
     strength_required: int = Field(default=0, ge=0)
     stealth_disadvantage: bool = False
+
+
+class Inventory(BaseModel):
+    """A character's item container."""
+
+    items: list[Item] = Field(default_factory=list)
+    equipped: dict[EquipmentSlot, Item] = Field(default_factory=dict)
+    attuned: list[Item] = Field(default_factory=list)
+    gold: int = Field(default=0, ge=0)
+
+
+# ---------------------------------------------------------------------------
+# Pure functions
+# ---------------------------------------------------------------------------
+
+
+def create_inventory() -> Inventory:
+    """Create an empty inventory."""
+    return Inventory()

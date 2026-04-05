@@ -7,12 +7,14 @@ from engine.inventory import (
     ArmorCategory,
     DamageType,
     EquipmentSlot,
+    Inventory,
     Item,
     ItemType,
     Rarity,
     Weapon,
     WeaponCategory,
     WeaponProperty,
+    create_inventory,
 )
 
 
@@ -245,3 +247,24 @@ class TestArmor:
         data = armor.model_dump()
         restored = Armor(**data)
         assert restored == armor
+
+
+class TestInventory:
+    """Inventory container model."""
+
+    def test_create_empty_inventory(self) -> None:
+        inv = create_inventory()
+        assert inv.items == []
+        assert inv.equipped == {}
+        assert inv.attuned == []
+        assert inv.gold == 0
+
+    def test_negative_gold_raises(self) -> None:
+        with pytest.raises(ValueError):
+            Inventory(gold=-1)
+
+    def test_model_dump_roundtrip(self) -> None:
+        inv = create_inventory()
+        data = inv.model_dump()
+        restored = Inventory(**data)
+        assert restored == inv
