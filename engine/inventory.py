@@ -409,15 +409,12 @@ def compute_ac_from_equipment(
 
     armor = equipped.get(EquipmentSlot.ARMOR)
     if armor is not None and isinstance(armor, Armor):
-        if armor.dex_cap is None:
-            # Light armor: full DEX
+        if armor.armor_category == ArmorCategory.LIGHT:
             ac = armor.base_ac + dex_modifier
-        elif armor.dex_cap == 0:
-            # Heavy armor: no DEX
+        elif armor.armor_category == ArmorCategory.MEDIUM:
+            ac = armor.base_ac + min(dex_modifier, armor.dex_cap or 2)
+        elif armor.armor_category == ArmorCategory.HEAVY:
             ac = armor.base_ac
-        else:
-            # Medium armor: capped DEX
-            ac = armor.base_ac + min(dex_modifier, armor.dex_cap)
 
     # Shield bonus
     off_hand = equipped.get(EquipmentSlot.OFF_HAND)
