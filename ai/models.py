@@ -17,14 +17,14 @@ class InterpretedAction(BaseModel):
     spell_name: str | None = None
     item_name: str | None = None
     raw_input: str
-    confidence: float = 1.0
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class NarrativeResult(BaseModel):
     """Output of the Narrator: immersive narrative description of resolved action."""
 
     narrative: str
-    tone: str
+    tone: Literal["dramatic", "tense", "humorous", "somber"]
 
 
 class DirectorNote(BaseModel):

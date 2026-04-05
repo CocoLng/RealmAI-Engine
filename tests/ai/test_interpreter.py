@@ -1,6 +1,5 @@
 """Tests for the Interpreter module."""
 
-import json
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -90,6 +89,26 @@ def test_interpret_invalid_json_returns_low_confidence(
     assert result.action_type == ActionType.DEFEND
     assert result.confidence == 0.0
     assert result.raw_input == "uhhhh idk"
+
+
+def test_interpret_missing_action_type_falls_back(
+    httpx_mock: HTTPXMock, interpreter: Interpreter
+) -> None:
+    """If LLM returns JSON but action_type is invalid, interpreter falls back."""
+    httpx_mock.add_response(
+        url=OLLAMA_URL,
+        json=make_ollama_response({"action_type": "INVALID_ACTION", "actor_name": "Thorin", "confidence": 0.5}),
+    )
+
+    result = interpreter.interpret(
+        player_text="do something",
+        actor_name="Thorin",
+        available_actions=["Attack", "Defend"],
+    )
+
+    assert result.action_type == ActionType.DEFEND
+    assert result.confidence == 0.0
+    assert result.raw_input == "do something"
 
 
 def test_interpret_combat_context_included(

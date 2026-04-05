@@ -73,6 +73,8 @@ def test_check_coherence_stores_semantic_document(
     documents = call_args[0][0]  # first positional argument
     assert len(documents) == 1
     assert documents[0].campaign_id == "camp-456"
+    from memory.models import SemanticDocumentType
+    assert documents[0].doc_type == SemanticDocumentType.PAST_EVENT
 
 
 def test_check_coherence_low_priority(
