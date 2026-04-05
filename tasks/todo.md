@@ -82,13 +82,22 @@ Build `engine/` with full test coverage. Playable in terminal.
 
 ### Quality Gates
 
-- [x] pytest: **592 tests passing**, **91% coverage** on memory/
+- [x] pytest: **593 tests passing** (after post-review fixes), **91% coverage** on memory/
 - [x] ruff check: clean
-- [x] mypy: clean (0 issues)
+- [x] mypy: clean (0 issues on source; pre-existing test fixture errors unrelated)
+
+### Post-review fixes (2026-04-05)
+
+- [x] R1: `_assemble_prompt` truncation final clamp added — ceil() rounding no longer causes over-budget output
+- [x] R2: `add_documents` validates all docs share same campaign_id (raises ValueError)
+- [x] R3: `summarizer.py` split redundant `except (json.JSONDecodeError, Exception)` into two clauses
+- [x] R4: Added `sample_exchange` and `sample_summary` fixtures to `tests/conftest.py`
+- [x] R5: `state.py` bounds-check before `combatants[current_turn_index]` (uses `% len` guard)
+- [x] R6: `semantic.py query()` bare except now logs with `logger.debug`
+- [x] R7: `ContextBudget` model_validator enforces `total_max >= layer1_max`
+- [x] R8: New test `test_truncation_clamp_enforces_budget` covers actual truncation path
 
 ## Phase 2c — AI Core [NEXT]
-
-> Unblocked: Phase 2b complete
 
 - [ ] **ai/interpreter.py** — Qwen 3.5 4B, text → structured JSON (action, target, weapon)
 - [ ] **ai/narrator.py** — Qwen 3.5 9B, ActionResult → narrative text
