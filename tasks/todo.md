@@ -119,10 +119,22 @@ Build `engine/` with full test coverage. Playable in terminal.
 
 > Design spec: `docs/superpowers/specs/2026-04-05-discord-bot-ux-design.md`
 
-## Phase 3a — Bot Foundation
+## Phase 3a — Bot Foundation ✅ COMPLETE
 
-- [ ] **bot/bot.py** — Bot setup, cog loading, intents, on_ready
-- [ ] **bot/config.py** — GuildConfig Pydantic model (category per guild, stored in SQLite)
+> Design spec: `docs/superpowers/specs/2026-04-06-phase3a-bot-foundation-design.md`
+
+- [x] **bot/bot.py** — RealmBot(commands.Bot) subclass, setup_hook, on_ready, run_bot()
+- [x] **bot/config.py** — GuildConfig Pydantic model (guild_id + category_name)
+- [x] **db/models.py** — GuildConfigRow table
+- [x] **db/mappers.py** — guild_config_to_db / guild_config_from_db
+- [x] **db/repositories/guild_config_repo.py** — GuildConfigRepository (get, save, upsert, delete)
+- [x] **main.py** — Rewritten as bot entry point (REPL combat demo removed)
+
+### Quality Gates
+
+- [x] pytest: **653 tests passing** (626 + 27 new), 0 failed
+- [x] ruff check: clean
+- [x] mypy: clean (0 issues on 15 source files)
 
 ## Phase 3b — Channel Manager
 
