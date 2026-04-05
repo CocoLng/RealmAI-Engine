@@ -39,5 +39,5 @@ class NPCResponse(BaseModel):
     """Output of the NPC Agent: dialogue and disposition signal."""
 
     dialogue: str
-    disposition_change: int = 0
+    disposition_change: int = Field(default=0, ge=-2, le=2)
     revealed_info: list[str] = Field(default_factory=list)

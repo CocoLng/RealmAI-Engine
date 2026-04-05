@@ -8,7 +8,7 @@ from ai.models import NPCResponse
 from ai.npc_agent import NPCAgent
 from tests.ai.conftest import make_ollama_response
 from world.npc import NPC, NPCDisposition
-from engine.character import AbilityScores, Race, CharacterClass
+from engine.character import AbilityScores, Race
 
 OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 
