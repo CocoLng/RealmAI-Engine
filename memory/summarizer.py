@@ -94,9 +94,13 @@ class Summarizer:
 
         try:
             parsed = json.loads(raw_content)
-            summary_response = _SummaryResponse.model_validate(parsed)
-        except (json.JSONDecodeError, Exception):
+        except json.JSONDecodeError:
             logger.warning("Invalid JSON from summarizer: %s", raw_content[:200])
+            return None
+        try:
+            summary_response = _SummaryResponse.model_validate(parsed)
+        except Exception:
+            logger.warning("Unexpected summarizer response shape: %s", parsed)
             return None
 
         summary = CompressedSummary(

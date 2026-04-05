@@ -15,6 +15,7 @@ from engine.inventory import (
     add_item,
     create_inventory,
 )
+from memory.models import CompressedSummary, ExchangeRole, NarrativeExchange
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, NPCDisposition
@@ -139,3 +140,25 @@ def sample_inventory() -> Inventory:
     )
     inv = add_item(inv, sword)
     return inv
+
+
+@pytest.fixture()
+def sample_exchange(sample_campaign: Campaign) -> NarrativeExchange:
+    """A test narrative exchange (player action)."""
+    return NarrativeExchange(
+        campaign_id=sample_campaign.id,
+        role=ExchangeRole.PLAYER,
+        content="I attack the goblin with my longsword.",
+        interaction_number=1,
+    )
+
+
+@pytest.fixture()
+def sample_summary(sample_campaign: Campaign) -> CompressedSummary:
+    """A test compressed summary."""
+    return CompressedSummary(
+        campaign_id=sample_campaign.id,
+        summary_text="The party arrived at Phandalin and met Gundren at the inn.",
+        start_interaction=1,
+        end_interaction=20,
+    )

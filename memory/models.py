@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -125,3 +125,13 @@ class ContextBudget(BaseModel):
     layer3_max: int = 400
     layer4_max: int = 350
     total_max: int = 2500
+
+    @model_validator(mode="after")
+    def total_must_fit_layers(self) -> "ContextBudget":
+        """Ensure total_max can accommodate all layers."""
+        if self.total_max < self.layer1_max:
+            raise ValueError(
+                f"total_max ({self.total_max}) must be >= layer1_max ({self.layer1_max}) "
+                "since layer1 is never truncated"
+            )
+        return self

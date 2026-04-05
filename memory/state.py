@@ -87,10 +87,9 @@ class StateBuilder:
 
         # Combat state
         combat_summary: CombatSummary | None = None
-        if combat_state and combat_state.is_active:
-            current_combatant = combat_state.combatants[
-                combat_state.current_turn_index
-            ]
+        if combat_state and combat_state.is_active and combat_state.combatants:
+            idx = combat_state.current_turn_index % len(combat_state.combatants)
+            current_combatant = combat_state.combatants[idx]
             combat_chars = [
                 CharacterSummary(
                     name=c.name,

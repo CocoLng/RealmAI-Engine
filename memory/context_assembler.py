@@ -121,5 +121,17 @@ class ContextAssembler:
                 layers[i] = truncate_to_tokens(layers[i], new_budget)
                 total = sum(estimate_tokens(ly) for ly in layers if ly)
 
+        # Final clamp: ceil() rounding may leave 1-3 tokens over budget
+        total = sum(estimate_tokens(ly) for ly in layers if ly)
+        if total > self._budget.total_max:
+            for i in [3, 2, 1]:
+                if layers[i]:
+                    overage = total - self._budget.total_max
+                    new_budget = max(0, estimate_tokens(layers[i]) - overage)
+                    layers[i] = truncate_to_tokens(layers[i], new_budget)
+                    total = sum(estimate_tokens(ly) for ly in layers if ly)
+                    if total <= self._budget.total_max:
+                        break
+
         sections = [s for s in layers if s]
         return "\n\n".join(sections)

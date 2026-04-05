@@ -45,6 +45,12 @@ class SemanticMemory:
         """Batch add documents. All must belong to the same campaign."""
         if not documents:
             return
+        campaign_ids = {d.campaign_id for d in documents}
+        if len(campaign_ids) > 1:
+            raise ValueError(
+                f"add_documents requires all documents to share the same campaign_id, "
+                f"got: {campaign_ids}"
+            )
         campaign_id = documents[0].campaign_id
         collection = self._get_collection(campaign_id)
         collection.add(
@@ -66,6 +72,7 @@ class SemanticMemory:
         try:
             collection = self._client.get_collection(f"campaign_{campaign_id}")
         except Exception:
+            logger.debug("Collection campaign_%s not found", campaign_id)
             return []
 
         where_filter = {"doc_type": doc_type.value} if doc_type else None

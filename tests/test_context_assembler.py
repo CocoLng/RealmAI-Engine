@@ -169,3 +169,39 @@ class TestContextAssembler:
 
         assert "[GAME STATE]" in result
         assert "[RELEVANT LORE]" not in result
+
+    @patch("memory.summarizer.OpenAI")
+    def test_truncation_clamp_enforces_budget(
+        self, mock_openai_cls: MagicMock,
+        db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory,
+    ) -> None:
+        """Verify the final clamp prevents off-by-rounding overflows."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+
+        # Add many verbose exchanges and lore to push all layers over budget
+        exchange_repo = ExchangeRepository(db_session)
+        long_text = "The adventurers marched through the dark forest encountering many dangers. " * 5
+        for i in range(1, 13):
+            exchange_repo.save(NarrativeExchange(
+                campaign_id=sample_campaign.id, role=ExchangeRole.NARRATOR,
+                content=long_text, interaction_number=i,
+            ))
+        db_session.commit()
+
+        for _ in range(5):
+            semantic_memory.add_document(SemanticDocument(
+                campaign_id=sample_campaign.id,
+                doc_type=SemanticDocumentType.WORLD_LORE,
+                content=long_text,
+            ))
+
+        budget = ContextBudget(
+            layer1_max=80, layer2_max=80,
+            layer3_max=80, layer4_max=80, total_max=250,
+        )
+        assembler = ContextAssembler(db_session, semantic_memory, budget=budget)
+        result = assembler.assemble(sample_campaign.id, "forest dangers")
+
+        assert estimate_tokens(result) <= 250
