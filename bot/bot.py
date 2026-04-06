@@ -58,6 +58,12 @@ class RealmBot(commands.Bot):
         for ext in EXTENSIONS:
             await self.load_extension(ext)
             logger.info("Loaded extension: %s", ext)
+
+        # Load TestBridge if TEST_MODE is enabled
+        if os.environ.get("TEST_MODE", "").lower() == "true":
+            await self.load_extension("bot.cogs.test_bridge")
+            logger.info("Loaded extension: bot.cogs.test_bridge (TEST_MODE)")
+
         await self.tree.sync()
 
     async def on_ready(self) -> None:
