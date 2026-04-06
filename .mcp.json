@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "discord-test": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "mcp_discord"],
+      "env": {}
+    }
+  }
+}

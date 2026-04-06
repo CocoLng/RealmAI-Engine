@@ -323,7 +323,7 @@ class CombatCog(commands.Cog):
             logger.info(
                 "COMBAT enemy=%s target=%s roll=%d vs AC=%d -> %s damage=%d",
                 enemy.name, target.name,
-                result.roll, target.character.ac, hit_str, result.damage,
+                result.attack_roll, target.character.ac, hit_str, result.damage,
             )
             mechanics = f"{enemy.name} attaque {target.name}: "
             if result.hit:
