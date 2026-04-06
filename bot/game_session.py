@@ -38,6 +38,7 @@ class GameSession:
     current_location: Location | None = None
     npcs: dict[str, NPC] = field(default_factory=dict)
     quests: list[Quest] = field(default_factory=list)
+    language: str = "fr"
 
     # AI services — None if Ollama is unavailable
     ollama_client: OllamaClient | None = None

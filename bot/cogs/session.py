@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -89,19 +90,6 @@ class SessionCog(commands.Cog):
             player_names=[str(uid) for uid in player_ids],
         )
 
-        # Fetch guild config and persist campaign
-        db_session = self.bot.db_factory()
-        try:
-            guild_config_repo = GuildConfigRepository(db_session)
-            config = guild_config_repo.get(guild.id)
-            category_name = config.category_name if config else "RealmAI Sessions"
-
-            campaign_repo = CampaignRepository(db_session)
-            campaign_repo.save(campaign)
-            db_session.commit()
-        finally:
-            db_session.close()
-
         # Resolve Member objects for channel permissions
         player_members: list[discord.Member] = []
         for uid in player_ids:
@@ -109,22 +97,39 @@ class SessionCog(commands.Cog):
             if member:
                 player_members.append(member)
 
-        # Create private session channel
-        channel = await create_session_channel(
-            guild, theme, player_members, guild.me, category_name,
-        )
-
-        # Persist channel-campaign mapping
+        # Atomic: persist campaign + create channel + persist mapping
         db_session = self.bot.db_factory()
+        channel: discord.TextChannel | None = None
         try:
+            guild_config_repo = GuildConfigRepository(db_session)
+            config = guild_config_repo.get(guild.id)
+            category_name = config.category_name if config else "RealmAI Sessions"
+            language = config.language if config else "fr"
+
+            campaign_repo = CampaignRepository(db_session)
+            campaign_repo.save(campaign)
+            db_session.flush()  # allocate DB resources, don't commit yet
+
+            channel = await create_session_channel(
+                guild, theme, player_members, guild.me, category_name,
+            )
+
             channel_repo = CampaignChannelRepository(db_session)
             channel_repo.save(channel.id, campaign.id, guild.id)
             db_session.commit()
+        except Exception:
+            db_session.rollback()
+            if channel is not None:
+                try:
+                    await channel.delete(reason="Rollback: start_campaign failed")
+                except Exception:
+                    logger.error("Failed to cleanup orphan channel %s", channel.id)
+            raise
         finally:
             db_session.close()
 
         # Create in-memory game session
-        session = GameSession(campaign=campaign)
+        session = GameSession(campaign=campaign, language=language)
         create_ai_services(session)
 
         # Generate initial location via AI (best-effort)
@@ -133,9 +138,11 @@ class SessionCog(commands.Cog):
                 from ai.world_generator import WorldGenerator
 
                 gen = WorldGenerator(session.ollama_client)
-                location = gen.generate(
+                location = await asyncio.to_thread(
+                    gen.generate,
                     campaign_context=f"New campaign: {theme}",
                     location_type="starting_area",
+                    language=session.language,
                 )
                 session.current_location = location
                 campaign.current_location = location.name
@@ -202,7 +209,12 @@ class SessionCog(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            campaign_id, _ = mapping
+            campaign_id, guild_id = mapping
+
+            # Read language from guild config
+            guild_config_repo = GuildConfigRepository(db_session)
+            guild_config = guild_config_repo.get(guild_id)
+            language = guild_config.language if guild_config else "fr"
 
             campaign_repo = CampaignRepository(db_session)
             campaign = campaign_repo.get_by_id(campaign_id)
@@ -245,6 +257,7 @@ class SessionCog(commands.Cog):
             combat_state=combat_state,
             npcs={npc.name: npc for npc in npcs},
             quests=quests,
+            language=language,
         )
         for user_id, char, inv, spell in pc_rows:
             session.characters[user_id] = char
@@ -333,30 +346,57 @@ class SessionCog(commands.Cog):
     # ------------------------------------------------------------------
 
     @app_commands.command(name="settings", description="Configure le bot pour ce serveur")
-    @app_commands.describe(category="Nom de la categorie Discord pour les sessions")
+    @app_commands.describe(
+        category="Nom de la categorie Discord pour les sessions",
+        language="Langue du narrateur (fr, en, es, de, pt)",
+    )
     @app_commands.checks.has_permissions(manage_channels=True)
-    async def settings(self, interaction: discord.Interaction, category: str) -> None:
-        """Update the guild's session category name."""
+    async def settings(
+        self,
+        interaction: discord.Interaction,
+        category: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        """Update the guild's bot configuration."""
         if interaction.guild is None:
             await interaction.response.send_message("Serveur requis.", ephemeral=True)
             return
 
-        config = GuildConfig(guild_id=interaction.guild.id, category_name=category)
         db_session = self.bot.db_factory()
         try:
             repo = GuildConfigRepository(db_session)
+            existing = repo.get(interaction.guild.id)
+            config = existing or GuildConfig(guild_id=interaction.guild.id)
+
+            if category is not None:
+                config = config.model_copy(update={"category_name": category})
+            if language is not None:
+                config = config.model_copy(update={"language": language})
+
             repo.upsert(config)
             db_session.commit()
         finally:
             db_session.close()
 
         logger.info(
-            "SESSION settings guild=%s category=%r",
-            interaction.guild.id, category,
+            "SESSION settings guild=%s category=%r language=%s",
+            interaction.guild.id, config.category_name, config.language,
         )
-        await interaction.response.send_message(
-            f"Categorie mise a jour: **{category}**", ephemeral=True,
-        )
+
+        if category is None and language is None:
+            await interaction.response.send_message(
+                f"Config actuelle: categorie=**{config.category_name}**, langue=**{config.language}**",
+                ephemeral=True,
+            )
+        else:
+            parts = []
+            if category is not None:
+                parts.append(f"categorie: **{category}**")
+            if language is not None:
+                parts.append(f"langue: **{language}**")
+            await interaction.response.send_message(
+                f"Mis a jour: {', '.join(parts)}", ephemeral=True,
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers

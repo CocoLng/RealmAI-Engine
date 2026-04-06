@@ -76,17 +76,26 @@ class TestGuildConfigMappers:
         row = guild_config_to_db(config)
         assert row.guild_id == 123456789
         assert row.category_name == "Custom"
+        assert row.language == "fr"
 
     def test_from_db(self) -> None:
-        row = GuildConfigRow(guild_id=987654321, category_name="Test")
+        row = GuildConfigRow(guild_id=987654321, category_name="Test", language="fr")
         config = guild_config_from_db(row)
         assert config.guild_id == 987654321
         assert config.category_name == "Test"
+        assert config.language == "fr"
 
     def test_round_trip(self) -> None:
         original = GuildConfig(guild_id=555, category_name="Round Trip")
         row = guild_config_to_db(original)
         restored = guild_config_from_db(row)
+        assert restored == original
+
+    def test_language_round_trip(self) -> None:
+        original = GuildConfig(guild_id=777, category_name="Sessions", language="en")
+        row = guild_config_to_db(original)
+        restored = guild_config_from_db(row)
+        assert restored.language == "en"
         assert restored == original
 
     def test_default_category_round_trip(self) -> None:

@@ -241,6 +241,7 @@ def guild_config_to_db(config: GuildConfig) -> GuildConfigRow:
     return GuildConfigRow(
         guild_id=config.guild_id,
         category_name=config.category_name,
+        language=config.language,
     )
 
 
@@ -249,6 +250,7 @@ def guild_config_from_db(row: GuildConfigRow) -> GuildConfig:
     return GuildConfig(
         guild_id=row.guild_id,
         category_name=row.category_name,
+        language=row.language,
     )
 
 

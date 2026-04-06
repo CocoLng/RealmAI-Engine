@@ -48,9 +48,21 @@ def _migrate_schema(engine: Engine) -> None:
     with engine.connect() as conn:
         result = conn.execute(text("PRAGMA table_info(campaigns)"))
         columns = {row[1] for row in result}
+        if not columns:
+            # Table doesn't exist yet (no models imported) — skip migration
+            return
         if "combat_state_json" not in columns:
             conn.execute(
                 text("ALTER TABLE campaigns ADD COLUMN combat_state_json TEXT")
+            )
+            conn.commit()
+
+        # Add language column to guild_configs if missing
+        result2 = conn.execute(text("PRAGMA table_info(guild_configs)"))
+        gc_columns = {row[1] for row in result2}
+        if gc_columns and "language" not in gc_columns:
+            conn.execute(
+                text("ALTER TABLE guild_configs ADD COLUMN language TEXT DEFAULT 'fr'")
             )
             conn.commit()
 

@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from ai.client import OllamaClient
+from ai.language import language_instruction
 from ai.models import NarrativeResult
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class Narrator:
         self,
         action_result_text: str,
         context_prompt: str,
+        language: str = "fr",
     ) -> NarrativeResult:
         """Generate an immersive narrative description of a resolved action.
 
@@ -34,14 +36,16 @@ class Narrator:
             action_result_text: Mechanical summary of what happened
                 (e.g. "Thorin attacks Goblin. Hit! 8 damage dealt.").
             context_prompt: Full assembled memory context from ContextAssembler.
+            language: ISO 639-1 language code for narrative output.
 
         Returns:
             NarrativeResult with narrative text and tone classification.
         """
         logger.info("NARRATE input=%r", action_result_text[:100])
         user_content = f"{context_prompt}\n\n## What happened\n{action_result_text}"
+        system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 

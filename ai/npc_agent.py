@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from ai.client import OllamaClient
+from ai.language import language_instruction
 from ai.models import NPCResponse
 from world.npc import NPC
 
@@ -29,6 +30,7 @@ class NPCAgent:
         npc: NPC,
         player_input: str,
         context_prompt: str,
+        language: str = "fr",
     ) -> NPCResponse:
         """Generate an in-character response from an NPC.
 
@@ -36,14 +38,16 @@ class NPCAgent:
             npc: The NPC to speak as (read-only — never mutated).
             player_input: What the player said to this NPC.
             context_prompt: Assembled context from ContextAssembler.
+            language: ISO 639-1 language code for narrative output.
 
         Returns:
             NPCResponse with dialogue, disposition_change signal, and revealed info.
             The caller must apply disposition_change to the NPC object.
         """
         user_content = self._build_user_message(npc, player_input, context_prompt)
+        system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 

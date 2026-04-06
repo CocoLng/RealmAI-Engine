@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from ai.client import OllamaClient
+from ai.language import language_instruction
 from world.location import Location
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class WorldGenerator:
         campaign_context: str,
         location_type: str,
         location_name: str | None = None,
+        language: str = "fr",
     ) -> Location:
         """Generate a new location for the campaign.
 
@@ -35,13 +37,15 @@ class WorldGenerator:
             campaign_context: Assembled context describing the campaign state.
             location_type: Type of location to generate (e.g. "tavern", "dungeon").
             location_name: Optional specific name for the location.
+            language: ISO 639-1 language code for narrative output.
 
         Returns:
             A Location ready to be saved.
         """
         user_content = self._build_user_message(campaign_context, location_type, location_name)
+        system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 

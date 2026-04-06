@@ -120,6 +120,7 @@ class GuildConfigRow(Base):
 
     guild_id: Mapped[int] = mapped_column(primary_key=True)
     category_name: Mapped[str] = mapped_column(String(100), default="RealmAI Sessions")
+    language: Mapped[str] = mapped_column(String(2), default="fr")
 
 
 class PlayerCharacterRow(Base):

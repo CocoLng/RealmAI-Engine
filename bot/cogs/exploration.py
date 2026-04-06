@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -65,9 +66,11 @@ class ExplorationCog(commands.Cog):
         tone = "dramatic"
         if session.narrator:
             try:
-                result = session.narrator.narrate(
+                result = await asyncio.to_thread(
+                    session.narrator.narrate,
                     f"The party looks around {location.name}: {description}",
                     "",
+                    session.language,
                 )
                 narrative = result.narrative
                 tone = result.tone
@@ -176,10 +179,12 @@ class ExplorationCog(commands.Cog):
 
         if session.npc_agent and npc_data:
             try:
-                response = session.npc_agent.respond(
+                response = await asyncio.to_thread(
+                    session.npc_agent.respond,
                     npc_data,
                     player_input="initiates conversation",
                     context_prompt="",
+                    language=session.language,
                 )
                 narrative = response.dialogue
                 logger.info(
@@ -269,10 +274,12 @@ class ExplorationCog(commands.Cog):
             try:
                 from ai.world_generator import WorldGenerator
                 gen = WorldGenerator(session.ollama_client)
-                dest = gen.generate(
+                dest = await asyncio.to_thread(
+                    gen.generate,
                     campaign_context=f"Moving from {location.name} to {match}",
                     location_type="connected_area",
                     location_name=match,
+                    language=session.language,
                 )
                 generated = True
                 # Save generated location
@@ -306,8 +313,11 @@ class ExplorationCog(commands.Cog):
         tone = "dramatic"
         if session.narrator:
             try:
-                result = session.narrator.narrate(
-                    f"The party arrives at {dest.name}: {dest.description}", "",
+                result = await asyncio.to_thread(
+                    session.narrator.narrate,
+                    f"The party arrives at {dest.name}: {dest.description}",
+                    "",
+                    session.language,
                 )
                 narrative = result.narrative
                 tone = result.tone

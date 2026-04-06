@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -201,17 +202,16 @@ class CombatCog(commands.Cog):
         result = resolve_attack(combatant, target, weapon)
         mechanics = f"{combatant.name} attaque {target.name}: "
         if result.hit:
-            mechanics += f"Touche — {result.damage} degats"
-            if result.critical:
-                mechanics += " (CRITIQUE !)"
+            mechanics += f"Touche ({result.outcome.value}) — {result.damage} degats"
         else:
-            mechanics += "Rate"
+            mechanics += f"Rate ({result.outcome.value})"
 
         hit_str = "CRIT" if result.critical else ("HIT" if result.hit else "MISS")
         logger.info(
-            "COMBAT action=attack player=%s target=%s roll=%d vs AC=%d -> %s damage=%d",
+            "COMBAT action=attack player=%s target=%s roll=%d vs AC=%d -> %s damage=%d outcome=%s",
             combatant.name, target.name,
-            result.roll, target.character.ac, hit_str, result.damage,
+            result.attack_roll, target.character.ac, hit_str, result.damage,
+            result.outcome.value,
         )
 
         narrative, tone = await self._narrate(session, mechanics)
@@ -321,15 +321,16 @@ class CombatCog(commands.Cog):
             result = resolve_attack(enemy, target, weapon)
             hit_str = "HIT" if result.hit else "MISS"
             logger.info(
-                "COMBAT enemy=%s target=%s roll=%d vs AC=%d -> %s damage=%d",
+                "COMBAT enemy=%s target=%s roll=%d vs AC=%d -> %s damage=%d outcome=%s",
                 enemy.name, target.name,
-                result.roll, target.character.ac, hit_str, result.damage,
+                result.attack_roll, target.character.ac, hit_str, result.damage,
+                result.outcome.value,
             )
             mechanics = f"{enemy.name} attaque {target.name}: "
             if result.hit:
-                mechanics += f"Touche — {result.damage} degats"
+                mechanics += f"Touche ({result.outcome.value}) — {result.damage} degats"
             else:
-                mechanics += "Rate"
+                mechanics += f"Rate ({result.outcome.value})"
 
             narrative, tone = await self._narrate(session, mechanics)
             embed = build_narrative_embed(narrative, mechanics, tone)
@@ -386,7 +387,9 @@ class CombatCog(commands.Cog):
         if session.narrator is None:
             return mechanics, "dramatic"
         try:
-            result = session.narrator.narrate(mechanics, "")
+            result = await asyncio.to_thread(
+                session.narrator.narrate, mechanics, "", session.language,
+            )
             return result.narrative, result.tone
         except Exception:
             return mechanics, "dramatic"

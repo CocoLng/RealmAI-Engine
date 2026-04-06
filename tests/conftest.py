@@ -1,5 +1,7 @@
 """Shared test fixtures for RealmAI-Engine."""
 
+import logging
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -20,6 +22,23 @@ from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, NPCDisposition
 from world.quest import Quest, QuestObjective, QuestStatus
+
+
+# ---------------------------------------------------------------------------
+# Log isolation — prevent tests from writing to production log files
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _suppress_file_logging():
+    """Remove file handlers so tests don't pollute logs/realm.log."""
+    root = logging.getLogger()
+    file_handlers = [
+        h for h in root.handlers if isinstance(h, logging.FileHandler)
+    ]
+    for h in file_handlers:
+        root.removeHandler(h)
+    yield
 
 
 # ---------------------------------------------------------------------------

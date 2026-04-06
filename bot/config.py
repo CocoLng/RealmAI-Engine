@@ -12,3 +12,4 @@ class GuildConfig(BaseModel):
         min_length=1,
         max_length=100,
     )
+    language: str = Field(default="fr", pattern=r"^[a-z]{2}$")
