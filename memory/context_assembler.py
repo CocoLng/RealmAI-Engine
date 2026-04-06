@@ -5,6 +5,8 @@ Orchestrates Layer 1 (structured state), Layer 2 (sliding window),
 Layer 3 (compressed summaries), and Layer 4 (semantic RAG).
 """
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from engine.character import Character
@@ -16,6 +18,8 @@ from memory.sliding_window import SlidingWindow
 from memory.state import StateBuilder
 from memory.summarizer import Summarizer
 from memory.token_utils import estimate_tokens, truncate_to_tokens
+
+logger = logging.getLogger(__name__)
 
 
 class ContextAssembler:
@@ -44,8 +48,11 @@ class ContextAssembler:
         inventories: dict[str, Inventory] | None = None,
     ) -> str:
         """Build the full context prompt for the Narrator LLM."""
+        logger.info("CONTEXT campaign=%s input=%r", campaign_id, player_input[:80])
+
         # 1. Auto-summarization side effect
         if self._summarizer.should_summarize(campaign_id):
+            logger.info("SUMMARY triggered campaign=%s", campaign_id)
             self._summarizer.summarize(campaign_id)
 
         # 2. Build each layer
@@ -69,6 +76,14 @@ class ContextAssembler:
         relevant_docs = self._semantic.query(campaign_id, player_input)
         layer4_text = self._semantic.render(
             relevant_docs, self._budget.layer4_max,
+        )
+
+        logger.info(
+            "CONTEXT layers L1=%d L2=%d L3=%d L4=%d total=%d tokens",
+            estimate_tokens(layer1_text), estimate_tokens(layer2_text),
+            estimate_tokens(layer3_text), estimate_tokens(layer4_text),
+            estimate_tokens(layer1_text) + estimate_tokens(layer2_text)
+            + estimate_tokens(layer3_text) + estimate_tokens(layer4_text),
         )
 
         # 3. Assemble with priority-based truncation

@@ -38,6 +38,7 @@ class Narrator:
         Returns:
             NarrativeResult with narrative text and tone classification.
         """
+        logger.info("NARRATE input=%r", action_result_text[:100])
         user_content = f"{context_prompt}\n\n## What happened\n{action_result_text}"
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -45,7 +46,10 @@ class Narrator:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
-        return NarrativeResult(
+        result = NarrativeResult(
             narrative=str(data.get("narrative", "")),
             tone=data.get("tone", "dramatic"),  # type: ignore[arg-type]
         )
+        logger.info("NARRATE tone=%s output=%r", result.tone, result.narrative[:200])
+        logger.debug("NARRATE full_output=%s", result.narrative)
+        return result

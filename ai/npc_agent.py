@@ -48,11 +48,17 @@ class NPCAgent:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.7)
-        return NPCResponse(
+        response = NPCResponse(
             dialogue=str(data.get("dialogue", "")),
             disposition_change=int(data.get("disposition_change", 0)),
             revealed_info=list(data.get("revealed_info", [])),
         )
+        logger.info(
+            "NPC name=%s input=%r disposition_change=%+d revealed=%d",
+            npc.name, player_input[:80],
+            response.disposition_change, len(response.revealed_info),
+        )
+        return response
 
     def _build_user_message(self, npc: NPC, player_input: str, context_prompt: str) -> str:
         """Build the user message with NPC sheet and player input."""

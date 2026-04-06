@@ -68,14 +68,17 @@ class TestRealmBotOnReady:
         with patch("bot.bot.get_engine"), patch("bot.bot.init_db"), patch("bot.bot.get_session_factory"):
             bot = RealmBot()
         # guilds is a read-only property; patch it at the class level for this test
-        fake_guilds = [AsyncMock(), AsyncMock()]
+        guild1, guild2 = AsyncMock(), AsyncMock()
+        guild1.name = "TestGuild1"
+        guild2.name = "TestGuild2"
+        fake_guilds = [guild1, guild2]
         with patch.object(type(bot), "guilds", new_callable=lambda: property(lambda self: fake_guilds)), \
              patch.object(type(bot), "user", new_callable=lambda: property(lambda self: "TestBot#1234")), \
              caplog.at_level(logging.INFO, logger="bot.bot"):
             await bot.on_ready()
 
         assert "TestBot#1234" in caplog.text
-        assert "2 guilds" in caplog.text
+        assert "2 guild(s)" in caplog.text
 
 
 class TestRunBot:

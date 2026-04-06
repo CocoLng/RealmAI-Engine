@@ -2,5 +2,6 @@
 
 from bot.bot import RealmBot, run_bot
 from bot.config import GuildConfig
+from bot.game_session import GameSession
 
-__all__ = ["GuildConfig", "RealmBot", "run_bot"]
+__all__ = ["GameSession", "GuildConfig", "RealmBot", "run_bot"]

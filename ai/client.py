@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from typing import Any, cast
 
 import httpx
@@ -50,6 +51,7 @@ class OllamaClient:
             OllamaUnavailableError: If the Ollama server is unreachable.
             json.JSONDecodeError: If the model returns non-JSON content.
         """
+        start = time.monotonic()
         try:
             response = self._client.chat.completions.create(  # type: ignore[call-overload]
                 model=model,
@@ -58,9 +60,12 @@ class OllamaClient:
                 temperature=temperature,
             )
         except (httpx.ConnectError, APIConnectionError, APITimeoutError) as exc:
+            logger.error("OLLAMA unreachable at %s", self._client.base_url)
             raise OllamaUnavailableError(
                 f"Cannot connect to Ollama at {self._client.base_url}"
             ) from exc
 
+        elapsed = time.monotonic() - start
         content = response.choices[0].message.content or ""
+        logger.info("OLLAMA model=%s time=%.1fs", model, elapsed)
         return cast(dict, json.loads(content))

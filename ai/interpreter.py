@@ -52,6 +52,8 @@ class Interpreter:
             {"role": "user", "content": user_content},
         ]
 
+        logger.info("INTERPRET player=%s input=%r", actor_name, player_text[:100])
+
         try:
             data = self._client.chat_json(self.MODEL, messages, temperature=0.3)
         except json.JSONDecodeError:
@@ -59,7 +61,7 @@ class Interpreter:
             return self._fallback(player_text)
 
         try:
-            return InterpretedAction(
+            action = InterpretedAction(
                 action_type=ActionType(data.get("action_type", "Defend")),
                 actor_name=actor_name,
                 target_name=data.get("target_name"),
@@ -69,6 +71,11 @@ class Interpreter:
                 raw_input=player_text,
                 confidence=float(data.get("confidence", 1.0)),
             )
+            logger.info(
+                "INTERPRET result action=%s target=%s confidence=%.2f",
+                action.action_type.value, action.target_name, action.confidence,
+            )
+            return action
         except (ValueError, KeyError) as exc:
             logger.warning("Interpreter: Failed to parse action data: %s", exc)
             return self._fallback(player_text)

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy import BigInteger, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
@@ -119,3 +119,33 @@ class GuildConfigRow(Base):
 
     guild_id: Mapped[int] = mapped_column(primary_key=True)
     category_name: Mapped[str] = mapped_column(String(100), default="RealmAI Sessions")
+
+
+class PlayerCharacterRow(Base):
+    """Player character ownership — one character per player per campaign."""
+
+    __tablename__ = "player_characters"
+
+    discord_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    character_json: Mapped[str] = mapped_column(Text, nullable=False)
+    inventory_json: Mapped[str] = mapped_column(Text, nullable=False)
+    spellcaster_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CampaignChannelRow(Base):
+    """Maps a Discord channel to a campaign."""
+
+    __tablename__ = "campaign_channels"
+
+    channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    campaign_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        unique=True,
+    )
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

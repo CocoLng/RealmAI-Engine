@@ -55,6 +55,11 @@ class StoryDirector:
             priority=data.get("priority", "low"),
         )
 
+        logger.info(
+            "DIRECTOR campaign=%s issues=%d hooks=%d priority=%s",
+            campaign_id, len(note.coherence_issues),
+            len(note.suggested_hooks), note.priority,
+        )
         self._store_in_memory(campaign_id, note)
         return note
 

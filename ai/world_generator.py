@@ -46,13 +46,18 @@ class WorldGenerator:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
-        return Location(
+        location = Location(
             name=str(data["name"]),
             description=str(data["description"]),
             connections=list(data.get("connections", [])),
             npcs_present=list(data.get("npcs_present", [])),
             items_available=list(data.get("items_available", [])),
         )
+        logger.info(
+            "WORLD name=%r type=%s connections=%d",
+            location.name, location_type, len(location.connections),
+        )
+        return location
 
     def _build_user_message(
         self, campaign_context: str, location_type: str, location_name: str | None

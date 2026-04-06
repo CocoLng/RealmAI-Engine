@@ -110,6 +110,10 @@ class Summarizer:
             end_interaction=exchanges[-1].interaction_number,
         )
         self._summary_repo.save(summary)
+        logger.info(
+            "SUMMARY campaign=%s interactions=%d-%d",
+            campaign_id, summary.start_interaction, summary.end_interaction,
+        )
         return summary
 
     def get_recent_summaries(

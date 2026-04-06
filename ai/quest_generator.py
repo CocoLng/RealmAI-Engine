@@ -53,7 +53,7 @@ class QuestGenerator:
             )
             for obj in data.get("objectives", [])
         ]
-        return Quest(
+        quest = Quest(
             title=str(data["title"]),
             description=str(data["description"]),
             status=QuestStatus.AVAILABLE,
@@ -62,6 +62,11 @@ class QuestGenerator:
             reward_gold=int(data.get("reward_gold", 0)),
             giver_npc=data.get("giver_npc") or None,
         )
+        logger.info(
+            "QUEST title=%r location=%s reward_xp=%d giver=%s",
+            quest.title, location_name, quest.reward_xp, quest.giver_npc,
+        )
+        return quest
 
     def _build_user_message(
         self, campaign_context: str, location_name: str, available_npcs: list[str]

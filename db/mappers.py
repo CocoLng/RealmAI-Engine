@@ -6,7 +6,9 @@ Pydantic's model_dump/model_validate for serialization.
 
 from datetime import datetime
 
-from engine.character import AbilityScores, CharacterClass, Race
+from engine.character import AbilityScores, Character, CharacterClass, Race
+from engine.inventory import Inventory
+from engine.spells import SpellcasterState
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, NPCDisposition
@@ -15,7 +17,17 @@ from world.quest import Quest, QuestObjective, QuestStatus
 from memory.models import CompressedSummary, ExchangeRole, NarrativeExchange
 
 from bot.config import GuildConfig
-from db.models import CampaignRow, ExchangeRow, GuildConfigRow, LocationRow, NPCRow, QuestRow, SummaryRow
+from db.models import (
+    CampaignChannelRow,
+    CampaignRow,
+    ExchangeRow,
+    GuildConfigRow,
+    LocationRow,
+    NPCRow,
+    PlayerCharacterRow,
+    QuestRow,
+    SummaryRow,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -236,3 +248,68 @@ def guild_config_from_db(row: GuildConfigRow) -> GuildConfig:
         guild_id=row.guild_id,
         category_name=row.category_name,
     )
+
+
+# ---------------------------------------------------------------------------
+# PlayerCharacter
+# ---------------------------------------------------------------------------
+
+
+def player_character_to_db(
+    user_id: int,
+    campaign_id: str,
+    character: Character,
+    inventory: Inventory,
+    spellcaster: SpellcasterState | None,
+) -> PlayerCharacterRow:
+    """Convert player character domain models to a DB row."""
+    return PlayerCharacterRow(
+        discord_user_id=user_id,
+        campaign_id=campaign_id,
+        character_json=character.model_dump_json(),
+        inventory_json=inventory.model_dump_json(),
+        spellcaster_json=spellcaster.model_dump_json() if spellcaster else None,
+    )
+
+
+def player_character_from_db(
+    row: PlayerCharacterRow,
+) -> tuple[int, Character, Inventory, SpellcasterState | None]:
+    """Convert a PlayerCharacterRow to domain models.
+
+    Returns:
+        Tuple of (discord_user_id, Character, Inventory, SpellcasterState | None).
+    """
+    character = Character.model_validate_json(row.character_json)
+    inventory = Inventory.model_validate_json(row.inventory_json)
+    spellcaster = (
+        SpellcasterState.model_validate_json(row.spellcaster_json)
+        if row.spellcaster_json
+        else None
+    )
+    return row.discord_user_id, character, inventory, spellcaster
+
+
+# ---------------------------------------------------------------------------
+# CampaignChannel
+# ---------------------------------------------------------------------------
+
+
+def campaign_channel_to_db(
+    channel_id: int, campaign_id: str, guild_id: int,
+) -> CampaignChannelRow:
+    """Convert campaign-channel mapping to a DB row."""
+    return CampaignChannelRow(
+        channel_id=channel_id,
+        campaign_id=campaign_id,
+        guild_id=guild_id,
+    )
+
+
+def campaign_channel_from_db(row: CampaignChannelRow) -> tuple[int, str, int]:
+    """Convert a CampaignChannelRow to a tuple.
+
+    Returns:
+        Tuple of (channel_id, campaign_id, guild_id).
+    """
+    return row.channel_id, row.campaign_id, row.guild_id
