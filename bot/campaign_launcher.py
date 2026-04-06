@@ -19,6 +19,7 @@ import discord
 
 from bot.embeds.narrative_embed import build_narrative_embed
 from bot.game_session import GameSession, create_ai_services
+from bot.i18n import CLASS_LABELS, RACE_LABELS, get_kit_label, get_label
 from bot.views.character_create_view import CharacterCreateView
 from bot.views.start_onboarding_view import StartOnboardingView
 from bot.views.starter_gear_view import StarterGearView
@@ -152,7 +153,7 @@ class CampaignLauncher:
             )
             return
 
-        view = CharacterCreateView(on_complete=self._on_character_created)
+        view = CharacterCreateView(language=self.language, on_complete=self._on_character_created)
         await interaction.response.send_message(
             "Choisis ta race :", view=view, ephemeral=True,
         )
@@ -210,10 +211,12 @@ class CampaignLauncher:
         # Send starter gear selection
         kits = get_starter_kits(view.char_class)
         gear_view = StarterGearView(
-            kits=kits, on_selected=self._on_gear_selected,
+            kits=kits, on_selected=self._on_gear_selected, language=self.language,
         )
         items_desc = "\n".join(
-            f"**{kit.name}** — {kit.description}" for kit in kits
+            f"**{get_kit_label(self.language, kit.name, 'name')}** — "
+            f"{get_kit_label(self.language, kit.name, 'description') or kit.description}"
+            for kit in kits
         )
         await interaction.response.send_message(
             f"Personnage **{character.name}** cree !\n\n"
@@ -261,16 +264,18 @@ class CampaignLauncher:
         finally:
             db_session.close()
 
+        kit_display = get_kit_label(self.language, kit.name, "name")
+        race_display = get_label(RACE_LABELS, self.language, character.race.value)
+        cls_display = get_label(CLASS_LABELS, self.language, character.char_class.value)
+
         # Confirm ephemerally
         await interaction.response.send_message(
-            f"Kit **{kit.name}** equipe ! Tu es pret(e).", ephemeral=True,
+            f"Kit **{kit_display}** equipe ! Tu es pret(e).", ephemeral=True,
         )
 
         # Announce publicly
-        race = character.race.value
-        cls = character.char_class.value
         await self.channel.send(
-            f"**{character.name}** ({race} {cls}) est pret(e) ! [{kit.name}]",
+            f"**{character.name}** ({race_display} {cls_display}) est pret(e) ! [{kit_display}]",
         )
 
         await self._check_ready()
