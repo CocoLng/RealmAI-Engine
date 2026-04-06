@@ -8,6 +8,7 @@ from typing import Any
 import discord
 from discord import ui
 
+from bot.i18n import get_kit_label
 from bot.views.base import LoggedView
 from engine.starter_gear import StarterKit
 
@@ -20,9 +21,9 @@ OnGearSelected = Callable[
 class _KitButton(ui.Button["StarterGearView"]):
     """A single kit selection button."""
 
-    def __init__(self, kit: StarterKit, index: int) -> None:
+    def __init__(self, kit: StarterKit, index: int, display_name: str) -> None:
         super().__init__(
-            label=kit.name,
+            label=display_name,
             style=discord.ButtonStyle.secondary,
             custom_id=f"kit_{index}",
         )
@@ -39,6 +40,15 @@ class StarterGearView(LoggedView):
     """Presents 2-3 starter kits as buttons for a character class.
 
     The on_selected callback is invoked with the chosen kit.
+
+    Parameters
+    ----------
+    kits:
+        List of StarterKit objects to present as buttons.
+    on_selected:
+        Async callback invoked with ``(interaction, kit)`` when a button is clicked.
+    language:
+        BCP-47 language code for button labels. Defaults to ``"en"``.
     """
 
     timeout = 300.0  # 5 minutes
@@ -47,9 +57,11 @@ class StarterGearView(LoggedView):
         self,
         kits: list[StarterKit],
         on_selected: OnGearSelected,
+        language: str = "en",
     ) -> None:
         super().__init__(timeout=self.timeout)
         self._kits = kits
         self._on_selected = on_selected
         for i, kit in enumerate(kits):
-            self.add_item(_KitButton(kit, i))
+            display_name = get_kit_label(language, kit.name, "name")
+            self.add_item(_KitButton(kit, i, display_name))

@@ -10,9 +10,11 @@ from discord import SelectOption
 from bot.views.character_create_view import CharacterCreateView, CharacterNameModal
 from bot.views.combat_view import CombatView
 from bot.views.spell_select import SpellSelectView
+from bot.views.starter_gear_view import StarterGearView
 from bot.views.target_select import TargetSelectView
 from engine.character import Ability, Alignment, CharacterClass, Race
 from engine.spells import SpellcasterState
+from engine.starter_gear import STARTER_KITS
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +248,33 @@ class TestCharacterCreateViewFrench:
         options: list[SelectOption] = view.select_alignment.options  # type: ignore[assignment]
         values = {opt.value for opt in options}
         assert values == {a.value for a in Alignment}
+
+
+# ---------------------------------------------------------------------------
+# StarterGearView
+# ---------------------------------------------------------------------------
+
+
+class TestStarterGearViewFrench:
+    """StarterGearView with language='fr' shows translated button labels."""
+
+    def test_button_label_is_translated(self) -> None:
+        from unittest.mock import AsyncMock
+        kits = STARTER_KITS[CharacterClass.FIGHTER]
+        view = StarterGearView(kits=kits, on_selected=AsyncMock(), language="fr")
+        labels = [child.label for child in view.children if isinstance(child, discord.ui.Button)]
+        assert "Épée & Bouclier" in labels
+
+    def test_kit_object_preserved(self) -> None:
+        from unittest.mock import AsyncMock
+        kits = STARTER_KITS[CharacterClass.FIGHTER]
+        view = StarterGearView(kits=kits, on_selected=AsyncMock(), language="fr")
+        button = view.children[0]
+        assert button.kit.name == "Sword & Shield"  # type: ignore[attr-defined]
+
+    def test_default_language_uses_original_name(self) -> None:
+        from unittest.mock import AsyncMock
+        kits = STARTER_KITS[CharacterClass.FIGHTER]
+        view = StarterGearView(kits=kits, on_selected=AsyncMock())
+        labels = [child.label for child in view.children if isinstance(child, discord.ui.Button)]
+        assert "Sword & Shield" in labels
