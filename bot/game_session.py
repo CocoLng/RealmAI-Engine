@@ -11,6 +11,8 @@ from engine.inventory import Inventory
 from engine.spells import SpellcasterState
 from world.campaign import Campaign
 from world.location import Location
+from world.npc import NPC
+from world.quest import Quest
 
 from ai.client import OllamaClient, OllamaUnavailableError
 from ai.interpreter import Interpreter
@@ -34,6 +36,8 @@ class GameSession:
     spellcasters: dict[int, SpellcasterState | None] = field(default_factory=dict)
     combat_state: CombatState | None = None
     current_location: Location | None = None
+    npcs: dict[str, NPC] = field(default_factory=dict)
+    quests: list[Quest] = field(default_factory=list)
 
     # AI services — None if Ollama is unavailable
     ollama_client: OllamaClient | None = None

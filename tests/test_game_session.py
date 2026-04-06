@@ -7,6 +7,8 @@ from engine.character import AbilityScores, CharacterClass, Race, create_charact
 from engine.inventory import create_inventory
 from engine.spells import create_spellcaster_state
 from world.campaign import Campaign
+from world.npc import NPC, NPCDisposition
+from world.quest import Quest, QuestStatus
 
 
 def _make_campaign() -> Campaign:
@@ -65,3 +67,37 @@ class TestCreateAIServices:
         assert session.narrator is None
         assert session.interpreter is None
         assert session.npc_agent is None
+
+
+class TestGameSessionNpcsQuests:
+    """Tests for npcs and quests fields on GameSession."""
+
+    def test_session_has_npcs_field(self) -> None:
+        session = GameSession(campaign=Campaign(id="t1", name="test"))
+        assert session.npcs == {}
+
+    def test_session_has_quests_field(self) -> None:
+        session = GameSession(campaign=Campaign(id="t2", name="test"))
+        assert session.quests == []
+
+    def test_session_npcs_can_store_npc(self) -> None:
+        session = GameSession(campaign=Campaign(id="t3", name="test"))
+        npc = NPC(
+            name="Barkeep",
+            race=Race.HUMAN,
+            level=1,
+            ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+            hp=8,
+            max_hp=8,
+            ac=10,
+            disposition=NPCDisposition.FRIENDLY,
+        )
+        session.npcs["Barkeep"] = npc
+        assert session.npcs["Barkeep"].name == "Barkeep"
+
+    def test_session_quests_can_store_quest(self) -> None:
+        session = GameSession(campaign=Campaign(id="t4", name="test"))
+        quest = Quest(title="Find the key", description="A key is lost", status=QuestStatus.ACTIVE)
+        session.quests.append(quest)
+        assert len(session.quests) == 1
+        assert session.quests[0].title == "Find the key"
