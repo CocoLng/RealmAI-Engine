@@ -21,7 +21,9 @@ from db.repositories import (
     CampaignRepository,
     GuildConfigRepository,
     LocationRepository,
+    NPCRepository,
     PlayerCharacterRepository,
+    QuestRepository,
 )
 from world.campaign import Campaign
 
@@ -219,11 +221,31 @@ class SessionCog(commands.Cog):
             if campaign.current_location:
                 loc_repo = LocationRepository(db_session)
                 location = loc_repo.get_by_name(campaign.current_location, campaign_id)
+
+            # Load NPCs
+            npc_repo = NPCRepository(db_session)
+            npcs = npc_repo.list_by_campaign(campaign_id)
+
+            # Load quests
+            quest_repo = QuestRepository(db_session)
+            quests = quest_repo.list_by_campaign(campaign_id)
         finally:
             db_session.close()
 
+        # Restore combat state from JSON
+        combat_state = None
+        if campaign.combat_state_json:
+            from engine.combat import CombatState
+            combat_state = CombatState.model_validate_json(campaign.combat_state_json)
+
         # Rebuild in-memory session
-        session = GameSession(campaign=campaign, current_location=location)
+        session = GameSession(
+            campaign=campaign,
+            current_location=location,
+            combat_state=combat_state,
+            npcs={npc.name: npc for npc in npcs},
+            quests=quests,
+        )
         for user_id, char, inv, spell in pc_rows:
             session.characters[user_id] = char
             session.inventories[user_id] = inv
@@ -233,14 +255,18 @@ class SessionCog(commands.Cog):
         self.bot.sessions[channel_id] = session
 
         player_count = len(session.characters)
+        combat_msg = " (combat en cours !)" if combat_state else ""
+        npc_count = len(session.npcs)
+        quest_count = len(session.quests)
         logger.info(
-            "SESSION resume campaign=%s channel=%s characters=%d",
-            campaign.id, channel_id, player_count,
+            "SESSION resume campaign=%s channel=%s characters=%d npcs=%d quests=%d combat=%s",
+            campaign.id, channel_id, player_count, npc_count, quest_count,
+            combat_state is not None,
         )
 
         await interaction.followup.send(
             f"Session reprise ! Campagne **{campaign.name}** "
-            f"-- {player_count} personnage(s) charge(s).",
+            f"-- {player_count} personnage(s), {npc_count} PNJ(s), {quest_count} quete(s){combat_msg}.",
         )
 
     # ------------------------------------------------------------------
@@ -337,12 +363,19 @@ class SessionCog(commands.Cog):
     # ------------------------------------------------------------------
 
     def _persist_session(self, session: GameSession) -> None:
-        """Save campaign and all player characters to the database."""
+        """Save campaign, characters, combat state, NPCs, and quests to DB."""
         db_session = self.bot.db_factory()
         try:
+            # Campaign + combat state
+            session.campaign.combat_state_json = (
+                session.combat_state.model_dump_json()
+                if session.combat_state is not None
+                else None
+            )
             camp_repo = CampaignRepository(db_session)
             camp_repo.update(session.campaign)
 
+            # Player characters
             pc_repo = PlayerCharacterRepository(db_session)
             for user_id, char in session.characters.items():
                 inv = session.inventories.get(user_id)
@@ -352,6 +385,22 @@ class SessionCog(commands.Cog):
                         pc_repo.update(user_id, session.campaign.id, char, inv, spell)
                     except ValueError:
                         pc_repo.save(user_id, session.campaign.id, char, inv, spell)
+
+            # NPCs
+            npc_repo = NPCRepository(db_session)
+            for npc in session.npcs.values():
+                try:
+                    npc_repo.update(npc, session.campaign.id)
+                except ValueError:
+                    npc_repo.save(npc, session.campaign.id)
+
+            # Quests
+            quest_repo = QuestRepository(db_session)
+            for quest in session.quests:
+                try:
+                    quest_repo.update(quest, session.campaign.id)
+                except ValueError:
+                    quest_repo.save(quest, session.campaign.id)
 
             db_session.commit()
         finally:
