@@ -42,6 +42,7 @@ class CampaignRepository:
         row.player_names = campaign.player_names  # type: ignore[assignment]
         row.current_location = campaign.current_location
         row.interaction_count = campaign.interaction_count
+        row.combat_state_json = campaign.combat_state_json
 
     def delete(self, campaign_id: str) -> None:
         """Delete a campaign by ID."""

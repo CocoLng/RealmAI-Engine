@@ -5,22 +5,29 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from bot.cogs.session import SessionCog
 from bot.config import GuildConfig
 from bot.game_session import GameSession
+from db.database import Base
 from db.repositories import (
     CampaignChannelRepository,
     CampaignRepository,
     GuildConfigRepository,
     LocationRepository,
+    NPCRepository,
     PlayerCharacterRepository,
+    QuestRepository,
 )
 from engine.character import AbilityScores, CharacterClass, Race, create_character
+from engine.combat import CombatSide, CombatState, Combatant
 from engine.inventory import create_inventory
 from world.campaign import Campaign
 from world.location import Location
+from world.npc import NPC, NPCDisposition
+from world.quest import Quest, QuestStatus
 
 
 # ---------------------------------------------------------------------------
@@ -485,3 +492,119 @@ class TestSettings:
         await cog.settings.callback(cog, interaction, "Category")  # type: ignore[call-arg, arg-type]
         interaction.response.send_message.assert_called_once()
         assert interaction.response.send_message.call_args[1].get("ephemeral") is True
+
+
+# ---------------------------------------------------------------------------
+# Round-trip integration tests (real in-memory SQLite, no mocks)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def db_factory():
+    """In-memory SQLite session factory with all tables created."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    return factory
+
+
+class TestPersistSessionRoundTrip:
+    """Full save -> load round-trip through real DB."""
+
+    def test_combat_state_roundtrip(self, db_factory):
+        """Save a session with combat, reload campaign, verify combat JSON."""
+        campaign = Campaign(id="rt-1", name="Round Trip")
+
+        db_session = db_factory()
+        CampaignRepository(db_session).save(campaign)
+        db_session.commit()
+        db_session.close()
+
+        char = create_character(
+            name="Hero", race=Race.HUMAN, char_class=CharacterClass.FIGHTER,
+            ability_scores=AbilityScores(STR=16, DEX=12, CON=14, INT=10, WIS=13, CHA=8),
+        )
+        combatant = Combatant(
+            name="Hero", side=CombatSide.PLAYER,
+            character=char, inventory=create_inventory(), initiative=15,
+        )
+        combat = CombatState(combatants=[combatant], round_number=3, current_turn_index=0)
+
+        campaign.combat_state_json = combat.model_dump_json()
+        db_session = db_factory()
+        CampaignRepository(db_session).update(campaign)
+        db_session.commit()
+        db_session.close()
+
+        db_session = db_factory()
+        restored = CampaignRepository(db_session).get_by_id("rt-1")
+        db_session.close()
+
+        assert restored is not None
+        assert restored.combat_state_json is not None
+        restored_combat = CombatState.model_validate_json(restored.combat_state_json)
+        assert restored_combat.round_number == 3
+        assert len(restored_combat.combatants) == 1
+        assert restored_combat.combatants[0].name == "Hero"
+
+    def test_npcs_roundtrip(self, db_factory):
+        """Save NPCs for a campaign, reload, verify."""
+        campaign = Campaign(id="rt-2", name="NPC Test")
+        npc = NPC(
+            name="Barkeep", race=Race.HUMAN, level=1,
+            ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+            hp=8, max_hp=8, ac=10, disposition=NPCDisposition.FRIENDLY,
+        )
+
+        db_session = db_factory()
+        CampaignRepository(db_session).save(campaign)
+        NPCRepository(db_session).save(npc, campaign.id)
+        db_session.commit()
+        db_session.close()
+
+        db_session = db_factory()
+        npcs = NPCRepository(db_session).list_by_campaign("rt-2")
+        db_session.close()
+
+        assert len(npcs) == 1
+        assert npcs[0].name == "Barkeep"
+        assert npcs[0].disposition == NPCDisposition.FRIENDLY
+
+    def test_quests_roundtrip(self, db_factory):
+        """Save quests for a campaign, reload, verify."""
+        campaign = Campaign(id="rt-3", name="Quest Test")
+        quest = Quest(
+            title="Find the key",
+            description="A key is lost",
+            status=QuestStatus.ACTIVE,
+        )
+
+        db_session = db_factory()
+        CampaignRepository(db_session).save(campaign)
+        QuestRepository(db_session).save(quest, campaign.id)
+        db_session.commit()
+        db_session.close()
+
+        db_session = db_factory()
+        quests = QuestRepository(db_session).list_by_campaign("rt-3")
+        db_session.close()
+
+        assert len(quests) == 1
+        assert quests[0].title == "Find the key"
+        assert quests[0].status == QuestStatus.ACTIVE
+
+    def test_no_combat_state_returns_none(self, db_factory):
+        """Campaign without combat -> combat_state_json is None."""
+        campaign = Campaign(id="rt-4", name="Peaceful")
+
+        db_session = db_factory()
+        CampaignRepository(db_session).save(campaign)
+        db_session.commit()
+        db_session.close()
+
+        db_session = db_factory()
+        restored = CampaignRepository(db_session).get_by_id("rt-4")
+        db_session.close()
+
+        assert restored is not None
+        assert restored.combat_state_json is None
