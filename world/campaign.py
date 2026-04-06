@@ -18,3 +18,4 @@ class Campaign(BaseModel):
     player_names: list[str] = []
     current_location: str | None = None
     interaction_count: int = 0
+    combat_state_json: str | None = None

@@ -44,6 +44,7 @@ def campaign_to_db(campaign: Campaign) -> CampaignRow:
         player_names=campaign.player_names,
         current_location=campaign.current_location,
         interaction_count=campaign.interaction_count,
+        combat_state_json=campaign.combat_state_json,
     )
 
 
@@ -56,6 +57,7 @@ def campaign_from_db(row: CampaignRow) -> Campaign:
         player_names=list(row.player_names) if row.player_names else [],
         current_location=row.current_location,
         interaction_count=row.interaction_count,
+        combat_state_json=row.combat_state_json,
     )
 
 

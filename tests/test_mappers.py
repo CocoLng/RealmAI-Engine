@@ -36,6 +36,24 @@ class TestCampaignMapper:
         assert restored.current_location == sample_campaign.current_location
         assert restored.interaction_count == sample_campaign.interaction_count
 
+    def test_roundtrip_with_combat_state(self) -> None:
+        campaign = Campaign(
+            id="c-combat",
+            name="Battle Test",
+            combat_state_json='{"combatants":[],"round_number":3,"current_turn_index":0,"is_active":true}',
+        )
+        row = campaign_to_db(campaign)
+        assert row.combat_state_json == campaign.combat_state_json
+        restored = campaign_from_db(row)
+        assert restored.combat_state_json == campaign.combat_state_json
+
+    def test_roundtrip_without_combat_state(self) -> None:
+        campaign = Campaign(id="c-no-combat", name="Peaceful")
+        row = campaign_to_db(campaign)
+        assert row.combat_state_json is None
+        restored = campaign_from_db(row)
+        assert restored.combat_state_json is None
+
     def test_with_players(self) -> None:
         campaign = Campaign(
             id="c1",
