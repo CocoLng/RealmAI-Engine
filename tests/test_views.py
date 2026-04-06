@@ -160,26 +160,23 @@ class TestCharacterCreateView:
         view = CharacterCreateView()
         assert view.timeout == 120.0
 
-    def test_race_options_match_enum(self) -> None:
+    def test_race_option_values_match_enum(self) -> None:
         view = CharacterCreateView()
         options: list[SelectOption] = view.select_race.options  # type: ignore[assignment]
-        labels = {opt.label for opt in options}
-        expected = {r.value for r in Race}
-        assert labels == expected
+        values = {opt.value for opt in options}
+        assert values == {r.value for r in Race}
 
-    def test_class_options_match_enum(self) -> None:
+    def test_class_option_values_match_enum(self) -> None:
         view = CharacterCreateView()
         options: list[SelectOption] = view.select_class.options  # type: ignore[assignment]
-        labels = {opt.label for opt in options}
-        expected = {c.value for c in CharacterClass}
-        assert labels == expected
+        values = {opt.value for opt in options}
+        assert values == {c.value for c in CharacterClass}
 
-    def test_alignment_options_match_enum(self) -> None:
+    def test_alignment_option_values_match_enum(self) -> None:
         view = CharacterCreateView()
         options: list[SelectOption] = view.select_alignment.options  # type: ignore[assignment]
-        labels = {opt.label for opt in options}
-        expected = {a.value for a in Alignment}
-        assert labels == expected
+        values = {opt.value for opt in options}
+        assert values == {a.value for a in Alignment}
 
 
 # ---------------------------------------------------------------------------
@@ -199,3 +196,53 @@ class TestCharacterNameModal:
         view = CharacterCreateView()
         modal = CharacterNameModal(parent_view=view)
         assert modal.title == "Nom du personnage"
+
+
+# ---------------------------------------------------------------------------
+# CharacterCreateView — French labels
+# ---------------------------------------------------------------------------
+
+
+class TestCharacterCreateViewFrench:
+    """CharacterCreateView with language='fr' shows translated labels."""
+
+    def test_race_labels_are_french(self) -> None:
+        view = CharacterCreateView(language="fr")
+        options: list[SelectOption] = view.select_race.options  # type: ignore[assignment]
+        labels = {opt.label for opt in options}
+        assert "Humain" in labels
+        assert "Elfe" in labels
+        assert "Nain" in labels
+
+    def test_race_values_remain_english(self) -> None:
+        view = CharacterCreateView(language="fr")
+        options: list[SelectOption] = view.select_race.options  # type: ignore[assignment]
+        values = {opt.value for opt in options}
+        assert values == {r.value for r in Race}
+
+    def test_class_labels_are_french(self) -> None:
+        view = CharacterCreateView(language="fr")
+        options: list[SelectOption] = view.select_class.options  # type: ignore[assignment]
+        labels = {opt.label for opt in options}
+        assert "Guerrier" in labels
+        assert "Mage" in labels
+        assert "Roublard" in labels
+
+    def test_class_values_remain_english(self) -> None:
+        view = CharacterCreateView(language="fr")
+        options: list[SelectOption] = view.select_class.options  # type: ignore[assignment]
+        values = {opt.value for opt in options}
+        assert values == {c.value for c in CharacterClass}
+
+    def test_alignment_labels_are_french(self) -> None:
+        view = CharacterCreateView(language="fr")
+        options: list[SelectOption] = view.select_alignment.options  # type: ignore[assignment]
+        labels = {opt.label for opt in options}
+        assert "Loyal Bon" in labels
+        assert "Chaotique Mauvais" in labels
+
+    def test_alignment_values_remain_english(self) -> None:
+        view = CharacterCreateView(language="fr")
+        options: list[SelectOption] = view.select_alignment.options  # type: ignore[assignment]
+        values = {opt.value for opt in options}
+        assert values == {a.value for a in Alignment}
