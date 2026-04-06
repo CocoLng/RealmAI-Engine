@@ -8,6 +8,7 @@ from typing import Any
 import discord
 from discord import ui
 
+from bot.views.base import LoggedView
 from engine.character import Alignment, CharacterClass, Race
 
 # Callback type: async fn(interaction, view) -> None
@@ -17,7 +18,7 @@ OnCompleteCallback = Callable[
 ]
 
 
-class CharacterCreateView(ui.View):
+class CharacterCreateView(LoggedView):
     """Three select menus (race, class, alignment) that unlock progressively.
 
     Once all three are chosen the :class:`CharacterNameModal` is presented

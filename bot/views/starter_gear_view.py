@@ -8,6 +8,7 @@ from typing import Any
 import discord
 from discord import ui
 
+from bot.views.base import LoggedView
 from engine.starter_gear import StarterKit
 
 OnGearSelected = Callable[
@@ -34,7 +35,7 @@ class _KitButton(ui.Button["StarterGearView"]):
         self.view.stop()
 
 
-class StarterGearView(ui.View):
+class StarterGearView(LoggedView):
     """Presents 2-3 starter kits as buttons for a character class.
 
     The on_selected callback is invoked with the chosen kit.

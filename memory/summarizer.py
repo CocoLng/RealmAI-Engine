@@ -1,17 +1,15 @@
 """Layer 3 — Compressed summaries via Ollama LLM.
 
-Auto-generates summaries every ~20 interactions using the
-OpenAI-compatible API at localhost:11434/v1 (qwen3.5:9b).
-Uses JSON mode (response_format), NOT tool calling.
+Auto-generates summaries every ~20 interactions using
+the native Ollama API via OllamaClient (qwen3.5:9b).
 """
 
-import json
 import logging
 
-from openai import OpenAI
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from ai.client import OllamaClient
 from db.repositories.exchange_repo import ExchangeRepository
 from db.repositories.summary_repo import SummaryRepository
 from memory.models import CompressedSummary, NarrativeExchange
@@ -41,17 +39,16 @@ class Summarizer:
     """Generates compressed summaries using Ollama (Layer 3)."""
 
     SUMMARY_INTERVAL: int = 20
+    MODEL: str = "qwen3.5:9b"
 
     def __init__(
         self,
         session: Session,
-        ollama_base_url: str = "http://localhost:11434/v1",
-        model: str = "qwen3.5:9b",
+        client: OllamaClient,
     ) -> None:
         self._summary_repo = SummaryRepository(session)
         self._exchange_repo = ExchangeRepository(session)
-        self._client = OpenAI(base_url=ollama_base_url, api_key="ollama")
-        self._model = model
+        self._client = client
 
     def should_summarize(self, campaign_id: str) -> bool:
         """Check if enough unsummarized exchanges have accumulated."""
@@ -73,34 +70,21 @@ class Summarizer:
             return None
 
         exchanges_text = self._format_exchanges(exchanges)
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Summarize these exchanges:\n\n{exchanges_text}"},
+        ]
 
         try:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Summarize these exchanges:\n\n{exchanges_text}"},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.3,
-            )
+            data = self._client.chat_json(self.MODEL, messages, temperature=0.3)
         except Exception:
             logger.warning("Ollama call failed for summarization", exc_info=True)
             return None
 
-        raw_content = response.choices[0].message.content
-        if not raw_content:
-            return None
-
         try:
-            parsed = json.loads(raw_content)
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON from summarizer: %s", raw_content[:200])
-            return None
-        try:
-            summary_response = _SummaryResponse.model_validate(parsed)
+            summary_response = _SummaryResponse.model_validate(data)
         except Exception:
-            logger.warning("Unexpected summarizer response shape: %s", parsed)
+            logger.warning("Unexpected summarizer response shape: %s", data)
             return None
 
         summary = CompressedSummary(

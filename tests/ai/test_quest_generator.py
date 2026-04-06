@@ -5,20 +5,16 @@ from pytest_httpx import HTTPXMock
 
 from ai.client import OllamaClient
 from ai.quest_generator import QuestGenerator
-from tests.ai.conftest import make_ollama_response
+from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.quest import Quest, QuestStatus
 
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 
 
 @pytest.fixture
-def client() -> OllamaClient:
-    return OllamaClient()
+def generator(ollama_client: OllamaClient) -> QuestGenerator:
+    return QuestGenerator(ollama_client)
 
 
-@pytest.fixture
-def generator(client: OllamaClient) -> QuestGenerator:
-    return QuestGenerator(client)
 
 
 def test_generate_returns_quest(httpx_mock: HTTPXMock, generator: QuestGenerator) -> None:
@@ -34,7 +30,7 @@ def test_generate_returns_quest(httpx_mock: HTTPXMock, generator: QuestGenerator
         "reward_gold": 50,
         "giver_npc": "Captain Aldric",
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
         campaign_context="A small trading town. Caravans often pass through.",
@@ -64,7 +60,7 @@ def test_generate_status_always_available(
         "reward_gold": 500,
         "giver_npc": None,
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
         campaign_context="Epic campaign.",
@@ -86,7 +82,7 @@ def test_generate_with_no_npcs(httpx_mock: HTTPXMock, generator: QuestGenerator)
         "reward_gold": 0,
         "giver_npc": None,
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
         campaign_context="Wilderness.",

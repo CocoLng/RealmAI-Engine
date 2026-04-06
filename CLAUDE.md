@@ -1,6 +1,6 @@
 # RealmAI-Engine
 
-An AI-powered RPG Game Master Discord bot. A deterministic Python engine handles all game mechanics. Local LLMs (Ollama) handle narration only. The engine is exposed as an MCP server.
+An AI-powered RPG Game Master Discord bot. A deterministic Python engine handles all game mechanics. Local LLMs (Ollama) handle narration only. Discord is the sole user interface.
 
 **The LLM narrates. The code arbitrates. No exceptions.**
 
@@ -106,7 +106,6 @@ Background: STORY DIRECTOR every ~20 interactions.
 - **SQLAlchemy + SQLite** — persistence
 - **ChromaDB** — RAG for lore and NPC memory
 - **Ollama** local (Mac M3 Pro 18GB) — `http://localhost:11434/v1`
-- **mcp Python SDK** — MCP server
 - **pytest / ruff / mypy** — quality
 - **uv** — project & dependency management (replaces pip/venv/pyenv)
 
@@ -193,7 +192,6 @@ realmAI-engine/
 │   │   └── narrative_embed.py
 │   └── utils/
 │       └── channel_manager.py  # Channel creation, permissions, archival
-├── mcp_server/       # MCP server
 ├── db/               # SQLAlchemy models + database
 ├── tests/            # pytest (mirrors engine/ structure)
 ├── tasks/            # todo.md + lessons.md
@@ -222,9 +220,9 @@ Interpreter, Narrator, 4-layer memory, quest/NPC generation, Story Director. Oll
 
 Cogs-by-domain architecture. Dedicated channel per campaign (created at `/start_campaign`, archived at `/end_campaign`). Slash commands for character/inventory/rolls with ephemeral responses (optional `public:` flag). Combat via buttons + select menus. No human GM — bot is the sole Game Master. See design spec for full details.
 
-### Phase 4 — MCP server + polish
+### Phase 4 — Polish + ship
 
-MCP server, README with GIFs, CI/CD, CONTRIBUTING.md, blog post.
+README with GIFs + architecture diagram, GitHub Actions CI/CD, real play sessions (3+ with friends), blog post / LinkedIn.
 
 -----
 
@@ -242,3 +240,4 @@ MCP server, README with GIFs, CI/CD, CONTRIBUTING.md, blog post.
 - Use `uv run` to execute anything (tests, scripts, linting) — never activate venv manually
 - Add deps with `uv add`, dev deps with `uv add --dev`
 - Commits: conventional commits format (feat:, fix:, test:, docs:)
+- **Undercover mode** — Never add `Co-Authored-By`, AI attribution, or any Claude/AI mention in commit messages

@@ -305,18 +305,60 @@ class TestBridge(commands.Cog):
     async def _handle_start_campaign(
         self, inter: ChannelTestInteraction, args: dict[str, str],
     ) -> None:
-        """Handle start_campaign via SessionCog — simplified for testing."""
-        cog = self.bot.get_cog("SessionCog")
-        if cog is None:
-            return
+        """Handle start_campaign — bypasses channel creation.
+
+        Unlike the real /start_campaign which creates a dedicated channel,
+        the TestBridge registers the session on the current test channel.
+        """
+        import uuid
+        from datetime import datetime, timezone
+
+        from bot.game_session import GameSession, create_ai_services
+        from db.repositories import CampaignChannelRepository, CampaignRepository
+        from world.campaign import Campaign
 
         theme = args.get("theme", "Test Campaign")
         players = int(args.get("players", "1"))
-        # Build player mention string from virtual players
-        mentions = " ".join(
-            f"<@{self._get_virtual_player(i).id}>" for i in range(1, players + 1)
+
+        # Build campaign
+        player_ids = [str(self._get_virtual_player(i).id) for i in range(1, players + 1)]
+        campaign = Campaign(
+            id=str(uuid.uuid4()),
+            name=theme,
+            created_at=datetime.now(timezone.utc),
+            player_names=player_ids,
         )
-        await cog.start_campaign.callback(cog, inter, theme, mentions)  # type: ignore[union-attr, arg-type]
+
+        # Persist campaign + channel mapping
+        db_session = self.bot.db_factory()
+        try:
+            CampaignRepository(db_session).save(campaign)
+            db_session.flush()
+            CampaignChannelRepository(db_session).save(
+                inter.channel_id, campaign.id, inter.guild_id,
+            )
+            db_session.commit()
+        finally:
+            db_session.close()
+
+        # Create in-memory session on the TEST channel
+        session = GameSession(campaign=campaign)
+        create_ai_services(session)
+        self.bot.sessions[inter.channel_id] = session
+
+        logger.info(
+            "TESTBRIDGE start_campaign=%s theme=%r players=%d channel=%s",
+            campaign.id, theme, players, inter.channel_id,
+        )
+
+        from bot.embeds.narrative_embed import build_narrative_embed
+
+        desc = "Bienvenue, aventuriers !"
+        if session.current_location:
+            desc = session.current_location.description or desc
+        embed = build_narrative_embed(desc, f"Campagne: {theme}", "dramatic")
+        await inter.channel.send(embed=embed)
+        await inter.channel.send(f"Campagne **{theme}** lancee dans ce canal (test mode).")
 
     async def _handle_create_character(
         self, inter: ChannelTestInteraction, args: dict[str, str],

@@ -7,19 +7,12 @@ from ai.client import OllamaClient
 from ai.interpreter import Interpreter
 from ai.models import InterpretedAction
 from engine.validators import ActionType
-from tests.ai.conftest import make_ollama_response
-
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
+from tests.ai.conftest import CHAT_URL, make_ollama_response
 
 
 @pytest.fixture
-def client() -> OllamaClient:
-    return OllamaClient()
-
-
-@pytest.fixture
-def interpreter(client: OllamaClient) -> Interpreter:
-    return Interpreter(client)
+def interpreter(ollama_client: OllamaClient) -> Interpreter:
+    return Interpreter(ollama_client)
 
 
 def test_interpret_attack_action(httpx_mock: HTTPXMock, interpreter: Interpreter) -> None:
@@ -33,7 +26,7 @@ def test_interpret_attack_action(httpx_mock: HTTPXMock, interpreter: Interpreter
         "item_name": None,
         "confidence": 0.95,
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = interpreter.interpret(
         player_text="I attack the goblin with my axe",
@@ -61,7 +54,7 @@ def test_interpret_cast_spell(httpx_mock: HTTPXMock, interpreter: Interpreter) -
         "item_name": None,
         "confidence": 0.9,
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = interpreter.interpret(
         player_text="cast fireball on the skeleton",
@@ -78,7 +71,7 @@ def test_interpret_invalid_json_returns_low_confidence(
     httpx_mock: HTTPXMock, interpreter: Interpreter
 ) -> None:
     """If LLM returns invalid JSON, interpreter returns low-confidence Defend."""
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response("This is not JSON"))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("This is not JSON"))
 
     result = interpreter.interpret(
         player_text="uhhhh idk",
@@ -96,7 +89,7 @@ def test_interpret_missing_action_type_falls_back(
 ) -> None:
     """If LLM returns JSON but action_type is invalid, interpreter falls back."""
     httpx_mock.add_response(
-        url=OLLAMA_URL,
+        url=CHAT_URL,
         json=make_ollama_response({"action_type": "INVALID_ACTION", "actor_name": "Thorin", "confidence": 0.5}),
     )
 
@@ -124,7 +117,7 @@ def test_interpret_combat_context_included(
         "item_name": None,
         "confidence": 0.8,
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = interpreter.interpret(
         player_text="I run away",
@@ -147,7 +140,7 @@ def test_interpret_use_item(httpx_mock: HTTPXMock, interpreter: Interpreter) -> 
         "item_name": "Healing Potion",
         "confidence": 0.99,
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = interpreter.interpret(
         player_text="use my healing potion",

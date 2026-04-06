@@ -8,14 +8,8 @@ from ai.client import OllamaClient
 from ai.models import DirectorNote
 from ai.story_director import StoryDirector
 from memory.semantic import SemanticMemory
-from tests.ai.conftest import make_ollama_response
+from tests.ai.conftest import CHAT_URL, make_ollama_response
 
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
-
-
-@pytest.fixture
-def client() -> OllamaClient:
-    return OllamaClient()
 
 
 @pytest.fixture
@@ -24,8 +18,8 @@ def mock_semantic() -> MagicMock:
 
 
 @pytest.fixture
-def director(client: OllamaClient, mock_semantic: MagicMock) -> StoryDirector:
-    return StoryDirector(client, mock_semantic)
+def director(ollama_client: OllamaClient, mock_semantic: MagicMock) -> StoryDirector:
+    return StoryDirector(ollama_client, mock_semantic)
 
 
 def test_check_coherence_returns_director_note(
@@ -37,7 +31,7 @@ def test_check_coherence_returns_director_note(
         "suggested_hooks": ["The merchant's revenge plot"],
         "priority": "high",
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = director.check_coherence(
         campaign_id="camp-123",
@@ -61,7 +55,7 @@ def test_check_coherence_stores_semantic_document(
         "suggested_hooks": ["Explore the old mine"],
         "priority": "low",
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     director.check_coherence(
         campaign_id="camp-456",
@@ -86,7 +80,7 @@ def test_check_coherence_low_priority(
         "suggested_hooks": ["An old legend about the forest"],
         "priority": "low",
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = director.check_coherence(
         campaign_id="camp-789",

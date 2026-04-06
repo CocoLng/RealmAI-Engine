@@ -136,34 +136,54 @@ Build `engine/` with full test coverage. Playable in terminal.
 - [x] ruff check: clean
 - [x] mypy: clean (0 issues on 15 source files)
 
-## Phase 3b — Channel Manager
+## Phase 3b — Channel Manager ✅ COMPLETE
 
-- [ ] **bot/utils/channel_manager.py** — create_session_channel, archive_channel, get_or_create_category
+- [x] **bot/utils/channel_manager.py** — create_session_channel, archive_channel, get_or_create_category
   - Creates channel at `/start_campaign` with permission overrides (tagged players + bot only)
   - Configurable category per guild (default: "RealmAI Sessions")
   - Archives to "RealmAI Archives" (read-only) at `/end_campaign`
 
-## Phase 3c — Cogs (slash commands)
+### Quality Gates
 
-- [ ] **bot/cogs/session.py** — `/start_campaign`, `/resume`, `/save`, `/end_campaign`, `/settings`
-- [ ] **bot/cogs/character.py** — `/create_character` (modal), `/character`, `/level_up`
-- [ ] **bot/cogs/inventory.py** — `/inventory`, `/equip`, `/unequip`, `/use_item`
-- [ ] **bot/cogs/rolls.py** — `/roll` (free dice expression, always public)
-- [ ] **bot/cogs/combat.py** — Combat flow with buttons + select menus (blocked by engine/combat.py)
-- [ ] **bot/cogs/exploration.py** — `/look`, `/search`, `/talk`, `/move` (blocked by AI layer)
+- [x] pytest: **681 tests passing** (653 + 28 new), 0 failed
+- [x] ruff check: clean
+- [x] mypy: clean (0 issues)
 
-## Phase 3d — Views (combat interactions)
+## Phase 3c — Cogs (slash commands) ✅ COMPLETE
 
-- [ ] **bot/views/combat_view.py** — 4 buttons: Attack, Cast Spell, Defend, Flee
-- [ ] **bot/views/target_select.py** — Select menu for target choice
-- [ ] **bot/views/spell_select.py** — Select menu for spell choice
+> Design spec: `docs/superpowers/specs/2026-04-06-phase3cde-cogs-views-embeds-design.md`
 
-## Phase 3e — Embeds
+- [x] **bot/game_session.py** — GameSession dataclass + create_ai_services()
+- [x] **db/models.py** — PlayerCharacterRow, CampaignChannelRow tables
+- [x] **db/mappers.py** — player_character + campaign_channel mappers
+- [x] **db/repositories/player_character_repo.py** — PlayerCharacterRepository
+- [x] **db/repositories/campaign_channel_repo.py** — CampaignChannelRepository
+- [x] **bot/cogs/session.py** — `/start_campaign`, `/resume`, `/save`, `/end_campaign`, `/settings`
+- [x] **bot/cogs/character.py** — `/create_character` (multi-step select+modal), `/character`, `/level_up`
+- [x] **bot/cogs/inventory.py** — `/inventory`, `/equip`, `/unequip`, `/use_item`
+- [x] **bot/cogs/rolls.py** — `/roll` (free dice expression, always public)
+- [x] **bot/cogs/combat.py** — Combat flow with buttons + select menus, full AI pipeline
+- [x] **bot/cogs/exploration.py** — `/look`, `/search`, `/talk`, `/move` with AI narration
 
-- [ ] **bot/embeds/character_embed.py** — Character sheet (abilities, HP, AC, XP)
-- [ ] **bot/embeds/inventory_embed.py** — Inventory (items, equipped, attuned, weight, gold)
-- [ ] **bot/embeds/combat_embed.py** — Combat status (initiative order, HP bars, conditions)
-- [ ] **bot/embeds/narrative_embed.py** — Narrative + raw mechanics dual panel
+## Phase 3d — Views (combat interactions) ✅ COMPLETE
+
+- [x] **bot/views/combat_view.py** — 4 buttons: Attack, Cast Spell, Defend, Flee + interaction guard
+- [x] **bot/views/target_select.py** — Select menu for target choice
+- [x] **bot/views/spell_select.py** — Select menu for spell choice
+- [x] **bot/views/character_create_view.py** — Race/class/alignment selects + name modal
+
+## Phase 3e — Embeds ✅ COMPLETE
+
+- [x] **bot/embeds/character_embed.py** — Character sheet (abilities, HP, AC, XP, class colors)
+- [x] **bot/embeds/inventory_embed.py** — Inventory (items, equipped, attuned, weight, gold, encumbrance)
+- [x] **bot/embeds/combat_embed.py** — Combat status (initiative order, HP bars, conditions)
+- [x] **bot/embeds/narrative_embed.py** — Narrative + raw mechanics dual panel (tone-colored)
+
+### Quality Gates (Phase 3c+3d+3e)
+
+- [x] pytest: **852 tests passing** (681 + 171 new), 0 failed
+- [x] ruff check: clean
+- [x] mypy: clean (0 issues on 37 source files)
 
 ## Key Design Decisions
 
@@ -175,13 +195,9 @@ Build `engine/` with full test coverage. Playable in terminal.
 
 ---
 
-# Phase 4 — MCP Server + Polish
+# Phase 4 — Polish + Ship
 
-- [ ] **mcp_server/server.py** — MCP server setup
-- [ ] **mcp_server/tools.py** — roll_dice, attack, cast_spell, get_inventory, search_lore, generate_npc, advance_quest
-- [ ] **mcp_server/resources.py** — character_sheets/*, world_state, combat_log, quest_journal
-- [ ] **mcp_server/prompts.py** — narrate_combat_result, describe_new_area, npc_dialogue
 - [ ] README with GIFs and architecture diagram
 - [ ] GitHub Actions CI/CD
-- [ ] CONTRIBUTING.md
-- [ ] Blog post / LinkedIn content
+- [ ] Sessions de test réelles avec amis (objectif: 3+ sessions complètes)
+- [ ] Blog post / LinkedIn content (après les vraies sessions)

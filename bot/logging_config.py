@@ -1,11 +1,12 @@
 """Logging configuration for RealmAI Engine.
 
-Configures dual output: console (concise) + rotating file (detailed).
+Configures dual output: console (concise) + per-session file (detailed).
 Call setup_logging() once at startup, before any other imports log.
+Each bot launch creates a new log file: realm_YYYYMMDD_HHMMSS.log
 """
 
 import logging
-import logging.handlers
+from datetime import datetime
 from pathlib import Path
 
 
@@ -14,7 +15,7 @@ def setup_logging(
     log_dir: str = "logs",
     level: int = logging.INFO,
 ) -> None:
-    """Configure logging with console + daily rotating file output.
+    """Configure logging with console + per-session file output.
 
     Args:
         log_dir: Directory for log files (created if missing).
@@ -35,11 +36,10 @@ def setup_logging(
     ))
     root.addHandler(console)
 
-    # File handler — detailed, daily rotation, 14 days retention
-    file_handler = logging.handlers.TimedRotatingFileHandler(
-        filename=log_path / "realm.log",
-        when="midnight",
-        backupCount=14,
+    # File handler — one file per session for full history
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_handler = logging.FileHandler(
+        filename=log_path / f"realm_{timestamp}.log",
         encoding="utf-8",
     )
     file_handler.setLevel(level)

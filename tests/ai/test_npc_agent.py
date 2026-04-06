@@ -6,21 +6,17 @@ from pytest_httpx import HTTPXMock
 from ai.client import OllamaClient
 from ai.models import NPCResponse
 from ai.npc_agent import NPCAgent
-from tests.ai.conftest import make_ollama_response
+from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.npc import NPC, NPCDisposition
 from engine.character import AbilityScores, Race
 
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 
 
 @pytest.fixture
-def client() -> OllamaClient:
-    return OllamaClient()
+def npc_agent(ollama_client: OllamaClient) -> NPCAgent:
+    return NPCAgent(ollama_client)
 
 
-@pytest.fixture
-def npc_agent(client: OllamaClient) -> NPCAgent:
-    return NPCAgent(client)
 
 
 @pytest.fixture
@@ -51,7 +47,7 @@ def test_respond_returns_npc_response(
         "disposition_change": 1,
         "revealed_info": ["The merchant left yesterday"],
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = npc_agent.respond(
         npc=sample_npc,
@@ -75,7 +71,7 @@ def test_respond_does_not_mutate_npc(
         "disposition_change": -2,
         "revealed_info": [],
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = npc_agent.respond(
         npc=sample_npc,
@@ -97,7 +93,7 @@ def test_respond_with_empty_revealed_info(
         "disposition_change": 0,
         "revealed_info": [],
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = npc_agent.respond(
         npc=sample_npc,

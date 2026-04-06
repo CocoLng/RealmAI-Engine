@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from bot.campaign_launcher import CampaignLauncher
 from bot.game_session import GameSession
 from bot.logging_config import setup_logging
+import db.models  # noqa: F401 — register all tables before create_all
 from db.database import get_engine, get_session_factory, init_db
 
 logger = logging.getLogger(__name__)

@@ -31,7 +31,7 @@ from engine.combat import (
     start_combat,
 )
 from engine.conditions import ActiveCondition, ConditionType, has_condition
-from engine.dice import DiceResult
+from engine.dice import D20CheckResult, DiceResult, RollOutcome, _compute_outcome
 from engine.inventory import (
     DamageType,
     EquipmentSlot,
@@ -113,6 +113,29 @@ def wizard() -> Combatant:
 def _make_roll(total: int) -> DiceResult:
     """Helper to create a DiceResult with a given total."""
     return DiceResult(expression="1d20", rolls=[total], total=total)
+
+
+def _mock_roll_check(natural_roll: int):
+    """Return a mock roll_check that always uses the given natural d20 value."""
+
+    def _inner(expr: str, dc: int) -> D20CheckResult:
+        cleaned = expr.replace(" ", "")
+        mod_str = cleaned.replace("1d20", "")
+        modifier = int(mod_str) if mod_str else 0
+        total = natural_roll + modifier
+        margin = total - dc
+        outcome = _compute_outcome(natural_roll, margin)
+        return D20CheckResult(
+            expression=cleaned,
+            rolls=[natural_roll],
+            modifier=modifier,
+            total=total,
+            dc=dc,
+            outcome=outcome,
+            margin=margin,
+        )
+
+    return _inner
 
 
 # ---------------------------------------------------------------------------
@@ -330,66 +353,59 @@ class TestResolveAttack:
     def test_hit(
         self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        call_count = 0
-
-        def mock_roll(expr: str) -> DiceResult:
-            nonlocal call_count
-            call_count += 1
-            if expr == "1d20":
-                return _make_roll(15)
-            # Damage roll: 1d8
-            return DiceResult(expression=expr, rolls=[6], total=6)
-
-        monkeypatch.setattr("engine.combat.roll", mock_roll)
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(15))
+        monkeypatch.setattr(
+            "engine.combat.roll",
+            lambda expr: DiceResult(expression=expr, rolls=[6], total=6),
+        )
         longsword: Weapon = fighter.inventory.equipped[EquipmentSlot.MAIN_HAND]  # type: ignore[assignment]
         result = resolve_attack(fighter, goblin, longsword)
         assert result.hit is True
         assert result.critical is False
         assert result.damage > 0
+        assert result.outcome in (RollOutcome.NEAR_SUCCESS, RollOutcome.SUCCESS)
 
     def test_miss(
         self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(2))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(2))
         longsword: Weapon = fighter.inventory.equipped[EquipmentSlot.MAIN_HAND]  # type: ignore[assignment]
         # Set goblin AC high enough to guarantee miss
         goblin.character.ac = 25
         result = resolve_attack(fighter, goblin, longsword)
         assert result.hit is False
         assert result.damage == 0
+        assert result.outcome in (RollOutcome.FAILURE, RollOutcome.NEAR_FAILURE)
 
     def test_critical_hit(
         self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        call_count = 0
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(20))
 
         def mock_roll(expr: str) -> DiceResult:
-            nonlocal call_count
-            call_count += 1
-            if expr == "1d20":
-                return _make_roll(20)
-            # Crit damage: 2d8 (doubled dice)
-            if expr == "2d8":
+            if "2d8" in expr:
                 return DiceResult(expression=expr, rolls=[6, 5], total=11)
-            return _make_roll(5)
+            return DiceResult(expression=expr, rolls=[5], total=5)
 
         monkeypatch.setattr("engine.combat.roll", mock_roll)
         longsword: Weapon = fighter.inventory.equipped[EquipmentSlot.MAIN_HAND]  # type: ignore[assignment]
         result = resolve_attack(fighter, goblin, longsword)
         assert result.hit is True
         assert result.critical is True
+        assert result.outcome == RollOutcome.CRITICAL_SUCCESS
         # Damage = 11 (dice) + 3 (STR mod) = 14
         assert result.damage == 14
 
     def test_nat_1_auto_miss(
         self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(1))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(1))
         longsword: Weapon = fighter.inventory.equipped[EquipmentSlot.MAIN_HAND]  # type: ignore[assignment]
         goblin.character.ac = 0  # Even AC 0, nat 1 auto-misses
         result = resolve_attack(fighter, goblin, longsword)
         assert result.hit is False
         assert result.damage == 0
+        assert result.outcome == RollOutcome.CRITICAL_FAILURE
 
     def test_auto_crit_on_unconscious(
         self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
@@ -401,22 +417,19 @@ class TestResolveAttack:
             ActiveCondition(condition_type=ConditionType.UNCONSCIOUS, source="test"),
         )
 
-        call_count = 0
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(15))
 
         def mock_roll(expr: str) -> DiceResult:
-            nonlocal call_count
-            call_count += 1
-            if expr == "1d20":
-                return _make_roll(15)  # Hits
-            if expr == "2d8":  # Doubled dice from auto-crit
+            if "2d8" in expr:
                 return DiceResult(expression=expr, rolls=[4, 4], total=8)
-            return _make_roll(5)
+            return DiceResult(expression=expr, rolls=[5], total=5)
 
         monkeypatch.setattr("engine.combat.roll", mock_roll)
         longsword: Weapon = fighter.inventory.equipped[EquipmentSlot.MAIN_HAND]  # type: ignore[assignment]
         result = resolve_attack(fighter, goblin, longsword)
         assert result.hit is True
         assert result.critical is True
+        assert result.outcome == RollOutcome.CRITICAL_SUCCESS
 
 
 # ---------------------------------------------------------------------------
@@ -467,17 +480,13 @@ class TestResolveSpell:
     def test_save_spell_target_fails(
         self, wizard: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        call_count = 0
-
-        def mock_roll(expr: str) -> DiceResult:
-            nonlocal call_count
-            call_count += 1
-            if "d6" in expr:
-                return DiceResult(expression=expr, rolls=[4, 3, 5], total=12)
-            # Save roll: low roll, will fail
-            return _make_roll(2)
-
-        monkeypatch.setattr("engine.combat.roll", mock_roll)
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(2))
+        monkeypatch.setattr(
+            "engine.combat.roll",
+            lambda expr: DiceResult(expression=expr, rolls=[4, 3, 5], total=12)
+            if "d6" in expr
+            else _make_roll(10),
+        )
         burning_hands = SPELL_CATALOG["Burning Hands"]
         result = resolve_spell(wizard, burning_hands, target=goblin, slot_level=1)
         assert result.target_failed_save is True  # Target failed save
@@ -486,17 +495,13 @@ class TestResolveSpell:
     def test_save_spell_target_saves(
         self, wizard: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        call_count = 0
-
-        def mock_roll(expr: str) -> DiceResult:
-            nonlocal call_count
-            call_count += 1
-            if "d6" in expr:
-                return DiceResult(expression=expr, rolls=[4, 3, 5], total=12)
-            # Save roll: high roll
-            return _make_roll(19)
-
-        monkeypatch.setattr("engine.combat.roll", mock_roll)
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(19))
+        monkeypatch.setattr(
+            "engine.combat.roll",
+            lambda expr: DiceResult(expression=expr, rolls=[4, 3, 5], total=12)
+            if "d6" in expr
+            else _make_roll(10),
+        )
         burning_hands = SPELL_CATALOG["Burning Hands"]
         result = resolve_spell(wizard, burning_hands, target=goblin, slot_level=1)
         assert result.target_failed_save is False  # Target saved
@@ -506,10 +511,8 @@ class TestResolveSpell:
         self, wizard: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Hold Person: target fails WIS save -> Paralyzed
-        def mock_roll(_expr: str) -> DiceResult:
-            return _make_roll(2)  # Low roll for save
-
-        monkeypatch.setattr("engine.combat.roll", mock_roll)
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(2))
+        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(2))
         hold_person = SPELL_CATALOG["Hold Person"]
         result = resolve_spell(wizard, hold_person, target=goblin, slot_level=2)
         assert result.condition_applied == "Paralyzed"
@@ -538,24 +541,27 @@ class TestDeathSave:
 
     def test_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         c = self._make_downed_player()
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(12))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(12))
         result = resolve_death_save(c)
         assert result.success is True
+        assert result.outcome == RollOutcome.NEAR_SUCCESS
         assert c.death_saves.successes == 1
         assert c.death_saves.failures == 0
 
     def test_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         c = self._make_downed_player()
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(5))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(5))
         result = resolve_death_save(c)
         assert result.success is False
+        assert result.outcome == RollOutcome.FAILURE
         assert c.death_saves.failures == 1
 
     def test_nat_20_revive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         c = self._make_downed_player()
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(20))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(20))
         result = resolve_death_save(c)
         assert result.revived is True
+        assert result.outcome == RollOutcome.CRITICAL_SUCCESS
         assert c.character.hp == 1
         assert not has_condition(c.conditions, ConditionType.UNCONSCIOUS)
         assert c.death_saves.successes == 0  # Reset
@@ -563,15 +569,16 @@ class TestDeathSave:
 
     def test_nat_1_double_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         c = self._make_downed_player()
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(1))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(1))
         result = resolve_death_save(c)
         assert result.success is False
+        assert result.outcome == RollOutcome.CRITICAL_FAILURE
         assert c.death_saves.failures == 2
 
     def test_stabilize_at_3_successes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         c = self._make_downed_player()
         c.death_saves.successes = 2
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(15))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(15))
         result = resolve_death_save(c)
         assert result.stabilized is True
         assert c.death_saves.successes == 3
@@ -579,7 +586,7 @@ class TestDeathSave:
     def test_die_at_3_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
         c = self._make_downed_player()
         c.death_saves.failures = 2
-        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(5))
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(5))
         result = resolve_death_save(c)
         assert result.died is True
         assert c.is_alive is False

@@ -75,6 +75,12 @@ class NPCResponse(BaseModel):
 
 Single shared wrapper injected into all modules. Raises `OllamaUnavailableError` on connection failure, propagates `json.JSONDecodeError` on invalid JSON.
 
+### Thinking mode (`think=True`)
+
+When `think=True`, Ollama returns reasoning in `message.thinking` and the answer in `message.content`. **`num_predict` limits total tokens (thinking + content)**, so the client automatically adds 2048 to the caller's `num_predict` to reserve space for the thinking trace. The caller's value remains the *content* budget.
+
+If the model exhausts all tokens on thinking and returns empty content, `chat_json` raises `ValueError` with a descriptive message instead of a cryptic `JSONDecodeError`.
+
 ## Testing Strategy
 
 - `pytest-httpx` to mock Ollama HTTP calls (patches httpx globally)

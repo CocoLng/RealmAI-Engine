@@ -48,7 +48,7 @@ class StoryDirector:
             {"role": "user", "content": context_prompt},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.7)
+        data = self._client.chat_json(self.MODEL, messages, temperature=0.7, think=True)
         note = DirectorNote(
             coherence_issues=data.get("coherence_issues", []),
             suggested_hooks=data.get("suggested_hooks", []),

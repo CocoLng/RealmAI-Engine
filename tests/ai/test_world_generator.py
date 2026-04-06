@@ -5,20 +5,16 @@ from pytest_httpx import HTTPXMock
 
 from ai.client import OllamaClient
 from ai.world_generator import WorldGenerator
-from tests.ai.conftest import make_ollama_response
+from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.location import Location
 
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 
 
 @pytest.fixture
-def client() -> OllamaClient:
-    return OllamaClient()
+def generator(ollama_client: OllamaClient) -> WorldGenerator:
+    return WorldGenerator(ollama_client)
 
 
-@pytest.fixture
-def generator(client: OllamaClient) -> WorldGenerator:
-    return WorldGenerator(client)
 
 
 def test_generate_returns_location_with_name_and_description(
@@ -36,7 +32,7 @@ def test_generate_returns_location_with_name_and_description(
         "npcs_present": ["Marta the Innkeeper", "Old Gruff"],
         "items_available": ["Healing Potion", "Traveler's Rations"],
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
         campaign_context="A quiet border village on the edge of the Ashwood.",
@@ -59,7 +55,7 @@ def test_generate_connections_populated(
         "npcs_present": ["Guard Sergeant Bram"],
         "items_available": [],
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
         campaign_context="A frontier settlement bordering a haunted forest.",
@@ -87,7 +83,7 @@ def test_generate_empty_npcs_and_items(
         "npcs_present": [],
         "items_available": [],
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
         campaign_context="An ancient dungeon beneath the ruins of a fallen kingdom.",
@@ -112,7 +108,7 @@ def test_generate_with_optional_location_name(
         "npcs_present": [],
         "items_available": ["Room Key"],
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
         campaign_context="A bustling port city.",

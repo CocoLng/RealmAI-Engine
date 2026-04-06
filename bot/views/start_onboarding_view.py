@@ -8,13 +8,15 @@ from typing import Any
 import discord
 from discord import ui
 
+from bot.views.base import LoggedView
+
 OnClickCallback = Callable[
     [discord.Interaction],
     Coroutine[Any, Any, None],
 ]
 
 
-class StartOnboardingView(ui.View):
+class StartOnboardingView(LoggedView):
     """Single-button view shown in the campaign channel during onboarding.
 
     Each player clicks the button to begin their character creation flow.

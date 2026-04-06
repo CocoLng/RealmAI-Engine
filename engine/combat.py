@@ -19,7 +19,7 @@ from engine.conditions import (
     remove_condition,
     tick_durations,
 )
-from engine.dice import roll
+from engine.dice import RollOutcome, roll, roll_check
 from engine.inventory import (
     DamageType,
     Inventory,
@@ -94,6 +94,7 @@ class AttackResult(BaseModel):
     ac: int
     hit: bool
     critical: bool
+    outcome: RollOutcome
     damage: int
     damage_type: DamageType
     defender_hp_remaining: int
@@ -110,6 +111,7 @@ class SpellCastResult(BaseModel):
     healing: int = 0
     condition_applied: str | None = None
     target_failed_save: bool = True  # True = spell fully effective; False = target saved
+    save_outcome: RollOutcome | None = None
 
 
 class DeathSaveResult(BaseModel):
@@ -118,6 +120,7 @@ class DeathSaveResult(BaseModel):
     character_name: str
     roll: int
     success: bool
+    outcome: RollOutcome
     total_successes: int
     total_failures: int
     stabilized: bool
@@ -318,39 +321,41 @@ def resolve_attack(
         advantage = False
         disadvantage = False
 
-    # Roll d20
-    roll1 = roll("1d20")
-    roll2 = roll("1d20")
+    # Compute modifier and target AC up front
+    attack_mod = compute_attack_modifier(attacker, weapon)
+    target_ac = defender.character.ac
+    expr = f"1d20+{attack_mod}" if attack_mod >= 0 else f"1d20{attack_mod}"
 
-    if advantage:
-        raw_roll = max(roll1.total, roll2.total)
-    elif disadvantage:
-        raw_roll = min(roll1.total, roll2.total)
+    # Roll d20 check(s) against AC
+    check1 = roll_check(expr, target_ac)
+    if advantage or disadvantage:
+        check2 = roll_check(expr, target_ac)
+        if advantage:
+            check = check1 if check1.total >= check2.total else check2
+        else:
+            check = check1 if check1.total <= check2.total else check2
     else:
-        raw_roll = roll1.total
+        check = check1
 
-    # Critical / auto-miss
-    is_nat_20 = raw_roll == 20
-    is_nat_1 = raw_roll == 1
-    critical = is_nat_20
+    raw_roll = check.rolls[0]
+    outcome = check.outcome
+    critical = outcome == RollOutcome.CRITICAL_SUCCESS
 
     # Auto-crit on unconscious or paralyzed defenders
     if has_condition(defender.conditions, ConditionType.UNCONSCIOUS) or has_condition(
         defender.conditions, ConditionType.PARALYZED
     ):
         critical = True
-
-    attack_mod = compute_attack_modifier(attacker, weapon)
-    attack_total = raw_roll + attack_mod
-    target_ac = defender.character.ac
+        if outcome != RollOutcome.CRITICAL_FAILURE:
+            outcome = RollOutcome.CRITICAL_SUCCESS
 
     # Determine hit
-    if is_nat_1:
+    if raw_roll == 1:
         hit = False
-    elif is_nat_20 or critical:
+    elif critical:
         hit = True
     else:
-        hit = attack_total >= target_ac
+        hit = check.margin >= 0
 
     # Damage
     damage = 0
@@ -370,10 +375,11 @@ def resolve_attack(
         defender=defender.name,
         weapon_name=weapon.name,
         attack_roll=raw_roll,
-        attack_total=attack_total,
+        attack_total=check.total,
         ac=target_ac,
         hit=hit,
         critical=critical,
+        outcome=outcome,
         damage=damage,
         damage_type=weapon.damage_type,
         defender_hp_remaining=defender.character.hp,
@@ -412,6 +418,7 @@ def resolve_spell(
     healing = 0
     condition_name: str | None = None
     target_failed_save = True  # True = spell fully effective
+    save_outcome: RollOutcome | None = None
 
     # Determine effective dice (handle upcasting via higher_level_dice)
     base_dice = spell.damage_dice
@@ -463,9 +470,14 @@ def resolve_spell(
                 and auto_fails_str_dex_saves(target.conditions)
             ):
                 save_total = 0  # auto-fail
+                save_outcome = RollOutcome.FAILURE
             else:
-                save_roll = roll("1d20")
-                save_total = save_roll.total + save_mod
+                save_expr = (
+                    f"1d20+{save_mod}" if save_mod >= 0 else f"1d20{save_mod}"
+                )
+                save_check = roll_check(save_expr, dc)
+                save_total = save_check.total
+                save_outcome = save_check.outcome
 
             if save_total >= dc:
                 damage = damage // 2
@@ -502,6 +514,7 @@ def resolve_spell(
         healing=healing,
         condition_applied=condition_name,
         target_failed_save=target_failed_save,
+        save_outcome=save_outcome,
     )
 
 
@@ -521,17 +534,18 @@ def resolve_death_save(combatant: Combatant) -> DeathSaveResult:
     - 3 failures: dead (is_alive=False).
     Mutates combatant in place.
     """
-    result = roll("1d20")
-    raw = result.total
+    check = roll_check("1d20", dc=10)
+    raw = check.rolls[0]
+    outcome = check.outcome
 
     stabilized = False
     died = False
     revived = False
 
-    if raw == 1:
+    if outcome == RollOutcome.CRITICAL_FAILURE:
         combatant.death_saves.failures = min(3, combatant.death_saves.failures + 2)
         is_success = False
-    elif raw == 20:
+    elif outcome == RollOutcome.CRITICAL_SUCCESS:
         # Revive at 1 HP
         combatant.character.hp = 1
         combatant.death_saves = DeathSaves()
@@ -557,6 +571,7 @@ def resolve_death_save(combatant: Combatant) -> DeathSaveResult:
         character_name=combatant.name,
         roll=raw,
         success=is_success,
+        outcome=outcome,
         total_successes=combatant.death_saves.successes,
         total_failures=combatant.death_saves.failures,
         stabilized=stabilized,

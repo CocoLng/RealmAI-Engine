@@ -6,19 +6,12 @@ from pytest_httpx import HTTPXMock
 from ai.client import OllamaClient
 from ai.models import NarrativeResult
 from ai.narrator import Narrator
-from tests.ai.conftest import make_ollama_response
-
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
+from tests.ai.conftest import CHAT_URL, make_ollama_response
 
 
 @pytest.fixture
-def client() -> OllamaClient:
-    return OllamaClient()
-
-
-@pytest.fixture
-def narrator(client: OllamaClient) -> Narrator:
-    return Narrator(client)
+def narrator(ollama_client: OllamaClient) -> Narrator:
+    return Narrator(ollama_client)
 
 
 def test_narrate_returns_narrative_result(httpx_mock: HTTPXMock, narrator: Narrator) -> None:
@@ -27,7 +20,7 @@ def test_narrate_returns_narrative_result(httpx_mock: HTTPXMock, narrator: Narra
         "narrative": "Your axe bites deep into the goblin's shoulder.",
         "tone": "dramatic",
     }
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = narrator.narrate(
         action_result_text="Thorin attacks Goblin. Hit! 8 damage dealt.",
@@ -44,22 +37,22 @@ def test_narrate_uses_both_context_and_action(
 ) -> None:
     """The user message includes both context_prompt and action_result_text."""
     response_data = {"narrative": "The skeleton crumbles.", "tone": "somber"}
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(response_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     narrator.narrate(
         action_result_text="Merlin casts Fireball. Skeleton fails save. 12 fire damage.",
         context_prompt="## Game State\nMerlin: 30/30 HP",
     )
 
-    # Verify the request was made (httpx_mock would raise if not matched)
-    assert len(httpx_mock.get_requests()) == 1
+    # Verify the chat request was made (tags health check + chat = 2 requests)
+    assert len(httpx_mock.get_requests()) == 2
 
 
 def test_narrate_various_tones(httpx_mock: HTTPXMock, narrator: Narrator) -> None:
     """Narrator accepts all valid tones."""
     for tone in ["dramatic", "tense", "humorous", "somber"]:
         httpx_mock.add_response(
-            url=OLLAMA_URL,
+            url=CHAT_URL,
             json=make_ollama_response({"narrative": "Something happened.", "tone": tone}),
         )
         result = narrator.narrate(
@@ -72,7 +65,7 @@ def test_narrate_various_tones(httpx_mock: HTTPXMock, narrator: Narrator) -> Non
 def test_narrate_uses_high_temperature(httpx_mock: HTTPXMock, narrator: Narrator) -> None:
     """Narrator uses temperature 0.8 for creative output."""
     httpx_mock.add_response(
-        url=OLLAMA_URL,
+        url=CHAT_URL,
         json=make_ollama_response({"narrative": "The battle rages on.", "tone": "tense"}),
     )
     result = narrator.narrate(

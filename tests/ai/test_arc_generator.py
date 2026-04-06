@@ -7,10 +7,8 @@ from pytest_httpx import HTTPXMock
 
 from ai.arc_generator import ArcGenerator
 from ai.client import OllamaClient
-from tests.ai.conftest import make_ollama_response
+from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.story_arc import StoryArc
-
-OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 
 
 def _make_arc_data(beat_count: int = 10) -> dict:
@@ -39,13 +37,8 @@ def _make_arc_data(beat_count: int = 10) -> dict:
 
 
 @pytest.fixture
-def client() -> OllamaClient:
-    return OllamaClient()
-
-
-@pytest.fixture
-def generator(client: OllamaClient) -> ArcGenerator:
-    return ArcGenerator(client)
+def generator(ollama_client: OllamaClient) -> ArcGenerator:
+    return ArcGenerator(ollama_client)
 
 
 def test_system_prompt_file_exists() -> None:
@@ -61,7 +54,7 @@ def test_generate_returns_valid_story_arc(
 ) -> None:
     """ArcGenerator.generate() returns a valid StoryArc with correct theme."""
     arc_data = _make_arc_data(10)
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(arc_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="dark fantasy", player_count=4)
 
@@ -76,7 +69,7 @@ def test_generate_beats_have_correct_structure(
 ) -> None:
     """Each beat in the generated arc has the required fields."""
     arc_data = _make_arc_data(10)
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(arc_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="dark fantasy", player_count=3)
 
@@ -92,7 +85,7 @@ def test_generate_last_beat_is_boss(
 ) -> None:
     """The final beat of the generated arc must be a boss encounter."""
     arc_data = _make_arc_data(12)
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(arc_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="pirate adventure", player_count=5)
 
@@ -104,7 +97,7 @@ def test_generate_contains_twist(
 ) -> None:
     """The generated arc contains at least one twist beat."""
     arc_data = _make_arc_data(10)
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(arc_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="dark fantasy", player_count=4)
 
@@ -117,7 +110,7 @@ def test_generate_current_beat_index_starts_at_zero(
 ) -> None:
     """A freshly generated arc starts at beat index 0."""
     arc_data = _make_arc_data(10)
-    httpx_mock.add_response(url=OLLAMA_URL, json=make_ollama_response(arc_data))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="mystery", player_count=2)
 

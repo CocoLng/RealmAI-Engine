@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import discord
 
@@ -35,9 +36,16 @@ from world.location import Location
 from world.story_arc import StoryArc
 
 if TYPE_CHECKING:
+    from ai.client import OllamaClient
     from bot.bot import RealmBot
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+# Retry configuration for LLM calls
+MAX_RETRIES = 2
+RETRY_DELAYS = [5.0, 15.0]  # seconds between retries
 
 
 class PlayerProgress(StrEnum):
@@ -68,12 +76,11 @@ class CampaignLauncher:
     spellcasters: dict[int, SpellcasterState | None] = field(default_factory=dict)
     story_arc: StoryArc | None = None
     current_location: Location | None = None
-    _arc_task: asyncio.Task[StoryArc | None] | None = field(
+    _generation_task: asyncio.Task[None] | None = field(
         default=None, repr=False,
     )
-    _location_task: asyncio.Task[Location | None] | None = field(
-        default=None, repr=False,
-    )
+    _generation_failed: bool = field(default=False, repr=False)
+    _launched: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         for uid in self.player_ids:
@@ -102,41 +109,22 @@ class CampaignLauncher:
         await self.channel.send(embed=embed, view=view)
 
     def start_background_tasks(self) -> None:
-        """Launch story arc and location generation as background tasks."""
+        """Launch sequential arc → location generation as a single background task."""
         from ai.client import OllamaClient, OllamaUnavailableError
 
         try:
             client = OllamaClient()
         except (OllamaUnavailableError, Exception):
-            logger.warning("Ollama unavailable — skipping arc/location generation")
+            logger.warning(
+                "Ollama unavailable — cannot generate arc/location for campaign %s",
+                self.campaign.id,
+            )
+            self._generation_failed = True
             return
 
-        from ai.arc_generator import ArcGenerator
-        from ai.world_generator import WorldGenerator
-
-        arc_gen = ArcGenerator(client)
-        world_gen = WorldGenerator(client)
-
-        self._arc_task = asyncio.create_task(
-            asyncio.to_thread(
-                arc_gen.generate,
-                self.campaign.name,
-                len(self.player_ids),
-            ),
-            name=f"arc-gen-{self.campaign.id}",
+        self._generation_task = self._safe_create_task(
+            self._run_generation(client),
         )
-        self._arc_task.add_done_callback(self._on_arc_done)
-
-        self._location_task = asyncio.create_task(
-            asyncio.to_thread(
-                world_gen.generate,
-                campaign_context=f"New campaign: {self.campaign.name}",
-                location_type="starting_area",
-                language=self.language,
-            ),
-            name=f"loc-gen-{self.campaign.id}",
-        )
-        self._location_task.add_done_callback(self._on_location_done)
 
     # ------------------------------------------------------------------
     # Callbacks from views
@@ -147,6 +135,10 @@ class CampaignLauncher:
     ) -> None:
         """Handle the 'Create Character' button click."""
         user_id = interaction.user.id
+        logger.info(
+            "ONBOARD click user=%s campaign=%s",
+            interaction.user, self.campaign.id,
+        )
 
         if user_id not in self.player_progress:
             await interaction.response.send_message(
@@ -196,6 +188,12 @@ class CampaignLauncher:
         self.spellcasters[user_id] = spellcaster
         self.player_progress[user_id] = PlayerProgress.CHARACTER_DONE
 
+        logger.info(
+            "ONBOARD character user=%s name=%s race=%s class=%s campaign=%s",
+            interaction.user, character.name, view.race.value,
+            view.char_class.value, self.campaign.id,
+        )
+
         # Persist character to DB
         db_session = self.bot.db_factory()
         try:
@@ -244,6 +242,11 @@ class CampaignLauncher:
         self.inventories[user_id] = inventory
         self.player_progress[user_id] = PlayerProgress.GEAR_DONE
 
+        logger.info(
+            "ONBOARD gear user=%s kit=%s campaign=%s",
+            interaction.user, kit.name, self.campaign.id,
+        )
+
         # Update inventory in DB
         db_session = self.bot.db_factory()
         try:
@@ -273,75 +276,147 @@ class CampaignLauncher:
         await self._check_ready()
 
     # ------------------------------------------------------------------
-    # Background task callbacks
+    # Background generation (sequential: arc → location)
     # ------------------------------------------------------------------
 
-    def _on_arc_done(self, task: asyncio.Task[StoryArc | None]) -> None:
-        """Callback when arc generation finishes."""
-        if task.cancelled():
-            logger.warning("Arc generation cancelled for campaign %s", self.campaign.id)
-            return
-        try:
-            self.story_arc = task.result()
-            if self.story_arc:
-                self.story_arc = self.story_arc.model_copy(
-                    update={"campaign_id": self.campaign.id},
-                )
-                logger.info(
-                    "Story arc generated for campaign %s (%d beats)",
-                    self.campaign.id,
-                    len(self.story_arc.beats),
-                )
-        except Exception:
-            logger.warning(
-                "Story arc generation failed for campaign %s",
-                self.campaign.id,
-                exc_info=True,
-            )
+    async def _run_generation(self, client: "OllamaClient") -> None:
+        """Run arc then location generation sequentially with retry."""
+        from ai.arc_generator import ArcGenerator
+        from ai.client import OllamaUnavailableError
+        from ai.world_generator import WorldGenerator
 
-        asyncio.create_task(self._check_ready())
+        arc_gen = ArcGenerator(client)
+        world_gen = WorldGenerator(client)
 
-    def _on_location_done(self, task: asyncio.Task[Location | None]) -> None:
-        """Callback when location generation finishes."""
-        if task.cancelled():
-            logger.warning("Location generation cancelled for campaign %s", self.campaign.id)
-            return
+        # --- Arc generation (mandatory) ---
         try:
-            self.current_location = task.result()
-            if self.current_location:
-                self.campaign.current_location = self.current_location.name
-                logger.info(
-                    "Starting location generated: %s",
-                    self.current_location.name,
-                )
-        except Exception:
-            logger.warning(
-                "Location generation failed for campaign %s",
-                self.campaign.id,
-                exc_info=True,
+            arc = await self._retry_llm_call(
+                lambda: arc_gen.generate(
+                    self.campaign.name,
+                    len(self.player_ids),
+                    self.language,
+                ),
             )
+        except OllamaUnavailableError:
+            logger.error(
+                "Arc generation failed after retries for campaign %s",
+                self.campaign.id,
+            )
+            await self._notify_generation_failed()
+            return
+
+        self.story_arc = arc.model_copy(
+            update={"campaign_id": self.campaign.id},
+        )
+        logger.info(
+            "Story arc generated for campaign %s (%d beats)",
+            self.campaign.id,
+            len(self.story_arc.beats),
+        )
+
+        # --- Location generation (mandatory, uses arc context) ---
+        arc_context = (
+            f"Campaign: {self.campaign.name}. "
+            f"Villain: {self.story_arc.villain_name}. "
+            f"First beat: {self.story_arc.beats[0].description if self.story_arc.beats else 'unknown'}."
+        )
+        try:
+            location = await self._retry_llm_call(
+                lambda: world_gen.generate(
+                    campaign_context=arc_context,
+                    location_type="starting_area",
+                    language=self.language,
+                ),
+            )
+        except OllamaUnavailableError:
+            logger.error(
+                "Location generation failed after retries for campaign %s",
+                self.campaign.id,
+            )
+            await self._notify_generation_failed()
+            return
+
+        self.current_location = location
+        self.campaign.current_location = location.name
+        logger.info("Starting location generated: %s", location.name)
+
+        # Both succeeded — check if players are ready
+        await self._check_ready()
+
+    async def _retry_llm_call(self, fn: Callable[[], T]) -> T:
+        """Retry a blocking LLM call with backoff.
+
+        Runs *fn* in a thread.  On OllamaUnavailableError, retries up to
+        MAX_RETRIES times with RETRY_DELAYS between attempts.  Re-raises
+        on final failure.
+        """
+        from ai.client import OllamaUnavailableError
+
+        last_exc: OllamaUnavailableError | None = None
+        for attempt in range(1 + MAX_RETRIES):
+            if attempt > 0:
+                delay = RETRY_DELAYS[attempt - 1]
+                logger.info(
+                    "LLM retry %d/%d in %.0fs for campaign %s",
+                    attempt, MAX_RETRIES, delay, self.campaign.id,
+                )
+                await asyncio.sleep(delay)
+            try:
+                return await asyncio.to_thread(fn)
+            except OllamaUnavailableError as exc:
+                last_exc = exc
+                logger.warning(
+                    "LLM call attempt %d failed for campaign %s: %s",
+                    attempt + 1, self.campaign.id, exc,
+                )
+        raise last_exc  # type: ignore[misc]
+
+    async def _notify_generation_failed(self) -> None:
+        """Mark generation as failed and notify the channel."""
+        self._generation_failed = True
+        await self.channel.send(
+            "Ollama est indisponible. Impossible de demarrer la campagne. "
+            "Verifiez que le serveur Ollama est en cours d'execution, "
+            "puis relancez avec `/start_campaign`.",
+        )
+        # Clean up launcher
+        self.bot.launchers.pop(self.channel.id, None)
 
     # ------------------------------------------------------------------
     # Launch check
     # ------------------------------------------------------------------
 
     async def _check_ready(self) -> None:
-        """Check if all players are GEAR_DONE and arc is done. If so, launch."""
+        """Check if all players are GEAR_DONE and generation succeeded. If so, launch."""
+        if self._launched or self._generation_failed:
+            return
+
         all_ready = all(
             progress == PlayerProgress.GEAR_DONE
             for progress in self.player_progress.values()
         )
-        arc_done = (
-            self._arc_task is None or self._arc_task.done()
+        generation_done = (
+            self.story_arc is not None and self.current_location is not None
         )
 
-        if not all_ready or not arc_done:
+        logger.info(
+            "ONBOARD check all_ready=%s arc_done=%s campaign=%s",
+            all_ready, generation_done, self.campaign.id,
+        )
+
+        if not all_ready or not generation_done:
             return
 
         await self._launch_campaign()
 
     async def _launch_campaign(self) -> None:
         """Create the GameSession, send opening narrative, clean up."""
+        if self._launched:
+            return
+        self._launched = True
+
+        logger.info("LAUNCH starting campaign=%s", self.campaign.id)
+
         session = GameSession(
             campaign=self.campaign,
             characters=self.characters,
@@ -397,3 +472,25 @@ class CampaignLauncher:
             len(self.story_arc.beats) if self.story_arc else 0,
             self.current_location.name if self.current_location else "none",
         )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _safe_create_task(self, coro: object) -> asyncio.Task[None]:
+        """Create an asyncio task with error logging on failure."""
+        task: asyncio.Task[None] = asyncio.create_task(coro)  # type: ignore[arg-type]
+
+        def _on_done(t: asyncio.Task[None]) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                logger.error(
+                    "Background task failed for campaign %s: %s",
+                    self.campaign.id, exc,
+                    exc_info=exc,
+                )
+
+        task.add_done_callback(_on_done)
+        return task

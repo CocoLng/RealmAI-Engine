@@ -4,7 +4,7 @@
 
 # 1. OVERVIEW
 
-Discord bot serving as an AI Game Master for tabletop RPG sessions with friends. A deterministic Python engine handles ALL game mechanics (dice, combat, inventory, rules). Local open-source LLMs (Ollama) handle narration ONLY. The engine is also exposed as an MCP (Model Context Protocol) server.
+Discord bot serving as an AI Game Master for tabletop RPG sessions with friends. A deterministic Python engine handles ALL game mechanics (dice, combat, inventory, rules). Local open-source LLMs (Ollama) handle narration ONLY.
 
 **Core principle: the LLM narrates, the code arbitrates.**
 
@@ -14,9 +14,9 @@ Discord bot serving as an AI Game Master for tabletop RPG sessions with friends.
 
 Open source portfolio project targeting GAFAM/MANGO recruitment. Profile: Python/GenAI developer, 2-3 years XP (PwC consulting).
 
-Skills demonstrated: MCP, structured outputs, RAG, multi-agent architecture, async programming, Pydantic, SQLAlchemy, pytest, GitHub Actions, API design.
+Skills demonstrated: structured outputs, RAG, multi-agent architecture, async programming, Pydantic, SQLAlchemy, pytest, GitHub Actions, Discord bot UX, real-time multiplayer.
 
-Why this project: real personal need (friends want to play RPGs without a human DM), 100% aligned with Python/GenAI skillset, hot topics (AI gaming, agents, MCP), no open-source competitor combines deterministic engine + LLM narration + MCP + Discord multiplayer.
+Why this project: real personal need (friends want to play RPGs without a human DM), 100% aligned with Python/GenAI skillset, hot topics (AI gaming, agents), no open-source competitor combines deterministic engine + LLM narration + Discord multiplayer.
 
 -----
 
@@ -24,11 +24,11 @@ Why this project: real personal need (friends want to play RPGs without a human 
 
 ## Open source projects
 
-AI-DM, TD-LLM-DND, AIDM, dd-chatgpt-dm, aidnd: none combines deterministic engine + decoupled LLM narration + MCP + Discord multiplayer. Common weaknesses: LLM decides everything, memory loss in long sessions, no real mechanical rules.
+AI-DM, TD-LLM-DND, AIDM, dd-chatgpt-dm, aidnd: none combines deterministic engine + decoupled LLM narration + Discord multiplayer. Common weaknesses: LLM decides everything, memory loss in long sessions, no real mechanical rules.
 
 ## RealmAI-Engine positioning
 
-Unique on the combination: deterministic engine + LLM narration + MCP server + Discord multiplayer.
+Unique on the combination: deterministic engine + LLM narration + Discord multiplayer.
 
 -----
 
@@ -37,7 +37,6 @@ Unique on the combination: deterministic engine + LLM narration + MCP server + D
 |Component      |Technology                           |
 |---------------|-------------------------------------|
 |Discord bot    |discord.py 2.4+                      |
-|MCP server     |mcp Python SDK (official)            |
 |Data models    |Pydantic v2                          |
 |Persistence    |SQLAlchemy + SQLite                  |
 |Semantic memory|ChromaDB                             |
@@ -47,7 +46,7 @@ Unique on the combination: deterministic engine + LLM narration + MCP server + D
 |Typing         |mypy                                 |
 |CI/CD          |GitHub Actions                       |
 
-No LangChain — direct Ollama API (OpenAI-compatible) to demonstrate raw API mastery.
+No LangChain — direct Ollama API (OpenAI-compatible) to demonstrate raw API mastery. No MCP — Discord is the sole interface; MCP would add complexity without serving any real user.
 
 -----
 
@@ -202,11 +201,6 @@ realmAI-engine/
 │   ├── views/               # Combat buttons + select menus
 │   ├── embeds/              # Embed builders
 │   └── utils/               # Channel manager
-├── mcp_server/              # MCP server
-│   ├── server.py
-│   ├── tools.py
-│   ├── resources.py
-│   └── prompts.py
 ├── db/
 │   ├── models.py
 │   └── database.py
@@ -219,12 +213,6 @@ realmAI-engine/
 ├── CONTRIBUTING.md
 └── LICENSE (MIT)
 ```
-
-## 6.3 MCP server
-
-**Tools:** roll_dice, attack, cast_spell, get_inventory, search_lore, generate_npc, advance_quest
-**Resources:** character_sheets/*, world_state, combat_log, quest_journal
-**Prompts:** narrate_combat_result, describe_new_area, npc_dialogue
 
 -----
 
@@ -356,23 +344,21 @@ Cogs import engine functions directly — no intermediate abstraction layer.
 
 `manage_channels`, `manage_roles`, `send_messages`, `embed_links`, `use_external_emojis`
 
-## Phase 4 — MCP server + polish
+## Phase 4 — Polish + ship
 
-MCP server, README with GIFs, CI/CD, CONTRIBUTING.md, blog post.
+README with GIFs + architecture diagram, GitHub Actions CI/CD, real play sessions (3+ with friends), blog post / LinkedIn.
 
 -----
 
 # 12. CLAUDE CODE / COWORK SKILLS
 
-4 skills to create via skill-creator:
+3 skills to create via skill-creator:
 
 **`game-engine`**: Pydantic v2 conventions, simplified SRD 5e rules, ActionValidator pattern, ActionResult structure, pytest conventions. Triggers on: combat, dice, inventory, character, spells, conditions, HP, AC, engine/.
 
 **`ai-narrator`**: system prompt templates, Ollama API pattern, JSON structured outputs, 4-layer memory architecture, Context Assembler, multi-model config. Triggers on: narration, prompts, NPCs, quests, LLM memory, RAG, ChromaDB, Ollama.
 
 **`discord-bot-rpg`**: discord.py 2.4+ patterns (slash commands, Views, Modals, Embeds), Cogs, async interactions, embed formatting, multi-player sessions. Triggers on: slash commands, Discord buttons, embeds, modals, discord.py.
-
-**`mcp-server-builder`**: MCP Python SDK server pattern, tools/resources/prompts definition, MCP tests. Triggers on: MCP, Model Context Protocol, tools MCP, MCP server.
 
 -----
 
@@ -402,7 +388,6 @@ MCP server, README with GIFs, CI/CD, CONTRIBUTING.md, blog post.
 
 - [ ] Game engine functional, tests >80% coverage
 - [ ] Discord bot playable multiplayer (3-4 friends)
-- [ ] MCP server published and documented
 - [ ] At least 3 complete sessions played
 - [ ] GitHub README with GIFs, architecture diagram, quickstart
 - [ ] CI/CD working (GitHub Actions)

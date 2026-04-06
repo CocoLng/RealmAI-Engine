@@ -49,7 +49,7 @@ class WorldGenerator:
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
+        data = self._client.chat_json(self.MODEL, messages, temperature=0.8, think=True, num_predict=500)
         location = Location(
             name=str(data["name"]),
             description=str(data["description"]),

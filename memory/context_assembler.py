@@ -9,6 +9,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from ai.client import OllamaClient
 from engine.character import Character
 from engine.combat import CombatState
 from engine.inventory import Inventory
@@ -29,13 +30,12 @@ class ContextAssembler:
         self,
         session: Session,
         semantic_memory: SemanticMemory,
+        ollama_client: OllamaClient,
         budget: ContextBudget | None = None,
-        ollama_base_url: str = "http://localhost:11434/v1",
-        summarizer_model: str = "qwen3.5:9b",
     ) -> None:
         self._state_builder = StateBuilder(session)
         self._sliding_window = SlidingWindow(session)
-        self._summarizer = Summarizer(session, ollama_base_url, summarizer_model)
+        self._summarizer = Summarizer(session, ollama_client)
         self._semantic = semantic_memory
         self._budget = budget or ContextBudget()
 
