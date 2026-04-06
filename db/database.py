@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -39,6 +39,22 @@ def get_session_factory(engine: Engine | None = None) -> sessionmaker[Session]:
     return sessionmaker(bind=engine)
 
 
+def _migrate_schema(engine: Engine) -> None:
+    """Add columns introduced after initial schema creation.
+
+    SQLAlchemy's create_all() only creates missing tables, not missing columns.
+    This handles incremental column additions for existing databases.
+    """
+    with engine.connect() as conn:
+        result = conn.execute(text("PRAGMA table_info(campaigns)"))
+        columns = {row[1] for row in result}
+        if "combat_state_json" not in columns:
+            conn.execute(
+                text("ALTER TABLE campaigns ADD COLUMN combat_state_json TEXT")
+            )
+            conn.commit()
+
+
 def init_db(engine: Engine | None = None) -> None:
     """Create all tables. Creates data/ directory if needed."""
     if engine is None:
@@ -47,3 +63,4 @@ def init_db(engine: Engine | None = None) -> None:
     if ":memory:" not in url_str:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    _migrate_schema(engine)

@@ -19,6 +19,7 @@ class CampaignRow(Base):
     player_names: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     current_location: Mapped[str | None] = mapped_column(String, nullable=True)
     interaction_count: Mapped[int] = mapped_column(default=0)
+    combat_state_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class NPCRow(Base):
