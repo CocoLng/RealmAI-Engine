@@ -5,6 +5,10 @@ and accepts in-memory objects (Character, CombatState, Inventory) to build
 a compact GameStateSummary for prompt injection.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from sqlalchemy.orm import Session
 
 from db.repositories.campaign_repo import CampaignRepository
@@ -20,6 +24,9 @@ from memory.models import (
     GameStateSummary,
 )
 from memory.token_utils import truncate_to_tokens
+
+if TYPE_CHECKING:
+    from world.story_arc import StoryArc
 
 
 class StateBuilder:
@@ -37,6 +44,7 @@ class StateBuilder:
         player_characters: list[Character] | None = None,
         combat_state: CombatState | None = None,
         inventories: dict[str, Inventory] | None = None,
+        story_arc: StoryArc | None = None,
     ) -> GameStateSummary:
         """Build a GameStateSummary from all structured data sources."""
         campaign = self._campaign_repo.get_by_id(campaign_id)
@@ -126,6 +134,20 @@ class StateBuilder:
                 ]
                 inventory_highlights.extend(notable)
 
+        # Story arc context
+        current_story_beat = ""
+        upcoming_story_beat = ""
+        villain_context = ""
+        if story_arc and story_arc.beats:
+            idx = story_arc.current_beat_index
+            beat = story_arc.beats[idx]
+            current_story_beat = f"{beat.title} — {beat.description}"
+            if idx + 1 < len(story_arc.beats):
+                upcoming_story_beat = story_arc.beats[idx + 1].title
+            villain_context = (
+                f"{story_arc.villain_name} — {story_arc.villain_motivation}"
+            )
+
         return GameStateSummary(
             campaign_name=campaign.name,
             current_location=current_location,
@@ -135,6 +157,9 @@ class StateBuilder:
             active_quests=active_quests,
             combat=combat_summary,
             inventory_highlights=inventory_highlights,
+            current_story_beat=current_story_beat,
+            upcoming_story_beat=upcoming_story_beat,
+            villain_context=villain_context,
         )
 
     def render(self, summary: GameStateSummary, max_tokens: int = 450) -> str:
@@ -177,6 +202,14 @@ class StateBuilder:
             lines.append(
                 f"Notable Items: {', '.join(summary.inventory_highlights)}"
             )
+
+        if summary.current_story_beat:
+            lines.append("[STORY ARC]")
+            lines.append(f"Current: {summary.current_story_beat}")
+            if summary.upcoming_story_beat:
+                lines.append(f"Next: {summary.upcoming_story_beat}")
+            if summary.villain_context:
+                lines.append(f"Villain: {summary.villain_context}")
 
         text = "\n".join(lines)
         return truncate_to_tokens(text, max_tokens)

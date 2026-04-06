@@ -8,6 +8,7 @@ from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
 from db.repositories.player_character_repo import PlayerCharacterRepository
 from db.repositories.quest_repo import QuestRepository
+from db.repositories.story_arc_repo import StoryArcRepository
 from db.repositories.summary_repo import SummaryRepository
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "NPCRepository",
     "PlayerCharacterRepository",
     "QuestRepository",
+    "StoryArcRepository",
     "SummaryRepository",
 ]

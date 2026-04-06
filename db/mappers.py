@@ -16,6 +16,8 @@ from world.quest import Quest, QuestObjective, QuestStatus
 
 from memory.models import CompressedSummary, ExchangeRole, NarrativeExchange
 
+from world.story_arc import StoryArc
+
 from bot.config import GuildConfig
 from db.models import (
     CampaignChannelRow,
@@ -26,6 +28,7 @@ from db.models import (
     NPCRow,
     PlayerCharacterRow,
     QuestRow,
+    StoryArcRow,
     SummaryRow,
 )
 
@@ -317,3 +320,21 @@ def campaign_channel_from_db(row: CampaignChannelRow) -> tuple[int, str, int]:
         Tuple of (channel_id, campaign_id, guild_id).
     """
     return row.channel_id, row.campaign_id, row.guild_id
+
+
+# ---------------------------------------------------------------------------
+# StoryArc
+# ---------------------------------------------------------------------------
+
+
+def story_arc_to_db(arc: StoryArc) -> StoryArcRow:
+    """Convert a StoryArc domain model to a DB row."""
+    return StoryArcRow(
+        campaign_id=arc.campaign_id,
+        arc_json=arc.model_dump_json(),
+    )
+
+
+def story_arc_from_db(row: StoryArcRow) -> StoryArc:
+    """Convert a StoryArcRow to a StoryArc domain model."""
+    return StoryArc.model_validate_json(row.arc_json)

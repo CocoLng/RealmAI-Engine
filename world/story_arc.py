@@ -1,0 +1,43 @@
+"""Story arc domain model.
+
+Represents the narrative plan for a campaign — a sequence of story beats
+from introduction through resolution.
+"""
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class StoryBeat(BaseModel):
+    """One narrative step in the campaign arc."""
+
+    beat_number: int = Field(ge=1, le=20)
+    title: str = Field(min_length=1)
+    description: str
+    location_hint: str
+    npc_names: list[str] = Field(default_factory=list)
+    encounter_type: Literal["social", "combat", "exploration", "puzzle", "boss"]
+    is_twist: bool = False
+
+
+class StoryArc(BaseModel):
+    """Complete narrative arc for a campaign."""
+
+    campaign_id: str
+    theme: str
+    premise: str = Field(min_length=10)
+    beats: list[StoryBeat] = Field(min_length=8, max_length=20)
+    current_beat_index: int = Field(default=0, ge=0)
+    villain_name: str
+    villain_motivation: str
+
+
+def advance_beat(arc: StoryArc) -> StoryArc:
+    """Return a new StoryArc with current_beat_index incremented.
+
+    Idempotent at the last beat — returns unchanged arc.
+    """
+    if arc.current_beat_index >= len(arc.beats) - 1:
+        return arc
+    return arc.model_copy(update={"current_beat_index": arc.current_beat_index + 1})

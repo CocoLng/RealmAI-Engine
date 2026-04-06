@@ -45,6 +45,9 @@ class GameStateSummary(BaseModel):
     active_quests: list[str] = Field(default_factory=list)
     combat: CombatSummary | None = None
     inventory_highlights: list[str] = Field(default_factory=list)
+    current_story_beat: str = ""
+    upcoming_story_beat: str = ""
+    villain_context: str = ""
 
 
 # ---------------------------------------------------------------------------

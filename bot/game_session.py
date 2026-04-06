@@ -13,6 +13,7 @@ from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC
 from world.quest import Quest
+from world.story_arc import StoryArc
 
 from ai.client import OllamaClient, OllamaUnavailableError
 from ai.interpreter import Interpreter
@@ -38,6 +39,7 @@ class GameSession:
     current_location: Location | None = None
     npcs: dict[str, NPC] = field(default_factory=dict)
     quests: list[Quest] = field(default_factory=list)
+    story_arc: StoryArc | None = None
     language: str = "fr"
 
     # AI services — None if Ollama is unavailable

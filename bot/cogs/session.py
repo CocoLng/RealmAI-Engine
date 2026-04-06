@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import uuid
@@ -13,8 +12,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot.campaign_launcher import CampaignLauncher
 from bot.config import GuildConfig
-from bot.embeds.narrative_embed import build_narrative_embed
 from bot.game_session import GameSession, create_ai_services
 from bot.utils.channel_manager import archive_channel, create_session_channel
 from db.repositories import (
@@ -25,6 +24,7 @@ from db.repositories import (
     NPCRepository,
     PlayerCharacterRepository,
     QuestRepository,
+    StoryArcRepository,
 )
 from world.campaign import Campaign
 
@@ -128,36 +128,18 @@ class SessionCog(commands.Cog):
         finally:
             db_session.close()
 
-        # Create in-memory game session
-        session = GameSession(campaign=campaign, language=language)
-        create_ai_services(session)
+        # Create launcher (orchestrates onboarding before gameplay)
+        launcher = CampaignLauncher(
+            bot=self.bot,
+            campaign=campaign,
+            channel=channel,
+            player_ids=player_ids,
+            language=language,
+        )
+        self.bot.launchers[channel.id] = launcher
 
-        # Generate initial location via AI (best-effort)
-        if session.ollama_client:
-            try:
-                from ai.world_generator import WorldGenerator
-
-                gen = WorldGenerator(session.ollama_client)
-                location = await asyncio.to_thread(
-                    gen.generate,
-                    campaign_context=f"New campaign: {theme}",
-                    location_type="starting_area",
-                    language=session.language,
-                )
-                session.current_location = location
-                campaign.current_location = location.name
-
-                db_session = self.bot.db_factory()
-                try:
-                    LocationRepository(db_session).save(location, campaign.id)
-                    CampaignRepository(db_session).update(campaign)
-                    db_session.commit()
-                finally:
-                    db_session.close()
-            except Exception:
-                logger.warning("Failed to generate initial location", exc_info=True)
-
-        self.bot.sessions[channel.id] = session
+        # Start background AI tasks (arc + location generation)
+        launcher.start_background_tasks()
 
         player_mentions = ", ".join(str(uid) for uid in player_ids)
         logger.info(
@@ -166,12 +148,8 @@ class SessionCog(commands.Cog):
             guild.name, channel.name,
         )
 
-        # Welcome message in the new channel
-        desc = "Bienvenue, aventuriers !"
-        if session.current_location:
-            desc = session.current_location.description or desc
-        embed = build_narrative_embed(desc, f"Campagne: {theme}", "dramatic")
-        await channel.send(embed=embed)
+        # Send welcome embed + onboarding view in the new channel
+        await launcher.start()
 
         await interaction.followup.send(f"Campagne lancee dans {channel.mention} !")
 
@@ -241,6 +219,10 @@ class SessionCog(commands.Cog):
             # Load quests
             quest_repo = QuestRepository(db_session)
             quests = quest_repo.list_by_campaign(campaign_id)
+
+            # Load story arc
+            arc_repo = StoryArcRepository(db_session)
+            story_arc = arc_repo.get_by_campaign(campaign_id)
         finally:
             db_session.close()
 
@@ -257,6 +239,7 @@ class SessionCog(commands.Cog):
             combat_state=combat_state,
             npcs={npc.name: npc for npc in npcs},
             quests=quests,
+            story_arc=story_arc,
             language=language,
         )
         for user_id, char, inv, spell in pc_rows:
@@ -441,6 +424,14 @@ class SessionCog(commands.Cog):
                     quest_repo.update(quest, session.campaign.id)
                 except ValueError:
                     quest_repo.save(quest, session.campaign.id)
+
+            # Story arc
+            if session.story_arc:
+                arc_repo = StoryArcRepository(db_session)
+                try:
+                    arc_repo.update(session.story_arc)
+                except ValueError:
+                    arc_repo.save(session.story_arc)
 
             db_session.commit()
         finally:

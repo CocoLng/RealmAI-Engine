@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from bot.campaign_launcher import CampaignLauncher
 from bot.game_session import GameSession
 from bot.logging_config import setup_logging
 from db.database import get_engine, get_session_factory, init_db
@@ -32,6 +33,7 @@ class RealmBot(commands.Bot):
 
     db_factory: sessionmaker[Session]
     sessions: dict[int, GameSession]  # channel_id → active GameSession
+    launchers: dict[int, CampaignLauncher]  # channel_id → onboarding in progress
 
     def __init__(self) -> None:
         intents = discord.Intents.default()
@@ -43,6 +45,7 @@ class RealmBot(commands.Bot):
         init_db(engine)
         self.db_factory = get_session_factory(engine)
         self.sessions = {}
+        self.launchers = {}
 
     def get_session(self, channel_id: int | None) -> GameSession | None:
         """Get the active game session for a channel, or None."""

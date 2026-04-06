@@ -151,3 +151,16 @@ class CampaignChannelRow(Base):
         unique=True,
     )
     guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class StoryArcRow(Base):
+    """Story arc for a campaign (1:1 with campaigns)."""
+
+    __tablename__ = "story_arcs"
+
+    campaign_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    arc_json: Mapped[str] = mapped_column(Text, nullable=False)

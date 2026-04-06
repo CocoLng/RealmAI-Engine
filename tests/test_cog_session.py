@@ -45,6 +45,7 @@ def bot(db_session: Session) -> MagicMock:
     """Mock RealmBot that returns a real DB session."""
     mock_bot = MagicMock()
     mock_bot.sessions = {}
+    mock_bot.launchers = {}
     mock_bot.get_session = lambda cid: mock_bot.sessions.get(cid)
     mock_bot.db_factory = MagicMock(return_value=db_session)
     return mock_bot
@@ -138,12 +139,12 @@ class TestStartCampaign:
     """Tests for the /start_campaign command."""
 
     @pytest.mark.asyncio
-    @patch("bot.cogs.session.create_ai_services")
+    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
     @patch("bot.cogs.session.create_session_channel")
     async def test_creates_campaign_and_channel(
         self,
         mock_create_channel: AsyncMock,
-        mock_ai: MagicMock,
+        mock_bg_tasks: MagicMock,
         cog: SessionCog,
         interaction: AsyncMock,
         db_session: Session,
@@ -163,14 +164,14 @@ class TestStartCampaign:
         mock_create_channel.assert_called_once()
         # Welcome embed sent in new channel
         mock_channel.send.assert_called_once()
-        # Session stored in bot
-        assert 999000 in cog.bot.sessions
-        session = cog.bot.sessions[999000]
-        assert session.campaign.name == "Foret sombre"
+        # Launcher stored in bot (session is created later, after onboarding)
+        assert 999000 in cog.bot.launchers
+        launcher = cog.bot.launchers[999000]
+        assert launcher.campaign.name == "Foret sombre"
         # Invoker added to player list
-        assert str(USER_ID) in session.campaign.player_names
+        assert str(USER_ID) in launcher.campaign.player_names
         # Campaign persisted
-        camp = CampaignRepository(db_session).get_by_id(session.campaign.id)
+        camp = CampaignRepository(db_session).get_by_id(launcher.campaign.id)
         assert camp is not None
         assert camp.name == "Foret sombre"
         # Channel mapping persisted
@@ -197,12 +198,12 @@ class TestStartCampaign:
         assert any(c[1].get("ephemeral") is True for c in calls)
 
     @pytest.mark.asyncio
-    @patch("bot.cogs.session.create_ai_services")
+    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
     @patch("bot.cogs.session.create_session_channel")
     async def test_invoker_not_duplicated(
         self,
         mock_create_channel: AsyncMock,
-        mock_ai: MagicMock,
+        mock_bg_tasks: MagicMock,
         cog: SessionCog,
         interaction: AsyncMock,
     ) -> None:
@@ -215,9 +216,9 @@ class TestStartCampaign:
 
         # Invoker mentions themselves
         await cog.start_campaign.callback(cog, interaction, "Theme", f"<@{USER_ID}> <@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
-        session = cog.bot.sessions[999001]
+        launcher = cog.bot.launchers[999001]
         # USER_ID should appear only once
-        assert session.campaign.player_names.count(str(USER_ID)) == 1
+        assert launcher.campaign.player_names.count(str(USER_ID)) == 1
 
 
 # ---------------------------------------------------------------------------
