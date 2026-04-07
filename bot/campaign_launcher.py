@@ -10,16 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+import time
 from dataclasses import dataclass, field
-from enum import StrEnum
-from typing import TYPE_CHECKING, TypeVar
+from enum import IntEnum, StrEnum
+from typing import TYPE_CHECKING
 
 import discord
 
 from bot.embeds.narrative_embed import build_narrative_embed
+from bot.embeds.scene_embed import build_scene_embed
 from bot.game_session import GameSession, create_ai_services
 from bot.i18n import CLASS_LABELS, RACE_LABELS, get_kit_label, get_label
+from bot.llm_retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS, retry_llm_call
 from bot.views.character_create_view import CharacterCreateView
 from bot.views.start_onboarding_view import StartOnboardingView
 from bot.views.starter_gear_view import StarterGearView
@@ -37,16 +39,19 @@ from world.location import Location
 from world.story_arc import StoryArc
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import TypeVar
+
     from ai.client import OllamaClient
     from bot.bot import RealmBot
 
+    T = TypeVar("T")
+
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
-# Retry configuration for LLM calls
-MAX_RETRIES = 2
-RETRY_DELAYS = [5.0, 15.0]  # seconds between retries
+# Retry configuration for LLM calls (re-exported for tests / external callers)
+MAX_RETRIES = DEFAULT_MAX_RETRIES
+RETRY_DELAYS = list(DEFAULT_RETRY_DELAYS)
 
 
 class PlayerProgress(StrEnum):
@@ -55,6 +60,16 @@ class PlayerProgress(StrEnum):
     PENDING = "pending"
     CHARACTER_DONE = "character_done"
     GEAR_DONE = "gear_done"
+
+
+class GenerationPhase(IntEnum):
+    """Tracks background LLM generation state for observability."""
+
+    PENDING  = 0
+    ARC      = 1
+    LOCATION = 2
+    READY    = 3
+    FAILED   = 4
 
 
 @dataclass
@@ -82,6 +97,13 @@ class CampaignLauncher:
     )
     _generation_failed: bool = field(default=False, repr=False)
     _launched: bool = field(default=False, repr=False)
+    _generation_phase: GenerationPhase = field(
+        default=GenerationPhase.PENDING, repr=False,
+    )
+    _notified_ollama_waiting: bool = field(default=False, repr=False)
+    _notified_generation_ready: bool = field(default=False, repr=False)
+    _notified_players_ready: bool = field(default=False, repr=False)
+    _gen_start: float = field(default=0.0, repr=False)
 
     def __post_init__(self) -> None:
         for uid in self.player_ids:
@@ -121,8 +143,12 @@ class CampaignLauncher:
                 self.campaign.id,
             )
             self._generation_failed = True
+            self._generation_phase = GenerationPhase.FAILED
+            # Notify players instead of failing silently
+            asyncio.create_task(self._notify_generation_failed())
             return
 
+        self._gen_start = time.monotonic()
         self._generation_task = self._safe_create_task(
             self._run_generation(client),
         )
@@ -294,6 +320,9 @@ class CampaignLauncher:
         world_gen = WorldGenerator(client)
 
         # --- Arc generation (mandatory) ---
+        self._generation_phase = GenerationPhase.ARC
+        arc_start = time.monotonic()
+        logger.info("GENERATION arc_start campaign=%s", self.campaign.id)
         try:
             arc = await self._retry_llm_call(
                 lambda: arc_gen.generate(
@@ -303,8 +332,9 @@ class CampaignLauncher:
                 ),
             )
         except OllamaUnavailableError:
+            self._generation_phase = GenerationPhase.FAILED
             logger.error(
-                "Arc generation failed after retries for campaign %s",
+                "GENERATION failed campaign=%s phase=ARC reason=OllamaUnavailableError",
                 self.campaign.id,
             )
             await self._notify_generation_failed()
@@ -314,12 +344,16 @@ class CampaignLauncher:
             update={"campaign_id": self.campaign.id},
         )
         logger.info(
-            "Story arc generated for campaign %s (%d beats)",
+            "GENERATION arc_done campaign=%s elapsed=%.1fs beats=%d",
             self.campaign.id,
+            time.monotonic() - arc_start,
             len(self.story_arc.beats),
         )
 
         # --- Location generation (mandatory, uses arc context) ---
+        self._generation_phase = GenerationPhase.LOCATION
+        loc_start = time.monotonic()
+        logger.info("GENERATION loc_start campaign=%s", self.campaign.id)
         arc_context = (
             f"Campaign: {self.campaign.name}. "
             f"Villain: {self.story_arc.villain_name}. "
@@ -334,8 +368,9 @@ class CampaignLauncher:
                 ),
             )
         except OllamaUnavailableError:
+            self._generation_phase = GenerationPhase.FAILED
             logger.error(
-                "Location generation failed after retries for campaign %s",
+                "GENERATION failed campaign=%s phase=LOCATION reason=OllamaUnavailableError",
                 self.campaign.id,
             )
             await self._notify_generation_failed()
@@ -343,42 +378,48 @@ class CampaignLauncher:
 
         self.current_location = location
         self.campaign.current_location = location.name
-        logger.info("Starting location generated: %s", location.name)
+        self._generation_phase = GenerationPhase.READY
+        logger.info(
+            "GENERATION loc_done campaign=%s elapsed=%.1fs location=%r",
+            self.campaign.id,
+            time.monotonic() - loc_start,
+            location.name,
+        )
+        logger.info(
+            "GENERATION total campaign=%s elapsed=%.1fs",
+            self.campaign.id,
+            time.monotonic() - self._gen_start,
+        )
 
         # Both succeeded — check if players are ready
         await self._check_ready()
 
-    async def _retry_llm_call(self, fn: Callable[[], T]) -> T:
-        """Retry a blocking LLM call with backoff.
+    async def _retry_llm_call(self, fn: "Callable[[], T]") -> "T":
+        """Retry a blocking LLM call with backoff and player-facing notice.
 
-        Runs *fn* in a thread.  On OllamaUnavailableError, retries up to
-        MAX_RETRIES times with RETRY_DELAYS between attempts.  Re-raises
-        on final failure.
+        Delegates to the shared :func:`bot.llm_retry.retry_llm_call` helper,
+        adding a one-shot Discord notification on the first retry.
         """
-        from ai.client import OllamaUnavailableError
+        async def _on_retry(_attempt: int) -> None:
+            if not self._notified_ollama_waiting:
+                self._notified_ollama_waiting = True
+                await self.channel.send(
+                    "⚠️ Génération en attente — Game Master est occupé. "
+                    "Nouvelle tentative en cours, la campagne démarrera automatiquement.",
+                )
 
-        last_exc: OllamaUnavailableError | None = None
-        for attempt in range(1 + MAX_RETRIES):
-            if attempt > 0:
-                delay = RETRY_DELAYS[attempt - 1]
-                logger.info(
-                    "LLM retry %d/%d in %.0fs for campaign %s",
-                    attempt, MAX_RETRIES, delay, self.campaign.id,
-                )
-                await asyncio.sleep(delay)
-            try:
-                return await asyncio.to_thread(fn)
-            except OllamaUnavailableError as exc:
-                last_exc = exc
-                logger.warning(
-                    "LLM call attempt %d failed for campaign %s: %s",
-                    attempt + 1, self.campaign.id, exc,
-                )
-        raise last_exc  # type: ignore[misc]
+        return await retry_llm_call(
+            fn,
+            max_retries=MAX_RETRIES,
+            delays=tuple(RETRY_DELAYS),
+            on_retry=_on_retry,
+            log_label=f"GENERATION campaign={self.campaign.id}",
+        )
 
     async def _notify_generation_failed(self) -> None:
         """Mark generation as failed and notify the channel."""
         self._generation_failed = True
+        self._generation_phase = GenerationPhase.FAILED
         await self.channel.send(
             "Ollama est indisponible. Impossible de demarrer la campagne. "
             "Verifiez que le serveur Ollama est en cours d'execution, "
@@ -408,6 +449,18 @@ class CampaignLauncher:
             "ONBOARD check all_ready=%s arc_done=%s campaign=%s",
             all_ready, generation_done, self.campaign.id,
         )
+
+        if all_ready and not generation_done and not self._notified_players_ready:
+            self._notified_players_ready = True
+            await self.channel.send(
+                "✅ Tous les joueurs sont prêts ! Génération de l'univers en cours...",
+            )
+
+        if generation_done and not all_ready and not self._notified_generation_ready:
+            self._notified_generation_ready = True
+            await self.channel.send(
+                "✅ Univers généré ! En attente des joueurs...",
+            )
 
         if not all_ready or not generation_done:
             return
@@ -454,6 +507,23 @@ class CampaignLauncher:
         finally:
             db_session.close()
 
+        # Write the static story-bible header now that every plan element is
+        # frozen. Failure is logged but non-fatal — gameplay must not block
+        # on an audit artefact.
+        if session.story_bible is not None:
+            try:
+                session.story_bible.write_header(
+                    campaign=self.campaign,
+                    story_arc=self.story_arc,
+                    location=self.current_location,
+                    characters=self.characters,
+                )
+            except Exception:
+                logger.warning(
+                    "story_bible write_header failed for campaign=%s",
+                    self.campaign.id, exc_info=True,
+                )
+
         # Move from launchers to sessions
         self.bot.sessions[self.channel.id] = session
         self.bot.launchers.pop(self.channel.id, None)
@@ -468,6 +538,28 @@ class CampaignLauncher:
 
         embed = build_narrative_embed(desc, f"Campagne : {self.campaign.name}", "dramatic")
         await self.channel.send(embed=embed)
+
+        # Lot A — scene awareness: post a structured scene embed so players
+        # know who/what is in front of them. Without this, players type
+        # generic phrases like "le villageois" against names like
+        # "Jeanne, la Villageoise Terrifiée" and the resolver fails.
+        if self.current_location is not None:
+            scene_embed = build_scene_embed(
+                location=self.current_location,
+                language=self.language,
+            )
+            await self.channel.send(embed=scene_embed)
+            logger.info(
+                "SCENE posted campaign=%s location=%s npcs=%d",
+                self.campaign.id,
+                self.current_location.name,
+                len(self.current_location.npcs_present),
+            )
+        else:
+            logger.debug(
+                "SCENE skipped campaign=%s reason=no_current_location",
+                self.campaign.id,
+            )
 
         player_count = len(self.characters)
         logger.info(
