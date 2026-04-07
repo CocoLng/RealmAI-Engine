@@ -31,9 +31,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import TYPE_CHECKING, ClassVar, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -43,8 +44,9 @@ from ai.models import InterpretedAction, NarrativeResult
 from ai.narrator import Narrator
 from ai.scene_context import SceneContext, build_scene_context
 from bot.llm_retry import retry_llm_call
-from engine.combat import CombatState
-from engine.inventory import Inventory
+from engine.character import Character
+from engine.combat import CombatState, TrivialResolveResult, trivial_resolve
+from engine.inventory import EquipmentSlot, Inventory, Weapon
 from engine.validators import (
     Action,
     ActionType,
@@ -54,7 +56,8 @@ from engine.validators import (
     validate_exploration_action,
 )
 from world.location import Location
-from world.npc import NPC
+from world.npc import NPC, NPCDisposition
+from world.story_arc import StoryBeat
 
 if TYPE_CHECKING:
     from bot.game_session import GameSession
@@ -88,6 +91,7 @@ class ActionPipelineResult(BaseModel):
     tone: Literal["dramatic", "tense", "humorous", "somber"]
     mechanics_text: str
     interpreted_action: InterpretedAction
+    new_beat: StoryBeat | None = None
 
 
 class AmbiguityResult(BaseModel):
@@ -116,6 +120,20 @@ PipelineOutput = ActionPipelineResult | AmbiguityResult | UnknownEntityResult
 ProgressCallback = Callable[[PipelinePhase], Awaitable[None]]
 
 
+def _persist_story_arc(db_factory: Callable[[], Any], arc: Any) -> None:
+    """Persist a StoryArc update via :class:`StoryArcRepository`."""
+    if arc is None:
+        return
+    from db.repositories.story_arc_repo import StoryArcRepository
+
+    db_session = db_factory()
+    try:
+        StoryArcRepository(db_session).update(arc)
+        db_session.commit()
+    finally:
+        db_session.close()
+
+
 # ---------------------------------------------------------------------------
 # ActionPipeline
 # ---------------------------------------------------------------------------
@@ -140,17 +158,9 @@ class ActionPipeline:
     combat_state: CombatState | None = None
     inventory: Inventory | None = None
     session: "GameSession | None" = None
+    db_factory: Callable[[], Any] | None = None
 
-    _session_locks: ClassVar[dict[str, asyncio.Lock]] = {}
-
-    @classmethod
-    def _get_lock(cls, campaign_id: str) -> asyncio.Lock:
-        """Return (creating if needed) the per-campaign action lock."""
-        lock = cls._session_locks.get(campaign_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            cls._session_locks[campaign_id] = lock
-        return lock
+    _trivial_kill_mechanics: str | None = field(default=None, init=False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -251,20 +261,19 @@ class ActionPipeline:
             )
 
         await self._emit(progress_callback, PipelinePhase.VALIDATING)
-        async with self._get_lock(self.campaign_id):
-            validation = self._validate(interpreted)
-            if not validation.is_valid:
-                refusal = await self._narrate_rule_failure(interpreted, validation)
-                return UnknownEntityResult(
-                    field_name="rule",
-                    raw_value=validation.error_message or "",
-                    partial_action=interpreted,
-                    refusal_narrative=refusal.narrative,
-                    tone=refusal.tone,
-                )
+        validation = self._validate(interpreted)
+        if not validation.is_valid:
+            refusal = await self._narrate_rule_failure(interpreted, validation)
+            return UnknownEntityResult(
+                field_name="rule",
+                raw_value=validation.error_message or "",
+                partial_action=interpreted,
+                refusal_narrative=refusal.narrative,
+                tone=refusal.tone,
+            )
 
-            await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)
-            mechanics_text = self._resolve_mechanics(interpreted)
+        await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)
+        mechanics_text = await self._resolve_mechanics(interpreted)
 
         await self._emit(progress_callback, PipelinePhase.ASSEMBLING_CONTEXT)
         context_prompt = self._assemble_context(interpreted)
@@ -275,12 +284,46 @@ class ActionPipeline:
             context_prompt=context_prompt,
         )
 
+        # Lot D — beat advancement check after every resolved action.
+        new_beat: StoryBeat | None = None
+        if self.session is not None and hasattr(
+            self.session, "advance_beat_if_ready",
+        ):
+            try:
+                candidate = self.session.advance_beat_if_ready()
+            except Exception:
+                logger.exception(
+                    "BEAT advance check failed campaign=%s", self.campaign_id,
+                )
+                candidate = None
+            if isinstance(candidate, StoryBeat):
+                new_beat = candidate
+            if new_beat is not None and self.db_factory is not None:
+                try:
+                    await asyncio.to_thread(
+                        _persist_story_arc,
+                        self.db_factory,
+                        self.session.story_arc,
+                    )
+                    logger.info(
+                        "BEAT advanced campaign=%s to=%d title=%r",
+                        self.campaign_id,
+                        self.session.story_arc.current_beat_index
+                        if self.session.story_arc is not None else -1,
+                        new_beat.title,
+                    )
+                except Exception:
+                    logger.exception(
+                        "BEAT persist failed campaign=%s", self.campaign_id,
+                    )
+
         await self._emit(progress_callback, PipelinePhase.DONE)
         return ActionPipelineResult(
             narrative=narration.narrative,
             tone=narration.tone,
             mechanics_text=mechanics_text,
             interpreted_action=interpreted,
+            new_beat=new_beat,
         )
 
     # ------------------------------------------------------------------
@@ -345,14 +388,17 @@ class ActionPipeline:
             and self.session is not None
         ):
             target_npc = self.npcs[action.target_name]
-            if not self._should_trivial_resolve(target_npc):
-                self.combat_state = self._bootstrap_combat_against(target_npc)
-                self.session.combat_state = self.combat_state
-                logger.info(
-                    "COMBAT bootstrapped from_action campaign=%s attacker=%s target=%s",
-                    self.campaign_id, self.actor_name, target_npc.name,
-                )
-            # else: TODO(Lot E) trivial_resolve(attacker, target_npc)
+            if self._should_trivial_resolve(target_npc):
+                self._trivial_kill(target_npc)
+                # Skip the combat-state validation below — the action is
+                # already fully resolved.
+                return ValidationResult(is_valid=True)
+            self.combat_state = self._bootstrap_combat_against(target_npc)
+            self.session.combat_state = self.combat_state
+            logger.info(
+                "COMBAT bootstrapped from_action campaign=%s attacker=%s target=%s",
+                self.campaign_id, self.actor_name, target_npc.name,
+            )
 
         if self.combat_state is None:
             return ValidationResult(
@@ -364,10 +410,185 @@ class ActionPipeline:
         return validate_action(eng_action, self.combat_state)
 
     def _should_trivial_resolve(self, npc: NPC) -> bool:
-        """Hook for Lot E (trivial NPC death). For Lot C, always False."""
-        # TODO(Lot E): return True when the NPC is trivially overmatched
-        # (e.g. unarmed commoner, peaceful disposition, no class levels).
-        return False
+        """Decide whether an attack on ``npc`` skips the combat round system.
+
+        Trivial resolution applies to peaceful, defenseless NPCs that an
+        adventurer would obviously overpower in one swing. We deliberately
+        exclude HOSTILE / UNFRIENDLY NPCs (they fight back) and anything
+        with non-trivial HP.
+        """
+        if not npc.is_alive:
+            return False
+        if npc.disposition in (
+            NPCDisposition.HOSTILE,
+            NPCDisposition.UNFRIENDLY,
+        ):
+            return False
+        if npc.max_hp >= 10:
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Lot E — trivial NPC death
+    # ------------------------------------------------------------------
+
+    def _trivial_kill(self, target_npc: NPC) -> None:
+        """Auto-resolve an attack against ``target_npc`` and propagate death."""
+        attacker_pc = self._find_attacker_character()
+        if attacker_pc is None:
+            # No matching PC — fall back to the regular bootstrap path by
+            # leaving _trivial_kill_mechanics unset and letting the caller
+            # treat this as combat. Should not happen in practice.
+            logger.warning(
+                "TRIVIAL_KILL no attacker character matched campaign=%s actor=%s",
+                self.campaign_id, self.actor_name,
+            )
+            return
+
+        weapon = self._find_attacker_weapon(attacker_pc)
+        result = trivial_resolve(attacker_pc, target_npc, weapon=weapon)
+        self._trivial_kill_mechanics = result.description
+        logger.info(
+            "TRIVIAL_KILL campaign=%s attacker=%s target=%s hit=%s damage=%d killed=%s",
+            self.campaign_id, attacker_pc.name, target_npc.name,
+            result.hit, result.damage, result.target_killed,
+        )
+        if result.target_killed:
+            self._handle_npc_death(target_npc, killer=attacker_pc, result=result)
+
+    def _find_attacker_character(self) -> Character | None:
+        """Look up the Character object whose name matches ``actor_name``."""
+        if self.session is None:
+            return None
+        for char in self.session.characters.values():
+            if char.name == self.actor_name:
+                return char
+        return None
+
+    def _find_attacker_weapon(self, attacker_pc: Character) -> Weapon | None:
+        """Return the attacker's main-hand weapon if any."""
+        if self.session is None:
+            return None
+        for user_id, char in self.session.characters.items():
+            if char is attacker_pc:
+                inv = self.session.inventories.get(user_id)
+                if inv is None:
+                    return None
+                weapon = inv.equipped.get(EquipmentSlot.MAIN_HAND)
+                if isinstance(weapon, Weapon):
+                    return weapon
+                return None
+        return None
+
+    def _handle_npc_death(
+        self,
+        npc: NPC,
+        *,
+        killer: Character,
+        result: TrivialResolveResult,
+    ) -> None:
+        """Propagate an NPC death across world state."""
+        # 1. Idempotent kill (trivial_resolve already did it).
+        npc.kill()
+
+        # 2. Remove from the live location's npcs_present and from the
+        #    in-memory NPC dict so the next scene context doesn't list them.
+        location = self.location
+        if location is not None:
+            location.npcs_present = [
+                n for n in location.npcs_present if n != npc.name
+            ]
+        self.npcs.pop(npc.name, None)
+
+        # 3. Witnesses: friendly NPCs in the same location turn HOSTILE.
+        witnesses_turned: list[NPC] = []
+        for other in list(self.npcs.values()):
+            if other.disposition in (
+                NPCDisposition.FRIENDLY,
+                NPCDisposition.ALLIED,
+            ):
+                other.disposition = NPCDisposition.HOSTILE
+                witnesses_turned.append(other)
+
+        # 4. Persist DB state if a db_factory is wired.
+        if self.db_factory is not None:
+            try:
+                self._persist_death(npc, location, witnesses_turned)
+            except Exception:
+                logger.exception(
+                    "TRIVIAL_KILL persistence failed campaign=%s npc=%s",
+                    self.campaign_id, npc.name,
+                )
+
+        # 5. Append a world-fact line to the per-campaign markdown log.
+        try:
+            self._append_world_fact(killer=killer, victim=npc, location=location)
+        except Exception:
+            logger.exception(
+                "TRIVIAL_KILL world-fact write failed campaign=%s",
+                self.campaign_id,
+            )
+
+        # 6. Story bible event line.
+        if (
+            self.session is not None
+            and self.session.story_bible is not None
+        ):
+            try:
+                self.session.story_bible.log_event(
+                    f"⚔️ MEURTRE — {killer.name} a tué {npc.name} "
+                    f"dans {location.name if location else 'un lieu inconnu'}.",
+                )
+            except Exception:
+                logger.exception(
+                    "TRIVIAL_KILL story bible log failed campaign=%s",
+                    self.campaign_id,
+                )
+
+        logger.info(
+            "NPC killed campaign=%s npc=%s killer=%s witnesses_turned_hostile=%d",
+            self.campaign_id, npc.name, killer.name, len(witnesses_turned),
+        )
+
+    def _persist_death(
+        self,
+        npc: NPC,
+        location: Location | None,
+        witnesses_turned: list[NPC],
+    ) -> None:
+        """Persist NPC death + location update + witness flips via repos."""
+        from db.repositories.location_repo import LocationRepository
+        from db.repositories.npc_repo import NPCRepository
+
+        assert self.db_factory is not None
+        db_session = self.db_factory()
+        try:
+            npc_repo = NPCRepository(db_session)
+            npc_repo.update(npc, self.campaign_id)
+            for witness in witnesses_turned:
+                npc_repo.update(witness, self.campaign_id)
+            if location is not None:
+                loc_repo = LocationRepository(db_session)
+                loc_repo.update(location, self.campaign_id)
+            db_session.commit()
+        finally:
+            db_session.close()
+
+    def _append_world_fact(
+        self,
+        *,
+        killer: Character,
+        victim: NPC,
+        location: Location | None,
+    ) -> None:
+        """Append a one-line markdown fact to ``logs/campaigns/{id}_facts.md``."""
+        if not self.campaign_id:
+            return
+        path = Path("logs/campaigns") / f"{self.campaign_id}_facts.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        loc_name = location.name if location is not None else "lieu inconnu"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"- {killer.name} a tué {victim.name} dans {loc_name}.\n")
 
     def _bootstrap_combat_against(self, target_npc: NPC) -> CombatState:
         """Build a fresh CombatState with the attacker first (surprise).
@@ -392,7 +613,7 @@ class ActionPipeline:
             is_active=True,
         )
 
-    def _resolve_mechanics(self, action: InterpretedAction) -> str:
+    async def _resolve_mechanics(self, action: InterpretedAction) -> str:
         """Apply mechanical effects and return a human-readable summary.
 
         The MVP only renders a description — engine state mutations for
@@ -401,6 +622,8 @@ class ActionPipeline:
         CAST_SPELL through here only when called from a creative @mention,
         in which case we mark them IMPROVISE-ish behaviour).
         """
+        if self._trivial_kill_mechanics is not None:
+            return self._trivial_kill_mechanics
         at = action.action_type
         if at == ActionType.LOOK:
             loc = self.location
@@ -417,9 +640,32 @@ class ActionPipeline:
                 f"{action.actor_name} approaches {action.target_name} to speak."
             )
         if at == ActionType.MOVE:
+            target = action.target_name or ""
+            if (
+                self.session is not None
+                and self.db_factory is not None
+                and target
+            ):
+                from bot.world_navigation import LocationChangeError, change_location
+                try:
+                    dest = await change_location(
+                        self.session, target, db_factory=self.db_factory,
+                    )
+                except LocationChangeError as exc:
+                    logger.warning(
+                        "MOVE change_location failed campaign=%s target=%r reason=%s",
+                        self.campaign_id, target, exc.reason,
+                    )
+                    return f"{action.actor_name} cannot reach {exc.destination}."
+                # Sync pipeline-local references with the new state.
+                self.location = dest
+                self.npcs = self.session.npcs
+                return f"{action.actor_name} arrives at {dest.name}."
             return f"{action.actor_name} moves toward {action.target_name}."
         if at == ActionType.INTERACT:
             return f"{action.actor_name} interacts with {action.target_name}."
+        if at == ActionType.PICKUP:
+            return await asyncio.to_thread(self._resolve_pickup, action)
         if at == ActionType.IMPROVISE:
             description = action.improvise_description or action.raw_input
             return (
@@ -428,6 +674,42 @@ class ActionPipeline:
         # Combat actions reaching this branch (ATTACK, etc.) are passed
         # through as-is for the narrator to describe.
         return f"{action.actor_name} performs {at.value}."
+
+    def _resolve_pickup(self, action: InterpretedAction) -> str:
+        """Move a scene item into the acting player's inventory (Lot G)."""
+        item_name = action.target_name or action.item_name or ""
+        if not item_name or self.session is None or self.db_factory is None:
+            return f"{action.actor_name} reaches for something, but cannot grasp it."
+
+        # Find the discord user_id for the acting character.
+        user_id: int | None = None
+        for uid, char in self.session.characters.items():
+            if char.name == action.actor_name:
+                user_id = uid
+                break
+        if user_id is None:
+            return f"{action.actor_name} reaches for {item_name}, but cannot grasp it."
+
+        from bot.scene_hydration import take_scene_item
+
+        item = take_scene_item(
+            self.session,
+            item_name=item_name,
+            user_id=user_id,
+            db_factory=self.db_factory,
+        )
+        if item is None:
+            return (
+                f"{action.actor_name} reaches for '{item_name}', but it is not"
+                f" here."
+            )
+        # Sync local references with the mutated session state.
+        self.location = self.session.current_location
+        self.inventory = self.session.inventories.get(user_id)
+        return (
+            f"{action.actor_name} picks up the {item_name} and stows it in"
+            f" their pack."
+        )
 
     def _assemble_context(self, action: InterpretedAction) -> str:
         """Build a small inline context for the narrator (no DB / RAG yet)."""

@@ -19,13 +19,40 @@ from engine.spells import SPELL_CATALOG, can_cast_spell
 
 
 class ActionType(StrEnum):
-    """The types of actions a combatant can take."""
+    """The types of actions a player can take.
 
+    Combat actions (ATTACK through USE_ITEM) are resolved by the combat engine
+    with a CombatState. Exploration actions (LOOK through INTERACT) happen
+    outside combat and use scene context. IMPROVISE is a catch-all for creative
+    actions the narrator arbitrates (usable in both combat and exploration).
+    """
+
+    # Combat
     ATTACK = "Attack"
     CAST_SPELL = "Cast Spell"
     DEFEND = "Defend"
     FLEE = "Flee"
     USE_ITEM = "Use Item"
+    # Exploration
+    LOOK = "Look"
+    SEARCH = "Search"
+    TALK = "Talk"
+    MOVE = "Move"
+    INTERACT = "Interact"
+    PICKUP = "Pick Up"
+    # Catch-all (works in combat and exploration)
+    IMPROVISE = "Improvise"
+
+
+EXPLORATION_ACTION_TYPES: frozenset[ActionType] = frozenset({
+    ActionType.LOOK,
+    ActionType.SEARCH,
+    ActionType.TALK,
+    ActionType.MOVE,
+    ActionType.INTERACT,
+    ActionType.PICKUP,
+    ActionType.IMPROVISE,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +302,51 @@ def validate_use_item(action: Action, state: CombatState) -> ValidationResult:
         return ValidationResult(
             is_valid=False,
             error_message=f"Item '{action.item_name}' not found in inventory",
+        )
+
+    return ValidationResult(is_valid=True)
+
+
+# ---------------------------------------------------------------------------
+# Exploration validators — pure rule checks (entity existence is resolved
+# upstream by the EntityResolver before the validator runs).
+# ---------------------------------------------------------------------------
+
+
+def validate_exploration_action(action: Action) -> ValidationResult:
+    """Validate a non-combat action against its own rules.
+
+    Entity resolution (does the NPC exist, is the exit reachable, etc.) is
+    handled by the EntityResolver before this function is called. This
+    validator only checks that the action carries the fields its type
+    requires.
+
+    Combat action types are rejected — route them through validate_action().
+    """
+    if action.action_type not in EXPLORATION_ACTION_TYPES:
+        return ValidationResult(
+            is_valid=False,
+            error_message=(
+                f"'{action.action_type.value}' is not an exploration action"
+            ),
+        )
+
+    if action.action_type in (ActionType.LOOK, ActionType.SEARCH, ActionType.IMPROVISE):
+        return ValidationResult(is_valid=True)
+
+    if action.action_type == ActionType.PICKUP:
+        if action.target_name is None and action.item_name is None:
+            return ValidationResult(
+                is_valid=False,
+                error_message="Pick Up requires an item",
+            )
+        return ValidationResult(is_valid=True)
+
+    # MOVE, TALK, INTERACT all require a target_name.
+    if action.target_name is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"{action.action_type.value} requires a target",
         )
 
     return ValidationResult(is_valid=True)

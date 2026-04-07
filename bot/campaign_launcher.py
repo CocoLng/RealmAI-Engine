@@ -539,6 +539,14 @@ class CampaignLauncher:
         embed = build_narrative_embed(desc, f"Campagne : {self.campaign.name}", "dramatic")
         await self.channel.send(embed=embed)
 
+        # Lot G — hydrate Location.npcs_present into real NPC rows so the
+        # entity resolver can match TALK targets. Must run before the scene
+        # embed is built so the embed reflects the canonical state.
+        if self.current_location is not None:
+            from bot.scene_hydration import hydrate_scene
+
+            hydrate_scene(session, db_factory=self.bot.db_factory)
+
         # Lot A — scene awareness: post a structured scene embed so players
         # know who/what is in front of them. Without this, players type
         # generic phrases like "le villageois" against names like
