@@ -29,20 +29,35 @@ class Narrator:
         action_result_text: str,
         context_prompt: str,
         language: str = "fr",
+        player_intent: str = "",
+        outcome_facts: str = "",
     ) -> NarrativeResult:
         """Generate an immersive narrative description of a resolved action.
 
         Args:
-            action_result_text: Mechanical summary of what happened
-                (e.g. "Thorin attacks Goblin. Hit! 8 damage dealt.").
-            context_prompt: Full assembled memory context from ContextAssembler.
+            action_result_text: Mechanical summary (e.g. "Thorin attacks
+                Goblin. Hit! 8 damage dealt.").
+            context_prompt: Assembled scene context from
+                ``describe_scene_for_narrator`` (location, items, NPCs,
+                exits) plus the acting character.
             language: ISO 639-1 language code for narrative output.
+            player_intent: How the player framed the action (raw input
+                plus interpreter-extracted detail). Empty string when no
+                framing is available.
+            outcome_facts: What mechanically changed in engine state.
+                Empty string when no mutation occurred.
 
         Returns:
             NarrativeResult with narrative text and tone classification.
         """
-        logger.info("NARRATE input=%r", action_result_text[:100])
-        user_content = f"{context_prompt}\n\n## What happened\n{action_result_text}"
+        logger.info("NARRATE input=%r intent=%r", action_result_text[:100], player_intent[:100])
+
+        sections = [context_prompt, f"## What happened\n{action_result_text}"]
+        if player_intent:
+            sections.append(f"## Player framing\n{player_intent}")
+        if outcome_facts:
+            sections.append(f"## State changes\n{outcome_facts}")
+        user_content = "\n\n".join(sections)
         system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
             {"role": "system", "content": system_prompt},

@@ -1,5 +1,7 @@
 """Tests for the Narrator module."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -74,3 +76,40 @@ def test_narrate_uses_high_temperature(httpx_mock: HTTPXMock, narrator: Narrator
     )
     assert isinstance(result, NarrativeResult)
     # Temperature is tested implicitly — if wrong, the call would fail or mock mismatch
+
+
+def test_narrate_includes_player_intent_and_outcome_facts():
+    client = MagicMock()
+    client.chat_json.return_value = {"narrative": "ok", "tone": "tense"}
+    narrator = Narrator(client)
+
+    narrator.narrate(
+        action_result_text="Xavier searches Croix de fer.",
+        context_prompt="## Location\nÉglise\nVieille paroisse.",
+        language="fr",
+        player_intent="inspecte la croix de fer pour voir si c une d'origine de 39-45",
+        outcome_facts="",
+    )
+
+    args, kwargs = client.chat_json.call_args
+    messages = args[1] if len(args) > 1 else kwargs["messages"]
+    user_msg = messages[-1]["content"]
+    assert "39-45" in user_msg
+    assert "Église" in user_msg
+    assert "Xavier searches" in user_msg
+
+
+def test_narrate_legacy_signature_still_works():
+    client = MagicMock()
+    client.chat_json.return_value = {"narrative": "ok", "tone": "dramatic"}
+    narrator = Narrator(client)
+
+    narrator.narrate(
+        action_result_text="Goblin takes 8 damage.",
+        context_prompt="## Location\nForest",
+    )
+
+    args, kwargs = client.chat_json.call_args
+    messages = args[1] if len(args) > 1 else kwargs["messages"]
+    user_msg = messages[-1]["content"]
+    assert "Goblin" in user_msg
