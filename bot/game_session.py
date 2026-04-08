@@ -22,6 +22,7 @@ from ai.client import OllamaClient, OllamaUnavailableError
 from ai.interpreter import Interpreter
 from ai.narrator import Narrator
 from ai.npc_agent import NPCAgent
+from ai.npc_generator import NPCGenerator
 from ai.story_director import StoryDirector
 from bot.story_bible_logger import StoryBibleLogger
 from memory.semantic import SemanticMemory
@@ -53,6 +54,7 @@ class GameSession:
     narrator: Narrator | None = None
     interpreter: Interpreter | None = None
     npc_agent: NPCAgent | None = None
+    npc_generator: NPCGenerator | None = None
     story_director: StoryDirector | None = None
     semantic_memory: SemanticMemory | None = None
 
@@ -126,6 +128,7 @@ def create_ai_services(session: GameSession) -> None:
         session.narrator = Narrator(client)
         session.interpreter = Interpreter(client)
         session.npc_agent = NPCAgent(client)
+        session.npc_generator = NPCGenerator(client)
         try:
             session.semantic_memory = SemanticMemory()
             session.story_director = StoryDirector(client, session.semantic_memory)
