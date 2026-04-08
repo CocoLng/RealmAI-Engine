@@ -650,8 +650,7 @@ class ActionPipeline:
             return MechanicsOutcome(summary=summary, player_intent=intent)
 
         if at == ActionType.TALK:
-            summary = f"{action.actor_name} approaches {action.target_name} to speak."
-            return MechanicsOutcome(summary=summary, player_intent=intent)
+            return await asyncio.to_thread(self._resolve_talk, action)
 
         if at == ActionType.MOVE:
             target = action.target_name or ""
@@ -730,6 +729,144 @@ class ActionPipeline:
         if extras:
             parts.append("; ".join(extras))
         return " | ".join(parts)
+
+    def _resolve_talk(self, action: InterpretedAction) -> MechanicsOutcome:
+        """Run TALK through the NPC agent, persist state, build outcome."""
+        from world.npc import DialogueExchange, NPCDisposition
+
+        intent = self._build_player_intent(action)
+        target = action.target_name or ""
+
+        if (
+            self.session is None
+            or not target
+            or target not in (self.session.npcs or {})
+        ):
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} approaches {target} to speak.",
+                player_intent=intent,
+            )
+
+        npc = self.session.npcs[target]
+        agent = getattr(self.session, "npc_agent", None)
+        generator = getattr(self.session, "npc_generator", None)
+
+        # Lazy canon generation when the NPC sheet is empty.
+        if (
+            generator is not None
+            and callable(getattr(generator, "generate", None))
+            and not (npc.personality or npc.description)
+        ):
+            try:
+                location_ctx = ""
+                if self.session.current_location is not None:
+                    loc = self.session.current_location
+                    location_ctx = f"{loc.name} — {loc.description}"
+                campaign_theme = getattr(self.session.campaign, "name", "")
+                sheet = generator.generate(
+                    npc_name=npc.name,
+                    location_context=location_ctx,
+                    campaign_theme=campaign_theme,
+                    language=self.language,
+                )
+                npc.personality = sheet.personality
+                npc.description = sheet.description
+                npc.secrets = list(sheet.secrets)
+                npc.knowledge = list(sheet.knowledge)
+                logger.info(
+                    "NPC lazy-generated name=%s secrets=%d knowledge=%d",
+                    npc.name, len(npc.secrets), len(npc.knowledge),
+                )
+            except Exception:
+                logger.exception(
+                    "NPC sheet generation failed for %s", npc.name,
+                )
+
+        if agent is None or not callable(getattr(agent, "respond", None)):
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} speaks with {npc.name}.",
+                player_intent=intent,
+            )
+
+        # Build a small scene context for the dialogue agent.
+        try:
+            from bot.scene_hydration import describe_scene_for_narrator
+            agent_context = describe_scene_for_narrator(
+                self.session, actor_name=action.actor_name,
+            )
+        except Exception:
+            agent_context = ""
+
+        try:
+            response = agent.respond(
+                npc=npc,
+                player_input=action.raw_input,
+                context_prompt=agent_context,
+                language=self.language,
+            )
+        except Exception:
+            logger.exception("NPC agent failed for %s", npc.name)
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} speaks with {npc.name}.",
+                player_intent=intent,
+            )
+
+        # Apply disposition delta (clamped to NPCDisposition order).
+        if response.disposition_change:
+            order = [
+                NPCDisposition.HOSTILE, NPCDisposition.UNFRIENDLY,
+                NPCDisposition.NEUTRAL, NPCDisposition.FRIENDLY,
+                NPCDisposition.ALLIED,
+            ]
+            try:
+                idx = order.index(npc.disposition) + response.disposition_change
+                idx = max(0, min(len(order) - 1, idx))
+                npc.disposition = order[idx]
+            except ValueError:
+                pass
+
+        # Append the exchange to history.
+        npc.dialogue_history.append(
+            DialogueExchange(
+                player_said=action.raw_input,
+                npc_said=response.dialogue,
+                revealed=list(response.revealed_info),
+            ),
+        )
+
+        # Persist the mutated NPC.
+        if self.db_factory is not None:
+            try:
+                from db.repositories.npc_repo import NPCRepository
+                db_session = self.db_factory()
+                try:
+                    NPCRepository(db_session).update(npc, self.campaign_id)
+                    db_session.commit()
+                finally:
+                    db_session.close()
+            except Exception:
+                logger.exception("NPC persist failed for %s", npc.name)
+
+        # Build the outcome facts the narrator will render.
+        facts_lines = [f'{npc.name} says: "{response.dialogue}"']
+        if response.revealed_info:
+            facts_lines.append(
+                "Reveals: " + " ; ".join(response.revealed_info),
+            )
+        if response.disposition_change:
+            facts_lines.append(
+                f"Disposition shift: {response.disposition_change:+d}",
+            )
+
+        summary = f"{action.actor_name} speaks with {npc.name}."
+        if response.disposition_change:
+            summary += f" (disposition: {response.disposition_change:+d})"
+
+        return MechanicsOutcome(
+            summary=summary,
+            player_intent=intent,
+            outcome_facts="\n".join(facts_lines),
+        )
 
     def _resolve_pickup(self, action: InterpretedAction) -> str:
         """Move a scene item into the acting player's inventory (Lot G)."""
