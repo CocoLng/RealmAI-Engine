@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 
 from ai.entity_resolver import EntityCandidate, EntityResolver, ResolutionResult
 from ai.interpreter import Interpreter
-from ai.models import InterpretedAction, NarrativeResult
+from ai.models import InterpretedAction, MechanicsOutcome, NarrativeResult
 from ai.narrator import Narrator
 from ai.scene_context import SceneContext, build_scene_context
 from bot.llm_retry import retry_llm_call
@@ -273,14 +273,14 @@ class ActionPipeline:
             )
 
         await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)
-        mechanics_text = await self._resolve_mechanics(interpreted)
+        outcome = await self._resolve_mechanics(interpreted)
 
         await self._emit(progress_callback, PipelinePhase.ASSEMBLING_CONTEXT)
         context_prompt = self._assemble_context(interpreted)
 
         await self._emit(progress_callback, PipelinePhase.NARRATING)
         narration = await self._call_narrator(
-            mechanics_text=mechanics_text,
+            outcome=outcome,
             context_prompt=context_prompt,
         )
 
@@ -321,7 +321,7 @@ class ActionPipeline:
         return ActionPipelineResult(
             narrative=narration.narrative,
             tone=narration.tone,
-            mechanics_text=mechanics_text,
+            mechanics_text=outcome.summary,
             interpreted_action=interpreted,
             new_beat=new_beat,
         )
@@ -350,14 +350,16 @@ class ActionPipeline:
 
     async def _call_narrator(
         self,
-        mechanics_text: str,
+        outcome: MechanicsOutcome,
         context_prompt: str,
     ) -> NarrativeResult:
         def _do() -> NarrativeResult:
             return self.narrator.narrate(
-                action_result_text=mechanics_text,
+                action_result_text=outcome.summary,
                 context_prompt=context_prompt,
                 language=self.language,
+                player_intent=outcome.player_intent,
+                outcome_facts=outcome.outcome_facts,
             )
 
         return await retry_llm_call(
@@ -613,32 +615,44 @@ class ActionPipeline:
             is_active=True,
         )
 
-    async def _resolve_mechanics(self, action: InterpretedAction) -> str:
-        """Apply mechanical effects and return a human-readable summary.
+    async def _resolve_mechanics(
+        self, action: InterpretedAction,
+    ) -> MechanicsOutcome:
+        """Apply mechanical effects and return a layered outcome.
 
-        The MVP only renders a description — engine state mutations for
-        exploration actions are out of scope. Combat actions are still
-        handled by the existing combat cog (this pipeline routes ATTACK /
-        CAST_SPELL through here only when called from a creative @mention,
-        in which case we mark them IMPROVISE-ish behaviour).
+        Returns a :class:`ai.models.MechanicsOutcome` carrying the short
+        mechanical summary, the player's framing, and any state-change
+        facts. The narrator consumes the three layers separately.
         """
+        intent = self._build_player_intent(action)
+
         if self._trivial_kill_mechanics is not None:
-            return self._trivial_kill_mechanics
+            return MechanicsOutcome(
+                summary=self._trivial_kill_mechanics,
+                player_intent=intent,
+                outcome_facts=self._trivial_kill_mechanics,
+            )
+
         at = action.action_type
+
         if at == ActionType.LOOK:
             loc = self.location
-            return (
+            summary = (
                 f"{action.actor_name} observes {loc.name if loc else 'the area'}."
             )
+            return MechanicsOutcome(summary=summary, player_intent=intent)
+
         if at == ActionType.SEARCH:
-            return (
+            summary = (
                 f"{action.actor_name} searches "
                 f"{action.target_name or 'the surroundings'}."
             )
+            return MechanicsOutcome(summary=summary, player_intent=intent)
+
         if at == ActionType.TALK:
-            return (
-                f"{action.actor_name} approaches {action.target_name} to speak."
-            )
+            summary = f"{action.actor_name} approaches {action.target_name} to speak."
+            return MechanicsOutcome(summary=summary, player_intent=intent)
+
         if at == ActionType.MOVE:
             target = action.target_name or ""
             if (
@@ -656,24 +670,66 @@ class ActionPipeline:
                         "MOVE change_location failed campaign=%s target=%r reason=%s",
                         self.campaign_id, target, exc.reason,
                     )
-                    return f"{action.actor_name} cannot reach {exc.destination}."
-                # Sync pipeline-local references with the new state.
+                    return MechanicsOutcome(
+                        summary=f"{action.actor_name} cannot reach {exc.destination}.",
+                        player_intent=intent,
+                    )
                 self.location = dest
                 self.npcs = self.session.npcs
-                return f"{action.actor_name} arrives at {dest.name}."
-            return f"{action.actor_name} moves toward {action.target_name}."
+                return MechanicsOutcome(
+                    summary=f"{action.actor_name} arrives at {dest.name}.",
+                    player_intent=intent,
+                    outcome_facts=f"{action.actor_name} moved to {dest.name}.",
+                )
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} moves toward {action.target_name}.",
+                player_intent=intent,
+            )
+
         if at == ActionType.INTERACT:
-            return f"{action.actor_name} interacts with {action.target_name}."
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} interacts with {action.target_name}.",
+                player_intent=intent,
+            )
+
         if at == ActionType.PICKUP:
-            return await asyncio.to_thread(self._resolve_pickup, action)
+            summary = await asyncio.to_thread(self._resolve_pickup, action)
+            facts = ""
+            if "picks up" in summary:
+                facts = summary
+            return MechanicsOutcome(
+                summary=summary, player_intent=intent, outcome_facts=facts,
+            )
+
         if at == ActionType.IMPROVISE:
             description = action.improvise_description or action.raw_input
-            return (
-                f"{action.actor_name} attempts an improvised action: {description}"
+            return MechanicsOutcome(
+                summary=(
+                    f"{action.actor_name} attempts an improvised action: {description}"
+                ),
+                player_intent=intent,
             )
-        # Combat actions reaching this branch (ATTACK, etc.) are passed
-        # through as-is for the narrator to describe.
-        return f"{action.actor_name} performs {at.value}."
+
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} performs {at.value}.",
+            player_intent=intent,
+        )
+
+    def _build_player_intent(self, action: InterpretedAction) -> str:
+        """Concatenate raw input with any interpreter-extracted intent extras."""
+        parts: list[str] = []
+        if action.raw_input:
+            parts.append(action.raw_input.strip())
+        extras = []
+        if action.search_detail:
+            extras.append(f"search detail: {action.search_detail}")
+        if action.talk_topic:
+            extras.append(f"talk topic: {action.talk_topic}")
+        if action.improvise_description:
+            extras.append(f"improvise: {action.improvise_description}")
+        if extras:
+            parts.append("; ".join(extras))
+        return " | ".join(parts)
 
     def _resolve_pickup(self, action: InterpretedAction) -> str:
         """Move a scene item into the acting player's inventory (Lot G)."""
@@ -768,7 +824,7 @@ class ActionPipeline:
         )
         context = self._assemble_context(action)
         return await self._call_narrator(
-            mechanics_text=action_summary,
+            outcome=MechanicsOutcome(summary=action_summary),
             context_prompt=context,
         )
 
@@ -809,7 +865,7 @@ class ActionPipeline:
         )
         context = self._assemble_context(action)
         return await self._call_narrator(
-            mechanics_text=action_summary,
+            outcome=MechanicsOutcome(summary=action_summary),
             context_prompt=context,
         )
 

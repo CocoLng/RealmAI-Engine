@@ -71,12 +71,16 @@ class FakeNarrator:
         action_result_text: str,
         context_prompt: str,
         language: str = "fr",
+        player_intent: str = "",
+        outcome_facts: str = "",
     ) -> NarrativeResult:
         self.calls.append(
             {
                 "action_result_text": action_result_text,
                 "context_prompt": context_prompt,
                 "language": language,
+                "player_intent": player_intent,
+                "outcome_facts": outcome_facts,
             },
         )
         if self.side_effect is not None:
