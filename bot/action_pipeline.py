@@ -768,18 +768,23 @@ class ActionPipeline:
         )
 
     def _assemble_context(self, action: InterpretedAction) -> str:
-        """Build a small inline context for the narrator (no DB / RAG yet)."""
+        """Build the narrator-facing context.
+
+        Delegates to :func:`bot.scene_hydration.describe_scene_for_narrator`
+        when a session is available; falls back to a minimal location-only
+        snippet otherwise (used by unit tests that construct the pipeline
+        without a full session).
+        """
+        if self.session is not None:
+            from bot.scene_hydration import describe_scene_for_narrator
+            return describe_scene_for_narrator(
+                self.session, actor_name=action.actor_name,
+            )
+
         loc = self.location
         lines: list[str] = []
         if loc is not None:
             lines.append(f"## Location\n{loc.name}\n{loc.description}")
-        if self.npcs:
-            present = [
-                npc.name for npc in self.npcs.values()
-                if loc is not None and npc.location_name == loc.name
-            ]
-            if present:
-                lines.append("## NPCs present\n" + ", ".join(present))
         lines.append(f"## Acting character\n{action.actor_name}")
         return "\n\n".join(lines)
 
