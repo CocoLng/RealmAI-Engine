@@ -20,6 +20,18 @@ class NPCDisposition(StrEnum):
     ALLIED = "allied"
 
 
+class DialogueExchange(BaseModel):
+    """One round of dialogue between a player and an NPC.
+
+    Stored on ``NPC.dialogue_history`` so subsequent conversations can
+    avoid repeating reveals and build narrative continuity.
+    """
+
+    player_said: str
+    npc_said: str
+    revealed: list[str] = Field(default_factory=list)
+
+
 class NPC(BaseModel):
     """A non-player character in the game world."""
 
@@ -37,6 +49,9 @@ class NPC(BaseModel):
     personality: str = ""
     location_name: str | None = None
     aliases: list[str] = Field(default_factory=list)
+    secrets: list[str] = Field(default_factory=list)
+    knowledge: list[str] = Field(default_factory=list)
+    dialogue_history: list[DialogueExchange] = Field(default_factory=list)
 
     def kill(self) -> None:
         """Mark this NPC as dead. Idempotent."""
