@@ -101,6 +101,18 @@ scenario.assert_not_in_combat()
 
 Connects a second Discord bot to the test server, sends `!test` commands to the game bot's TestBridge cog, and reads the real Discord responses.
 
+### Always check the bot run logs
+
+The MCP discord-test tools only see what comes back through Discord. They do **not** see the game bot's stdout or file logs. The bot writes a fresh log file to `logs/realm_<timestamp>.log` for every run (newest file = current run).
+
+**Rule:** On ANY unexpected live-test result — timeout, "no response", missing embed, weird content, tester bot error — you MUST read the latest log file **before** concluding anything. Do not assume "the bot didn't respond"; the log is authoritative and often shows the response was produced (or an exception was raised) even when Discord delivery looked broken.
+
+Quick workflow:
+```bash
+ls -t logs/realm_*.log | head -1   # find current run
+```
+Then `Read` that file (tail the last ~200 lines) and grep for `ERROR`, `Traceback`, or the command you just sent.
+
 ### Prerequisites
 
 1. Game bot must be running with `TEST_MODE=true`:
@@ -186,7 +198,7 @@ When implementing or fixing something in the bot:
 3. **Implement the change** — modify cog/engine code
 4. **Run scenario tests** — `uv run pytest tests/scenarios/ -v` to verify
 5. **Live test on Discord** — start the bot with `TEST_MODE=true`, run a test script to verify real Discord output (embeds, messages, formatting)
-6. **Check bot logs** — look at the bot's stdout for any errors or warnings
+6. **Check bot logs** — read `logs/realm_*.log` (newest file = current run) for errors, warnings, or the actual response. Do this immediately whenever a live test appears to timeout or misbehave — MCP tools can't see the bot's stdout, so the log file is the only source of truth.
 7. **Run full test suite** — `uv run pytest` to ensure no regressions
 
 ### Key files

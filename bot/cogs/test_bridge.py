@@ -120,6 +120,18 @@ class _VirtualMember:
         return self.name
 
 
+@dataclass
+class _FakeNarrateMessage:
+    """Minimal discord.Message stand-in for ActionHandlerCog._run_pipeline.
+
+    `_run_pipeline` only touches `message.author.id`, `message.channel.send`,
+    and (on error path) `message.channel.send` again. No reply needed.
+    """
+
+    channel: discord.TextChannel
+    author: _VirtualMember
+
+
 class ChannelTestInteraction:
     """Fake discord.Interaction that posts responses to a real channel."""
 
@@ -299,6 +311,10 @@ class TestBridge(commands.Cog):
                 await cog.character.callback(cog, inter, public=True)  # type: ignore[union-attr, arg-type]
         elif command == "game_state":
             await self._handle_game_state(channel)
+        elif command == "inject_scene":
+            await self._handle_inject_scene(inter, args)
+        elif command == "narrate":
+            await self._handle_narrate(inter, args)
         else:
             await channel.send(f"TestBridge: commande inconnue '{command}'")
 
@@ -399,6 +415,109 @@ class TestBridge(commands.Cog):
 
         embed = build_character_embed(character)
         await inter.channel.send(content=f"**{name}** cree !", embed=embed)
+
+    async def _handle_inject_scene(
+        self, inter: ChannelTestInteraction, args: dict[str, str],
+    ) -> None:
+        """Plant a Location with optional item descriptions on the active session.
+
+        Used by live tests that need a populated scene without going through
+        the LLM world generator. Args:
+            name=...                  Location name
+            description=...           Location description
+            items=name1|name2         Pipe-separated item names
+            desc_<itemname>=...       Canon description for that item
+            npcs=name1|name2          Pipe-separated NPC names
+        """
+        from world.location import Location
+
+        session = self.bot.get_session(inter.channel_id)
+        if session is None:
+            await inter.channel.send("Aucune session active.")
+            return
+
+        # Values come from `!test` parsing which is shlex-split on whitespace,
+        # so callers MUST use `~` as a literal space marker in any value.
+        def _unescape(value: str) -> str:
+            return value.replace("~", " ")
+
+        name = _unescape(args.get("name", "Lieu de test"))
+        description = _unescape(args.get("description", "Un lieu de test."))
+        items_raw = _unescape(args.get("items", ""))
+        npcs_raw = _unescape(args.get("npcs", ""))
+        items = [i for i in items_raw.split("|") if i] if items_raw else []
+        npcs = [n for n in npcs_raw.split("|") if n] if npcs_raw else []
+        descriptions = {
+            _unescape(key[len("desc_"):]): _unescape(value)
+            for key, value in args.items()
+            if key.startswith("desc_") and _unescape(key[len("desc_"):]) in items
+        }
+
+        location = Location(
+            name=name,
+            description=description,
+            items_available=items,
+            item_descriptions=descriptions,
+            npcs_present=npcs,
+        )
+        session.current_location = location
+
+        # Hydrate NPCs so the entity resolver can find them.
+        if npcs:
+            from bot.scene_hydration import hydrate_scene
+            hydrate_scene(session, db_factory=self.bot.db_factory)
+
+        logger.info(
+            "TESTBRIDGE inject_scene channel=%s name=%r items=%d descriptions=%d",
+            inter.channel_id, name, len(items), len(descriptions),
+        )
+        await inter.channel.send(
+            f"Scene injected: {name} (items={len(items)}, "
+            f"descriptions={len(descriptions)}, npcs={len(npcs)})",
+        )
+
+    async def _handle_narrate(
+        self, inter: ChannelTestInteraction, args: dict[str, str],
+    ) -> None:
+        """Run free-text through the full action pipeline as the virtual player.
+
+        Equivalent to a player @-mentioning the bot in a real channel, but
+        bypasses the on_message author/mention checks since the tester bot
+        cannot impersonate a real player. Args:
+            text=...                  Free-text action to send
+        """
+        text = args.get("text", "").replace("~", " ")
+        if not text:
+            await inter.channel.send("TestBridge narrate: missing text=")
+            return
+        session = self.bot.get_session(inter.channel_id)
+        if session is None:
+            await inter.channel.send("Aucune session active.")
+            return
+        actor_id = inter.user.id
+        if actor_id not in session.characters:
+            await inter.channel.send(
+                f"TestBridge narrate: virtual player {actor_id} has no character.",
+            )
+            return
+
+        cog = self.bot.get_cog("ActionHandlerCog")
+        if cog is None:
+            await inter.channel.send("ActionHandlerCog not loaded.")
+            return
+
+        if session.action_lock.locked():
+            await inter.channel.send("⏳ action en cours, réessaie.")
+            return
+
+        # Build a fake message-like object the cog can consume.
+        fake_message = _FakeNarrateMessage(
+            channel=inter.channel,
+            author=inter.user,
+        )
+
+        async with session.action_lock:
+            await cog._run_pipeline(fake_message, session, text)  # type: ignore[attr-defined]
 
     async def _handle_game_state(self, channel: discord.TextChannel) -> None:
         """Serialize and post the active game session state."""
