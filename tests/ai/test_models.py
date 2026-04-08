@@ -83,3 +83,26 @@ def test_mechanics_outcome_full():
     )
     assert "39-45" in out.player_intent
     assert "inventory" in out.outcome_facts
+
+
+def test_npc_sheet_minimal():
+    from ai.models import NPCSheet
+    sheet = NPCSheet(
+        personality="Vieil ermite méfiant.",
+        description="Un homme voûté en robe de bure.",
+    )
+    assert sheet.personality.startswith("Vieil")
+    assert sheet.secrets == []
+    assert sheet.knowledge == []
+
+
+def test_npc_sheet_full():
+    from ai.models import NPCSheet
+    sheet = NPCSheet(
+        personality="Méfiant mais loyal envers les justes.",
+        description="Un ermite voûté, robe de bure tachée de cendre.",
+        secrets=["Sait que Dom André est corrompu."],
+        knowledge=["Connaît l'entrée de la crypte sous l'autel."],
+    )
+    assert "corrompu" in sheet.secrets[0]
+    assert len(sheet.knowledge) == 1

@@ -66,3 +66,18 @@ class MechanicsOutcome(BaseModel):
     summary: str
     player_intent: str = ""
     outcome_facts: str = ""
+
+
+class NPCSheet(BaseModel):
+    """Canon backstory generated for an NPC by the NPCGenerator.
+
+    Persisted onto the NPC entity once generated. The agent reads it
+    when producing dialogue. ``secrets`` are things the NPC knows but
+    won't volunteer easily; ``knowledge`` are things the NPC will share
+    when asked appropriately.
+    """
+
+    personality: str
+    description: str
+    secrets: list[str] = Field(default_factory=list)
+    knowledge: list[str] = Field(default_factory=list)
