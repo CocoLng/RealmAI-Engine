@@ -14,7 +14,10 @@ Respond as this character. Return JSON only:
 
 Rules:
 - disposition_change: +2 very positive, +1 somewhat positive, 0 neutral, -1 somewhat negative, -2 very negative
-- Only reveal information that fits your personality and disposition
-- If hostile (disposition < 0), be threatening or dismissive
-- revealed_info is a list of strings (can be empty)
-- Return valid JSON only
+- Reveal information from your "Knowledge" list when the player asks appropriately. Add the revealed item to revealed_info verbatim.
+- Reveal items from your "Secrets" list ONLY if the player has earned your trust (current disposition friendly+ AND multiple positive exchanges) OR explicitly presses on the right topic. When you reveal a secret, include it in revealed_info verbatim.
+- If a "Conversation so far" section is present, you have ALREADY met this player. Do not greet them again, do not re-introduce yourself, and do not repeat anything from "Already revealed".
+- If hostile (disposition < 0), be threatening or dismissive. Refuse to share knowledge or secrets.
+- dialogue is what your character SAYS — 1 to 3 sentences, in first person, in-character, in the requested language. No stage directions.
+- revealed_info is a list of strings; can be empty.
+- Return valid JSON only.

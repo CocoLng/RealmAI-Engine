@@ -1,5 +1,7 @@
 """Tests for the NPC Agent module."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -7,7 +9,7 @@ from ai.client import OllamaClient
 from ai.models import NPCResponse
 from ai.npc_agent import NPCAgent
 from tests.ai.conftest import CHAT_URL, make_ollama_response
-from world.npc import NPC, NPCDisposition
+from world.npc import NPC, DialogueExchange, NPCDisposition
 from engine.character import AbilityScores, Race
 
 
@@ -103,3 +105,76 @@ def test_respond_with_empty_revealed_info(
 
     assert result.revealed_info == []
     assert result.disposition_change == 0
+
+
+def _make_npc(history: list[DialogueExchange] | None = None) -> NPC:
+    return NPC(
+        name="Élie l'Ermite",
+        race=Race.HUMAN,
+        level=1,
+        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=12, CHA=10),
+        hp=4, max_hp=4, ac=10,
+        disposition=NPCDisposition.NEUTRAL,
+        description="Un ermite voûté.",
+        personality="Méfiant mais loyal.",
+        secrets=["Dom André est corrompu."],
+        knowledge=["L'entrée de la crypte est sous l'autel."],
+        dialogue_history=history or [],
+    )
+
+
+def test_respond_includes_personality_and_secrets_in_prompt() -> None:
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "dialogue": "Approche, étranger.",
+        "disposition_change": 1,
+        "revealed_info": [],
+    }
+    agent = NPCAgent(client)
+    npc = _make_npc()
+
+    agent.respond(npc, player_input="Bonjour vénérable", context_prompt="## Location")
+
+    args, _kwargs = client.chat_json.call_args
+    user_msg = args[1][-1]["content"]
+    assert "Méfiant mais loyal" in user_msg
+    assert "Dom André est corrompu" in user_msg
+    assert "L'entrée de la crypte" in user_msg
+
+
+def test_respond_includes_dialogue_history_when_present() -> None:
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "dialogue": "Je t'ai déjà parlé de cela.",
+        "disposition_change": 0,
+        "revealed_info": [],
+    }
+    agent = NPCAgent(client)
+    npc = _make_npc(history=[
+        DialogueExchange(
+            player_said="Que sais-tu de la crypte ?",
+            npc_said="Elle est sous l'autel.",
+            revealed=["L'entrée de la crypte est sous l'autel."],
+        ),
+    ])
+
+    agent.respond(npc, player_input="Et la crypte ?", context_prompt="")
+
+    user_msg = client.chat_json.call_args[0][1][-1]["content"]
+    assert "Que sais-tu de la crypte" in user_msg
+    assert "sous l'autel" in user_msg
+    assert "Already revealed" in user_msg or "déjà révélé" in user_msg.lower()
+
+
+def test_respond_returns_npc_response_mock() -> None:
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "dialogue": "Salutations.",
+        "disposition_change": 1,
+        "revealed_info": ["Le village s'appelle Valombre."],
+    }
+    agent = NPCAgent(client)
+    response = agent.respond(_make_npc(), player_input="hi", context_prompt="")
+    assert response.dialogue == "Salutations."
+    assert response.disposition_change == 1
+    assert response.revealed_info == ["Le village s'appelle Valombre."]

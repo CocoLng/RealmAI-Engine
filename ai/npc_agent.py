@@ -64,14 +64,46 @@ class NPCAgent:
         )
         return response
 
-    def _build_user_message(self, npc: NPC, player_input: str, context_prompt: str) -> str:
-        """Build the user message with NPC sheet and player input."""
-        npc_sheet = (
-            f"Character: {npc.name}\n"
-            f"Race: {npc.race.value}\n"
-            f"Disposition: {npc.disposition.value}\n"
-            f"Personality: {npc.personality}\n"
-            f"Description: {npc.description}\n"
-            f"HP: {npc.hp}/{npc.max_hp}"
-        )
-        return f"{context_prompt}\n\n## Your Character\n{npc_sheet}\n\n## Player says\n{player_input}"
+    def _build_user_message(
+        self, npc: NPC, player_input: str, context_prompt: str,
+    ) -> str:
+        """Build the user message with NPC sheet, history, and player input."""
+        npc_sheet_lines = [
+            f"Character: {npc.name}",
+            f"Race: {npc.race.value}",
+            f"Disposition: {npc.disposition.value}",
+            f"Personality: {npc.personality}",
+            f"Description: {npc.description}",
+            f"HP: {npc.hp}/{npc.max_hp}",
+        ]
+        if npc.secrets:
+            npc_sheet_lines.append(
+                "Secrets (do NOT volunteer; reveal only if pressed and trust is high):"
+            )
+            for secret in npc.secrets:
+                npc_sheet_lines.append(f"  - {secret}")
+        if npc.knowledge:
+            npc_sheet_lines.append("Knowledge (share if asked appropriately):")
+            for fact in npc.knowledge:
+                npc_sheet_lines.append(f"  - {fact}")
+        npc_sheet = "\n".join(npc_sheet_lines)
+
+        sections = [context_prompt, f"## Your Character\n{npc_sheet}"]
+
+        if npc.dialogue_history:
+            history_lines = ["## Conversation so far"]
+            for ex in npc.dialogue_history[-5:]:
+                history_lines.append(f"Player: {ex.player_said}")
+                history_lines.append(f"You: {ex.npc_said}")
+            already_revealed = [
+                r for ex in npc.dialogue_history for r in ex.revealed
+            ]
+            if already_revealed:
+                history_lines.append("")
+                history_lines.append("Already revealed (do NOT repeat verbatim):")
+                for r in already_revealed:
+                    history_lines.append(f"  - {r}")
+            sections.append("\n".join(history_lines))
+
+        sections.append(f"## Player says\n{player_input}")
+        return "\n\n".join(s for s in sections if s.strip())
