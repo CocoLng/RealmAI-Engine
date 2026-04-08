@@ -1,11 +1,13 @@
 """Tests for db/mappers.py — domain ↔ DB round-trip fidelity."""
 
+from sqlalchemy.orm import Session
+
 from engine.character import AbilityScores, CharacterClass, Race, create_character
 from engine.inventory import create_inventory
 from engine.spells import create_spellcaster_state
 from world.campaign import Campaign
 from world.location import Location
-from world.npc import NPC, NPCDisposition
+from world.npc import NPC, DialogueExchange, NPCDisposition
 from world.quest import Quest, QuestStatus
 
 from db.mappers import (
@@ -92,6 +94,83 @@ class TestNPCMapper:
         restored = npc_from_db(row)
         assert restored.char_class is None
         assert restored == npc
+
+    def test_roundtrip_dialogue_fields(
+        self, sample_ability_scores: AbilityScores
+    ) -> None:
+        """secrets, knowledge, and dialogue_history round-trip via mappers."""
+        npc = NPC(
+            name="Elyra",
+            race=Race.ELF,
+            ability_scores=sample_ability_scores,
+            hp=10,
+            max_hp=10,
+            ac=12,
+            secrets=["knows the king's bastard", "smuggles artifacts"],
+            knowledge=["ancient elven runes", "forest paths"],
+            dialogue_history=[
+                DialogueExchange(
+                    player_said="Tell me about the ruins.",
+                    npc_said="They predate the Sundering.",
+                    revealed=["ruins age"],
+                ),
+                DialogueExchange(
+                    player_said="Anything else?",
+                    npc_said="Beware the wraiths.",
+                ),
+            ],
+        )
+        row = npc_to_db(npc, "camp-1")
+        assert row.secrets == ["knows the king's bastard", "smuggles artifacts"]
+        assert row.knowledge == ["ancient elven runes", "forest paths"]
+        assert isinstance(row.dialogue_history, list)
+        assert row.dialogue_history[0]["player_said"] == "Tell me about the ruins."
+        restored = npc_from_db(row)
+        assert restored == npc
+        assert len(restored.dialogue_history) == 2
+        assert isinstance(restored.dialogue_history[0], DialogueExchange)
+        assert restored.dialogue_history[0].revealed == ["ruins age"]
+
+    def test_sqlite_roundtrip_dialogue_fields(
+        self, db_session: Session, sample_ability_scores: AbilityScores,
+        sample_campaign: Campaign,
+    ) -> None:
+        """Full SQLite persist + reload preserves new NPC fields."""
+        from db.mappers import campaign_to_db
+
+        db_session.add(campaign_to_db(sample_campaign))
+        db_session.flush()
+        npc = NPC(
+            name="Borin",
+            race=Race.DWARF,
+            ability_scores=sample_ability_scores,
+            hp=8,
+            max_hp=8,
+            ac=15,
+            secrets=["hides forge-key"],
+            knowledge=["runesmithing"],
+            dialogue_history=[
+                DialogueExchange(
+                    player_said="Hello",
+                    npc_said="Well met.",
+                    revealed=["greeted"],
+                )
+            ],
+        )
+        row = npc_to_db(npc, sample_campaign.id)
+        db_session.add(row)
+        db_session.commit()
+        db_session.expire_all()
+
+        from db.models import NPCRow
+
+        loaded = db_session.query(NPCRow).filter_by(name="Borin").one()
+        restored = npc_from_db(loaded)
+        assert restored.secrets == ["hides forge-key"]
+        assert restored.knowledge == ["runesmithing"]
+        assert len(restored.dialogue_history) == 1
+        assert restored.dialogue_history[0].npc_said == "Well met."
+        assert restored.dialogue_history[0].revealed == ["greeted"]
 
     def test_ability_scores_serialization(self, sample_npc: NPC) -> None:
         row = npc_to_db(sample_npc, "camp-1")

@@ -11,7 +11,7 @@ from engine.inventory import Inventory
 from engine.spells import SpellcasterState
 from world.campaign import Campaign
 from world.location import Location
-from world.npc import NPC, NPCDisposition
+from world.npc import NPC, DialogueExchange, NPCDisposition
 from world.quest import Quest, QuestObjective, QuestStatus
 
 from memory.models import CompressedSummary, ExchangeRole, NarrativeExchange
@@ -87,6 +87,9 @@ def npc_to_db(npc: NPC, campaign_id: str) -> NPCRow:
         personality=npc.personality,
         location_name=npc.location_name,
         aliases=list(npc.aliases),
+        secrets=list(npc.secrets),
+        knowledge=list(npc.knowledge),
+        dialogue_history=[exch.model_dump() for exch in npc.dialogue_history],
     )
 
 
@@ -107,6 +110,13 @@ def npc_from_db(row: NPCRow) -> NPC:
         personality=row.personality,
         location_name=row.location_name,
         aliases=list(row.aliases) if row.aliases else [],
+        secrets=list(row.secrets) if row.secrets else [],
+        knowledge=list(row.knowledge) if row.knowledge else [],
+        dialogue_history=[
+            DialogueExchange.model_validate(exch) for exch in row.dialogue_history
+        ]
+        if row.dialogue_history
+        else [],
     )
 
 

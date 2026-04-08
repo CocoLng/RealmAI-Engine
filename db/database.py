@@ -75,6 +75,24 @@ def _migrate_schema(engine: Engine) -> None:
             )
             conn.commit()
 
+        if npc_columns and "secrets" not in npc_columns:
+            conn.execute(
+                text("ALTER TABLE npcs ADD COLUMN secrets JSON DEFAULT '[]'")
+            )
+            conn.commit()
+
+        if npc_columns and "knowledge" not in npc_columns:
+            conn.execute(
+                text("ALTER TABLE npcs ADD COLUMN knowledge JSON DEFAULT '[]'")
+            )
+            conn.commit()
+
+        if npc_columns and "dialogue_history" not in npc_columns:
+            conn.execute(
+                text("ALTER TABLE npcs ADD COLUMN dialogue_history JSON DEFAULT '[]'")
+            )
+            conn.commit()
+
         # Add item_descriptions column to locations if missing (rich-context lot)
         result4 = conn.execute(text("PRAGMA table_info(locations)"))
         loc_columns = {row[1] for row in result4}
