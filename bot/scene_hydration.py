@@ -207,3 +207,57 @@ def take_scene_item(
         session.campaign.id, user_id, item_name, location.name,
     )
     return item
+
+
+def describe_scene_for_narrator(
+    session: "GameSession",
+    *,
+    actor_name: str,
+) -> str:
+    """Build a rich, narrator-facing description of the current scene.
+
+    Includes location name + description, exits, items (with canon
+    descriptions when available), and present NPCs (with disposition,
+    description, and personality). Falls back gracefully when fields are
+    empty so it works on freshly hydrated commoner NPCs.
+    """
+    lines: list[str] = []
+    location = session.current_location
+
+    if location is not None:
+        lines.append(f"## Location\n{location.name}\n{location.description}")
+
+        if location.connections:
+            lines.append("## Exits\n" + ", ".join(location.connections))
+
+        if location.items_available:
+            item_lines = []
+            descriptions = getattr(location, "item_descriptions", {}) or {}
+            for name in location.items_available:
+                desc = descriptions.get(name, "").strip()
+                if desc:
+                    item_lines.append(f"- {name} — {desc}")
+                else:
+                    item_lines.append(f"- {name}")
+            lines.append("## Visible items\n" + "\n".join(item_lines))
+
+        present = [
+            npc for npc in (session.npcs or {}).values()
+            if npc.location_name == location.name
+        ]
+        if present:
+            npc_lines = []
+            for npc in present:
+                bits = [npc.name]
+                if npc.race is not None:
+                    bits.append(f"({npc.race.value})")
+                bits.append(f"— disposition: {npc.disposition.value}")
+                if npc.description:
+                    bits.append(f"— {npc.description}")
+                if npc.personality:
+                    bits.append(f"— personality: {npc.personality}")
+                npc_lines.append(" ".join(bits))
+            lines.append("## NPCs present\n" + "\n".join(npc_lines))
+
+    lines.append(f"## Acting character\n{actor_name}")
+    return "\n\n".join(lines)

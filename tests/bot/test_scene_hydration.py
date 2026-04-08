@@ -237,3 +237,85 @@ def test_pickup_validator_accepts_target_or_item() -> None:
 
     c = Action(actor_name="Hero", action_type=ActionType.PICKUP)
     assert not validate_exploration_action(c).is_valid
+
+
+# ---------------------------------------------------------------------------
+# describe_scene_for_narrator
+# ---------------------------------------------------------------------------
+
+from unittest.mock import MagicMock
+
+from bot.scene_hydration import describe_scene_for_narrator
+from world.npc import NPC, NPCDisposition
+
+
+def _npc(name: str, *, location: str, disposition=NPCDisposition.NEUTRAL,
+         description="", personality="") -> NPC:
+    return NPC(
+        name=name, race=Race.HUMAN, char_class=None, level=1,
+        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+        hp=4, max_hp=4, ac=10, disposition=disposition, is_alive=True,
+        description=description, personality=personality,
+        location_name=location, aliases=[],
+    )
+
+
+def test_describe_scene_includes_location_and_exits():
+    loc = Location(
+        name="Église",
+        description="Vieille paroisse silencieuse.",
+        connections=["Village", "Crypte"],
+    )
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {}
+
+    out = describe_scene_for_narrator(session, actor_name="Xavier")
+    assert "Église" in out
+    assert "Vieille paroisse silencieuse." in out
+    assert "Village" in out and "Crypte" in out
+
+
+def test_describe_scene_includes_items_with_descriptions():
+    loc = Location(
+        name="Église",
+        description="…",
+        items_available=["Croix de fer", "Cierge pourri"],
+        item_descriptions={"Croix de fer": "Vieille croix de forge, noircie."},
+    )
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {}
+
+    out = describe_scene_for_narrator(session, actor_name="Xavier")
+    assert "Croix de fer" in out
+    assert "Vieille croix de forge" in out
+    assert "Cierge pourri" in out
+
+
+def test_describe_scene_includes_present_npcs_with_disposition():
+    loc = Location(name="Église", description="…", npcs_present=["Élie l'Ermite"])
+    npc = _npc(
+        "Élie l'Ermite",
+        location="Église",
+        disposition=NPCDisposition.FRIENDLY,
+        description="Vieil ermite voûté.",
+        personality="Méfiant mais loyal.",
+    )
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {"Élie l'Ermite": npc}
+
+    out = describe_scene_for_narrator(session, actor_name="Xavier")
+    assert "Élie l'Ermite" in out
+    assert "FRIENDLY" in out or "friendly" in out.lower()
+    assert "Vieil ermite" in out
+
+
+def test_describe_scene_no_location():
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    out = describe_scene_for_narrator(session, actor_name="Xavier")
+    assert "Acting character" in out
+    assert "Xavier" in out
