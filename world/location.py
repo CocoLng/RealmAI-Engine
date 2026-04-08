@@ -14,3 +14,4 @@ class Location(BaseModel):
     connections: list[str] = []
     npcs_present: list[str] = []
     items_available: list[str] = []
+    item_descriptions: dict[str, str] = {}
