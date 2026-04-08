@@ -45,3 +45,24 @@ class NPCResponse(BaseModel):
     dialogue: str
     disposition_change: int = Field(default=0, ge=-2, le=2)
     revealed_info: list[str] = Field(default_factory=list)
+
+
+class MechanicsOutcome(BaseModel):
+    """Structured output of `_resolve_mechanics`.
+
+    Carries three layers separately so the narrator can both honor the
+    player's intent and stay faithful to canon facts:
+
+    - ``summary``: short mechanical phrase, used for the Discord stats embed
+      and for backward-compatible ``ActionPipelineResult.mechanics_text``.
+    - ``player_intent``: how the player framed the action (raw_input plus
+      any interpreter-extracted detail like ``search_detail`` or
+      ``talk_topic``). May be empty for system-driven actions.
+    - ``outcome_facts``: what mechanically changed in engine state
+      (item moved, location changed, NPC killed). May be empty when no
+      state mutation occurred (e.g. LOOK).
+    """
+
+    summary: str
+    player_intent: str = ""
+    outcome_facts: str = ""

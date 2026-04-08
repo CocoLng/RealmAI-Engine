@@ -62,3 +62,24 @@ def test_npc_response_default_values() -> None:
 def test_npc_response_valid_disposition_change() -> None:
     resp = NPCResponse(dialogue="I hate you!", disposition_change=-2)
     assert resp.disposition_change == -2
+
+
+def test_mechanics_outcome_minimal():
+    from ai.models import MechanicsOutcome
+
+    out = MechanicsOutcome(summary="Xavier searches Croix de fer.")
+    assert out.summary == "Xavier searches Croix de fer."
+    assert out.player_intent == ""
+    assert out.outcome_facts == ""
+
+
+def test_mechanics_outcome_full():
+    from ai.models import MechanicsOutcome
+
+    out = MechanicsOutcome(
+        summary="Xavier picks up the Croix de fer.",
+        player_intent="inspecte la croix de fer pour voir si c une d'origine de 39-45",
+        outcome_facts="Item 'Croix de fer' moved from scene to Xavier's inventory.",
+    )
+    assert "39-45" in out.player_intent
+    assert "inventory" in out.outcome_facts
