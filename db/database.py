@@ -75,6 +75,15 @@ def _migrate_schema(engine: Engine) -> None:
             )
             conn.commit()
 
+        # Add item_descriptions column to locations if missing (rich-context lot)
+        result4 = conn.execute(text("PRAGMA table_info(locations)"))
+        loc_columns = {row[1] for row in result4}
+        if loc_columns and "item_descriptions" not in loc_columns:
+            conn.execute(
+                text("ALTER TABLE locations ADD COLUMN item_descriptions JSON DEFAULT '{}'")
+            )
+            conn.commit()
+
 
 def init_db(engine: Engine | None = None) -> None:
     """Create all tables. Creates data/ directory if needed."""

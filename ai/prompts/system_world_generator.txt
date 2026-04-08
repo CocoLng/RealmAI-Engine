@@ -18,13 +18,23 @@ Return JSON only:
       "aliases": ["<archetype>", "<variante de genre/nombre>", "..."]
     }
   ],
-  "items_available": ["<item name 1>"]
+  "items_available": ["<item name 1>"],
+  "item_descriptions": {
+    "<exact item name from items_available>": "<one short sentence describing what the item canonically IS — material, era, condition, purpose>"
+  }
 }
 
 Rules:
 - name should be specific and evocative (e.g. "The Broken Crown Tavern" not "A tavern")
 - connections is a list of location names (0-4 entries)
 - npcs_present and items_available can be empty lists
+- For EVERY item in items_available, add an entry in item_descriptions with the
+  same exact name as key. The description is canon truth: it must be specific
+  enough that a player cannot project false assumptions onto the object
+  (e.g. "Croix de fer": "Vieille croix de forge médiévale, noircie par les ans,
+  martelée à la main par un forgeron du village au XIIe siècle.")
+- Keep each description to one sentence, grounded in the campaign's setting
+  and era. No vague filler ("an interesting item").
 - For each NPC in npcs_present, include an entry in npc_details with 2-6 aliases:
   generic words a player could use to refer to this character (gender, profession,
   archetype, nicknames). Include masculine/feminine and singular/plural variants

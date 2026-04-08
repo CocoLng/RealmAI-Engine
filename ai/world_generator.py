@@ -50,12 +50,22 @@ class WorldGenerator:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.8, think=True)
+        items_available = list(data.get("items_available", []))
+        raw_descriptions = data.get("item_descriptions") or {}
+        # Keep only descriptions whose key actually appears in items_available,
+        # so a stray LLM hallucination cannot leak past canon.
+        item_descriptions = {
+            str(name): str(desc).strip()
+            for name, desc in raw_descriptions.items()
+            if name in items_available and str(desc).strip()
+        }
         location = Location(
             name=str(data["name"]),
             description=str(data["description"]),
             connections=list(data.get("connections", [])),
             npcs_present=list(data.get("npcs_present", [])),
-            items_available=list(data.get("items_available", [])),
+            items_available=items_available,
+            item_descriptions=item_descriptions,
         )
         logger.info(
             "WORLD name=%r type=%s connections=%d",

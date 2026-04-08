@@ -119,3 +119,70 @@ def test_generate_with_optional_location_name(
     assert isinstance(result, Location)
     assert result.name == "The Silver Serpent Inn"
     assert "Room Key" in result.items_available
+
+
+def test_generate_populates_item_descriptions(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """LLM-provided item_descriptions are forwarded to the Location."""
+    response_data = {
+        "name": "La Paroisse de Saint-Michel",
+        "description": "Une vieille église paroissiale.",
+        "connections": ["Village"],
+        "npcs_present": [],
+        "items_available": ["Croix de fer", "Cierge pourri"],
+        "item_descriptions": {
+            "Croix de fer": "Vieille croix de forge médiévale, noircie par les ans.",
+            "Cierge pourri": "Un cierge consumé, la cire jaunie et craquelée.",
+        },
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Un village médiéval menacé par une corruption ancienne.",
+        location_type="starting_area",
+    )
+
+    assert result.item_descriptions["Croix de fer"].startswith("Vieille croix de forge")
+    assert "cire jaunie" in result.item_descriptions["Cierge pourri"]
+
+
+def test_generate_drops_descriptions_for_unknown_items(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """Descriptions whose key is NOT in items_available are dropped (anti-leak)."""
+    response_data = {
+        "name": "La Crypte",
+        "description": "…",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": ["Croix de fer"],
+        "item_descriptions": {
+            "Croix de fer": "Vieille croix de forge.",
+            "Épée d'or": "Une lame légendaire qui n'existe pas dans la scène.",
+        },
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(campaign_context="…", location_type="crypt")
+
+    assert "Croix de fer" in result.item_descriptions
+    assert "Épée d'or" not in result.item_descriptions
+
+
+def test_generate_missing_item_descriptions_defaults_empty(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """Backward compat: LLM responses without item_descriptions still work."""
+    response_data = {
+        "name": "Le Vieux Pont",
+        "description": "Un pont de pierre.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": ["Lanterne"],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(campaign_context="…", location_type="bridge")
+
+    assert result.item_descriptions == {}

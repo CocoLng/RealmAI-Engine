@@ -63,6 +63,7 @@ class LocationRow(Base):
     connections: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     npcs_present: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     items_available: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    item_descriptions: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
 
 
 class QuestRow(Base):

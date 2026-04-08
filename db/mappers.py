@@ -124,6 +124,7 @@ def location_to_db(location: Location, campaign_id: str) -> LocationRow:
         connections=location.connections,
         npcs_present=location.npcs_present,
         items_available=location.items_available,
+        item_descriptions=location.item_descriptions,
     )
 
 
@@ -135,6 +136,7 @@ def location_from_db(row: LocationRow) -> Location:
         connections=list(row.connections) if row.connections else [],
         npcs_present=list(row.npcs_present) if row.npcs_present else [],
         items_available=list(row.items_available) if row.items_available else [],
+        item_descriptions=dict(row.item_descriptions) if row.item_descriptions else {},
     )
 
 
