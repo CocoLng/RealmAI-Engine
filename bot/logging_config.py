@@ -5,9 +5,31 @@ Call setup_logging() once at startup, before any other imports log.
 Each bot launch creates a new log file: realm_YYYYMMDD_HHMMSS.log
 """
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
+
+
+class _JsonExtraFormatter(logging.Formatter):
+    """File formatter that appends any ``extra_payload`` as compact JSON.
+
+    Callers can attach ``extra={"extra_payload": {...}}`` to a log record
+    to dump structured debug data (e.g. full mechanics outcome including
+    hidden stats) alongside the human-readable message. Single-line so
+    the file stays grep-friendly and parsable.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        payload = getattr(record, "extra_payload", None)
+        if payload is None:
+            return base
+        try:
+            dump = json.dumps(payload, ensure_ascii=False, default=str)
+        except Exception:
+            dump = repr(payload)
+        return f"{base} | {dump}"
 
 
 def setup_logging(
@@ -43,7 +65,7 @@ def setup_logging(
         encoding="utf-8",
     )
     file_handler.setLevel(level)
-    file_handler.setFormatter(logging.Formatter(
+    file_handler.setFormatter(_JsonExtraFormatter(
         fmt="%(asctime)s %(levelname)-5s [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     ))

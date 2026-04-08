@@ -536,7 +536,7 @@ class CampaignLauncher:
             first_beat = self.story_arc.beats[0]
             desc = f"{desc}\n\n*{first_beat.description}*"
 
-        embed = build_narrative_embed(desc, f"Campagne : {self.campaign.name}", "dramatic")
+        embed = build_narrative_embed(desc, tone="dramatic", footer_override=f"Campagne : {self.campaign.name}")
         await self.channel.send(embed=embed)
 
         # Lot G — hydrate Location.npcs_present into real NPC rows so the

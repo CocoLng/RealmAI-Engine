@@ -6,6 +6,7 @@ import pytest
 from bot.embeds.character_embed import build_character_embed
 from bot.embeds.combat_embed import build_combat_embed
 from bot.embeds.inventory_embed import build_inventory_embed
+from ai.models import PublicEffects
 from bot.embeds.narrative_embed import build_narrative_embed
 from engine.character import (
     AbilityScores,
@@ -345,42 +346,61 @@ class TestNarrativeEmbed:
     def test_description(self):
         embed = build_narrative_embed(
             narrative="The sword cleaves through the goblin's armor.",
-            mechanics="Attack roll: 18 vs AC 13. Hit! 8 slashing damage.",
         )
         assert "The sword cleaves" in embed.description
 
-    def test_mechanics_field(self):
-        embed = build_narrative_embed(
-            narrative="A burst of fire erupts.",
-            mechanics="Fireball: 28 fire damage (DEX save DC 15).",
-        )
-        mech_field = next(f for f in embed.fields if f.name == "Mecaniques")
-        assert "28 fire damage" in mech_field.value
-        assert mech_field.inline is False
+    def test_no_fields(self):
+        embed = build_narrative_embed(narrative="text")
+        assert len(embed.fields) == 0
 
-    def test_field_count(self):
+    def test_no_footer_when_public_effects_none(self):
+        embed = build_narrative_embed(narrative="text")
+        assert embed.footer.text is None or embed.footer.text == ""
+
+    def test_no_footer_when_public_effects_empty(self):
+        embed = build_narrative_embed(
+            narrative="text", public_effects=PublicEffects(),
+        )
+        assert embed.footer.text is None or embed.footer.text == ""
+
+    def test_footer_from_public_effects(self):
+        pe = PublicEffects(hp_delta={"Xavier": -5}, items_gained=["Potion"])
+        embed = build_narrative_embed(narrative="text", public_effects=pe)
+        assert embed.footer.text is not None
+        assert "Xavier" in embed.footer.text
+        assert "Potion" in embed.footer.text
+
+    def test_footer_override_wins(self):
+        pe = PublicEffects(hp_delta={"A": -1})
         embed = build_narrative_embed(
             narrative="text",
-            mechanics="mech",
+            public_effects=pe,
+            footer_override="custom",
         )
-        assert len(embed.fields) == 1
+        assert embed.footer.text == "custom"
+
+    def test_no_mechanics_field_ever(self):
+        """Regression: never render a field named 'Mecaniques'."""
+        pe = PublicEffects(hp_delta={"X": -1})
+        embed = build_narrative_embed(narrative="n", public_effects=pe)
+        assert not any(f.name == "Mecaniques" for f in embed.fields)
 
     def test_default_tone_color(self):
-        embed = build_narrative_embed(narrative="x", mechanics="y")
+        embed = build_narrative_embed(narrative="x")
         assert embed.color == discord.Color(0xDAA520)
 
     def test_tense_tone_color(self):
-        embed = build_narrative_embed(narrative="x", mechanics="y", tone="tense")
+        embed = build_narrative_embed(narrative="x", tone="tense")
         assert embed.color == discord.Color(0xCC0000)
 
     def test_humorous_tone_color(self):
-        embed = build_narrative_embed(narrative="x", mechanics="y", tone="humorous")
+        embed = build_narrative_embed(narrative="x", tone="humorous")
         assert embed.color == discord.Color(0x339933)
 
     def test_somber_tone_color(self):
-        embed = build_narrative_embed(narrative="x", mechanics="y", tone="somber")
+        embed = build_narrative_embed(narrative="x", tone="somber")
         assert embed.color == discord.Color(0x663399)
 
     def test_unknown_tone_falls_back_to_default(self):
-        embed = build_narrative_embed(narrative="x", mechanics="y", tone="unknown")
+        embed = build_narrative_embed(narrative="x", tone="unknown")
         assert embed.color == discord.Color(0xDAA520)

@@ -40,7 +40,12 @@ from pydantic import BaseModel, Field
 
 from ai.entity_resolver import EntityCandidate, EntityResolver, ResolutionResult
 from ai.interpreter import Interpreter
-from ai.models import InterpretedAction, MechanicsOutcome, NarrativeResult
+from ai.models import (
+    InterpretedAction,
+    MechanicsOutcome,
+    NarrativeResult,
+    PublicEffects,
+)
 from ai.narrator import Narrator
 from ai.scene_context import SceneContext, build_scene_context
 from bot.llm_retry import retry_llm_call
@@ -90,6 +95,7 @@ class ActionPipelineResult(BaseModel):
     narrative: str
     tone: Literal["dramatic", "tense", "humorous", "somber"]
     mechanics_text: str
+    public_effects: PublicEffects = Field(default_factory=PublicEffects)
     interpreted_action: InterpretedAction
     new_beat: StoryBeat | None = None
 
@@ -318,13 +324,29 @@ class ActionPipeline:
                     )
 
         await self._emit(progress_callback, PipelinePhase.DONE)
-        return ActionPipelineResult(
+        result = ActionPipelineResult(
             narrative=narration.narrative,
             tone=narration.tone,
             mechanics_text=outcome.summary,
+            public_effects=outcome.public_effects,
             interpreted_action=interpreted,
             new_beat=new_beat,
         )
+        logger.info(
+            "ACTION complete campaign=%s actor=%s action=%s",
+            self.campaign_id,
+            interpreted.actor_name,
+            interpreted.action_type.value,
+            extra={"extra_payload": {
+                "mechanics_summary": outcome.summary,
+                "player_intent": outcome.player_intent,
+                "outcome_facts": outcome.outcome_facts,
+                "public_effects": outcome.public_effects.model_dump(),
+                "narrative": narration.narrative,
+                "tone": narration.tone,
+            }},
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Phase helpers
@@ -679,6 +701,7 @@ class ActionPipeline:
                     summary=f"{action.actor_name} arrives at {dest.name}.",
                     player_intent=intent,
                     outcome_facts=f"{action.actor_name} moved to {dest.name}.",
+                    public_effects=PublicEffects(location_change=dest.name),
                 )
             return MechanicsOutcome(
                 summary=f"{action.actor_name} moves toward {action.target_name}.",
@@ -694,10 +717,17 @@ class ActionPipeline:
         if at == ActionType.PICKUP:
             summary = await asyncio.to_thread(self._resolve_pickup, action)
             facts = ""
+            public = PublicEffects()
             if "picks up" in summary:
                 facts = summary
+                picked_name = action.target_name or action.item_name or ""
+                if picked_name:
+                    public = PublicEffects(items_gained=[picked_name])
             return MechanicsOutcome(
-                summary=summary, player_intent=intent, outcome_facts=facts,
+                summary=summary,
+                player_intent=intent,
+                outcome_facts=facts,
+                public_effects=public,
             )
 
         if at == ActionType.IMPROVISE:
@@ -859,8 +889,6 @@ class ActionPipeline:
             )
 
         summary = f"{action.actor_name} speaks with {npc.name}."
-        if response.disposition_change:
-            summary += f" (disposition: {response.disposition_change:+d})"
 
         return MechanicsOutcome(
             summary=summary,

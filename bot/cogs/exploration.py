@@ -81,7 +81,7 @@ class ExplorationCog(commands.Cog):
             except Exception:
                 pass
 
-        embed = build_narrative_embed(narrative, mechanics or "Rien de notable.", tone)
+        embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics or "Rien de notable.")
         await interaction.response.send_message(embed=embed)
         await record_turn_and_maybe_check(
             session,
@@ -141,7 +141,7 @@ class ExplorationCog(commands.Cog):
             except Exception:
                 pass
 
-        embed = build_narrative_embed(narrative, mechanics, tone)
+        embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
         await interaction.response.send_message(embed=embed)
         await record_turn_and_maybe_check(
             session,
@@ -241,7 +241,7 @@ class ExplorationCog(commands.Cog):
             except Exception:
                 pass
 
-        embed = build_narrative_embed(narrative, mechanics, tone)
+        embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
         await interaction.followup.send(embed=embed)
         await record_turn_and_maybe_check(
             session,
@@ -347,7 +347,7 @@ class ExplorationCog(commands.Cog):
             except Exception:
                 pass
 
-        embed = build_narrative_embed(narrative, mechanics, tone)
+        embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
         await interaction.followup.send(embed=embed)
         await record_turn_and_maybe_check(
             session,

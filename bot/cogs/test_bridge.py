@@ -372,7 +372,7 @@ class TestBridge(commands.Cog):
         desc = "Bienvenue, aventuriers !"
         if session.current_location:
             desc = session.current_location.description or desc
-        embed = build_narrative_embed(desc, f"Campagne: {theme}", "dramatic")
+        embed = build_narrative_embed(desc, tone="dramatic", footer_override=f"Campagne: {theme}")
         await inter.channel.send(embed=embed)
         await inter.channel.send(f"Campagne **{theme}** lancee dans ce canal (test mode).")
 

@@ -284,7 +284,7 @@ class ActionHandlerCog(commands.Cog):
     ) -> None:
         embed = build_narrative_embed(
             narrative=result.narrative,
-            mechanics=result.mechanics_text,
+            public_effects=result.public_effects,
             tone=result.tone,
         )
         await progress_msg.edit(embed=embed, view=None)
@@ -296,8 +296,11 @@ class ActionHandlerCog(commands.Cog):
     ) -> None:
         embed = build_narrative_embed(
             narrative=result.refusal_narrative,
-            mechanics=f"⚠️ {result.field_name}: '{result.raw_value}' introuvable.",
             tone=result.tone,
+            footer_override=(
+                f"\u26a0\ufe0f {result.field_name}: "
+                f"'{result.raw_value}' introuvable."
+            ),
         )
         await progress_msg.edit(embed=embed, view=None)
 

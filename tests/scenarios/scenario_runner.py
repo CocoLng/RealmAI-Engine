@@ -588,7 +588,7 @@ class ScenarioRunner:
 
         from bot.embeds.narrative_embed import build_narrative_embed
 
-        embed = build_narrative_embed(mechanics, mechanics, "dramatic")
+        embed = build_narrative_embed(mechanics, tone="dramatic", footer_override=mechanics)
         cap = EmbedCapture(embed=embed)
         self.responses.append(cap)
         self.channel_capture.messages.append(cap)
@@ -644,7 +644,7 @@ class ScenarioRunner:
 
         from bot.embeds.narrative_embed import build_narrative_embed
 
-        embed = build_narrative_embed(mechanics, mechanics, "dramatic")
+        embed = build_narrative_embed(mechanics, tone="dramatic", footer_override=mechanics)
         cap = EmbedCapture(embed=embed)
         self.responses.append(cap)
         self.channel_capture.messages.append(cap)
@@ -671,7 +671,7 @@ class ScenarioRunner:
 
         from bot.embeds.narrative_embed import build_narrative_embed
 
-        embed = build_narrative_embed(mechanics, mechanics, "dramatic")
+        embed = build_narrative_embed(mechanics, tone="dramatic", footer_override=mechanics)
         cap = EmbedCapture(embed=embed)
         self.responses.append(cap)
         self.channel_capture.messages.append(cap)
@@ -698,7 +698,7 @@ class ScenarioRunner:
 
         from bot.embeds.narrative_embed import build_narrative_embed
 
-        embed = build_narrative_embed(mechanics, mechanics, "dramatic")
+        embed = build_narrative_embed(mechanics, tone="dramatic", footer_override=mechanics)
         cap = EmbedCapture(embed=embed)
         self.responses.append(cap)
         self.channel_capture.messages.append(cap)
@@ -757,7 +757,7 @@ class ScenarioRunner:
 
             from bot.embeds.narrative_embed import build_narrative_embed
 
-            embed = build_narrative_embed(mechanics, mechanics, "dramatic")
+            embed = build_narrative_embed(mechanics, tone="dramatic", footer_override=mechanics)
             cap = EmbedCapture(embed=embed)
             self.channel_capture.messages.append(cap)
 

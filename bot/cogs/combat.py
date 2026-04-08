@@ -186,7 +186,7 @@ class CombatCog(commands.Cog):
         elif action == "defend":
             mechanics = f"{combatant.name} se met en defense."
             narrative, tone = await self._narrate(session, mechanics)
-            embed = build_narrative_embed(narrative, mechanics, tone)
+            embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
             await channel.send(embed=embed)
             await record_turn_and_maybe_check(
                 session,
@@ -199,7 +199,7 @@ class CombatCog(commands.Cog):
         elif action == "flee":
             mechanics = f"{combatant.name} tente de fuir !"
             narrative, tone = await self._narrate(session, mechanics)
-            embed = build_narrative_embed(narrative, mechanics, tone)
+            embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
             await channel.send(embed=embed)
             await record_turn_and_maybe_check(
                 session,
@@ -275,7 +275,7 @@ class CombatCog(commands.Cog):
         )
 
         narrative, tone = await self._narrate(session, mechanics)
-        embed = build_narrative_embed(narrative, mechanics, tone)
+        embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
         await channel.send(embed=embed)
         await record_turn_and_maybe_check(
             session,
@@ -360,7 +360,7 @@ class CombatCog(commands.Cog):
             mechanics += f" — {result.healing} PV soignes"
 
         narrative, tone = await self._narrate(session, mechanics)
-        embed = build_narrative_embed(narrative, mechanics, tone)
+        embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
         await channel.send(embed=embed)
         await record_turn_and_maybe_check(
             session,
@@ -410,7 +410,7 @@ class CombatCog(commands.Cog):
                 mechanics += f"Rate ({result.outcome.value})"
 
             narrative, tone = await self._narrate(session, mechanics)
-            embed = build_narrative_embed(narrative, mechanics, tone)
+            embed = build_narrative_embed(narrative, tone=tone, footer_override=mechanics)
             await channel.send(embed=embed)
             await record_turn_and_maybe_check(
                 session,
