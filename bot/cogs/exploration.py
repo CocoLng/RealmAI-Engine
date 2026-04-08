@@ -11,7 +11,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.embeds.narrative_embed import build_narrative_embed
-from db.repositories import LocationRepository, NPCRepository
+from bot.story_bible_logger import record_turn_and_maybe_check
+from db.repositories import NPCRepository
 
 if TYPE_CHECKING:
     from bot.bot import RealmBot
@@ -25,7 +26,10 @@ class ExplorationCog(commands.Cog):
     def __init__(self, bot: RealmBot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="look", description="Observe les alentours")
+    @app_commands.command(
+        name="look",
+        description="[Deprecie] Mentionne le bot avec ton action (ex: @bot j'observe autour)",
+    )
     async def look(self, interaction: discord.Interaction) -> None:
         """Describe the current location."""
         session = self.bot.get_session(interaction.channel_id)
@@ -79,8 +83,19 @@ class ExplorationCog(commands.Cog):
 
         embed = build_narrative_embed(narrative, mechanics or "Rien de notable.", tone)
         await interaction.response.send_message(embed=embed)
+        await record_turn_and_maybe_check(
+            session,
+            user_name=str(interaction.user),
+            command="/look",
+            args="",
+            mechanics=mechanics or "Rien de notable.",
+            narrative=narrative,
+        )
 
-    @app_commands.command(name="search", description="Fouille un element du lieu")
+    @app_commands.command(
+        name="search",
+        description="[Deprecie] Mentionne le bot avec ton action (ex: @bot je fouille l'autel)",
+    )
     @app_commands.describe(target="Ce que tu cherches")
     async def search(self, interaction: discord.Interaction, target: str) -> None:
         """Search for something in the current location."""
@@ -128,8 +143,19 @@ class ExplorationCog(commands.Cog):
 
         embed = build_narrative_embed(narrative, mechanics, tone)
         await interaction.response.send_message(embed=embed)
+        await record_turn_and_maybe_check(
+            session,
+            user_name=str(interaction.user),
+            command="/search",
+            args=f'target="{target}"',
+            mechanics=mechanics,
+            narrative=narrative,
+        )
 
-    @app_commands.command(name="talk", description="Parle a un PNJ")
+    @app_commands.command(
+        name="talk",
+        description="[Deprecie] Mentionne le bot avec ton action (ex: @bot je parle au pretre)",
+    )
     @app_commands.describe(npc="Nom du PNJ")
     async def talk(self, interaction: discord.Interaction, npc: str) -> None:
         """Initiate conversation with an NPC."""
@@ -217,8 +243,19 @@ class ExplorationCog(commands.Cog):
 
         embed = build_narrative_embed(narrative, mechanics, tone)
         await interaction.followup.send(embed=embed)
+        await record_turn_and_maybe_check(
+            session,
+            user_name=str(interaction.user),
+            command="/talk",
+            args=f'npc="{npc}"',
+            mechanics=mechanics,
+            narrative=narrative,
+        )
 
-    @app_commands.command(name="move", description="Se deplacer vers un lieu connecte")
+    @app_commands.command(
+        name="move",
+        description="[Deprecie] Mentionne le bot avec ton action (ex: @bot j'entre dans la cathedrale)",
+    )
     @app_commands.describe(direction="Nom du lieu de destination")
     async def move(self, interaction: discord.Interaction, direction: str) -> None:
         """Move to a connected location."""
@@ -259,53 +296,39 @@ class ExplorationCog(commands.Cog):
 
         await interaction.response.defer()
 
-        # Load destination from DB or generate
-        generated = False
-        dest = None
-        db_session = self.bot.db_factory()
+        # Lot D — `/move` is now a thin shim around the shared helper.
+        logger.warning(
+            "MOVE deprecated_command_used user=%s campaign=%s direction=%r",
+            interaction.user.id, session.campaign.id, direction,
+        )
         try:
-            loc_repo = LocationRepository(db_session)
-            dest = loc_repo.get_by_name(match, session.campaign.id)
-        finally:
-            db_session.close()
+            await interaction.followup.send(
+                ":warning: `/move` est déprécié. Tape simplement `@bot {action}` "
+                "pour te déplacer (ex: `@bot j'entre dans le donjon`).",
+                ephemeral=True,
+            )
+        except Exception:
+            pass
 
-        if dest is None and session.ollama_client:
-            # Generate new location
-            try:
-                from ai.world_generator import WorldGenerator
-                gen = WorldGenerator(session.ollama_client)
-                dest = await asyncio.to_thread(
-                    gen.generate,
-                    campaign_context=f"Moving from {location.name} to {match}",
-                    location_type="connected_area",
-                    location_name=match,
-                    language=session.language,
-                )
-                generated = True
-                # Save generated location
-                db_session = self.bot.db_factory()
-                try:
-                    loc_repo = LocationRepository(db_session)
-                    loc_repo.save(dest, session.campaign.id)
-                    db_session.commit()
-                finally:
-                    db_session.close()
-            except Exception:
-                logger.warning("Failed to generate location: %s", match)
-
-        if dest is None:
-            # Minimal fallback location
+        from bot.world_navigation import LocationChangeError, change_location
+        try:
+            dest = await change_location(
+                session, match, db_factory=self.bot.db_factory,
+            )
+        except LocationChangeError as exc:
             from world.location import Location
             dest = Location(name=match, description=f"Vous arrivez a {match}.")
+            session.current_location = dest
+            session.campaign.current_location = dest.name
+            logger.warning(
+                "EXPLORE /move fallback user=%s reason=%s",
+                interaction.user, exc.reason,
+            )
 
         logger.info(
-            "EXPLORE move user=%s from=%s to=%s generated=%s",
-            interaction.user, location.name, dest.name, generated,
+            "EXPLORE move user=%s from=%s to=%s",
+            interaction.user, location.name, dest.name,
         )
-
-        # Update session
-        session.current_location = dest
-        session.campaign.current_location = dest.name
 
         # Narrate arrival
         mechanics = f"Deplacement: {location.name} → {dest.name}"
@@ -326,6 +349,14 @@ class ExplorationCog(commands.Cog):
 
         embed = build_narrative_embed(narrative, mechanics, tone)
         await interaction.followup.send(embed=embed)
+        await record_turn_and_maybe_check(
+            session,
+            user_name=str(interaction.user),
+            command="/move",
+            args=f'direction="{direction}"',
+            mechanics=mechanics,
+            narrative=narrative,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

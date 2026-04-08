@@ -208,7 +208,7 @@ class TestTalk:
                 await cog.talk.callback(cog, interaction, npc="Barkeep")
 
         interaction.response.defer.assert_called_once()
-        interaction.followup.send.assert_called_once()
+        assert interaction.followup.send.call_count >= 1
         call_kwargs = interaction.followup.send.call_args[1]
         assert isinstance(call_kwargs["embed"], discord.Embed)
 
@@ -260,12 +260,12 @@ class TestMove:
         cog.bot.get_session.return_value = session
 
         from unittest.mock import patch
-        with patch("bot.cogs.exploration.LocationRepository") as mock_repo_cls:
+        with patch("bot.world_navigation.LocationRepository") as mock_repo_cls:
             mock_repo_cls.return_value.get_by_name.return_value = None
             await cog.move.callback(cog, interaction, direction="Forest")
 
         interaction.response.defer.assert_called_once()
-        interaction.followup.send.assert_called_once()
+        assert interaction.followup.send.call_count >= 1
 
         # Session should be updated (fallback location created)
         assert session.current_location is not None
@@ -280,7 +280,7 @@ class TestMove:
         cog.bot.get_session.return_value = session
 
         from unittest.mock import patch
-        with patch("bot.cogs.exploration.LocationRepository") as mock_repo_cls:
+        with patch("bot.world_navigation.LocationRepository") as mock_repo_cls:
             mock_repo_cls.return_value.get_by_name.return_value = None
             await cog.move.callback(cog, interaction, direction="forest")
 

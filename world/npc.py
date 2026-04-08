@@ -36,3 +36,9 @@ class NPC(BaseModel):
     description: str = ""
     personality: str = ""
     location_name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+
+    def kill(self) -> None:
+        """Mark this NPC as dead. Idempotent."""
+        self.hp = 0
+        self.is_alive = False

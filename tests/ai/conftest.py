@@ -30,8 +30,10 @@ def make_ollama_response(
         "model": "qwen3.5:9b",
         "message": msg,
         "done": True,
+        "done_reason": "stop",
         "total_duration": 1000000000,
         "eval_count": 20,
+        "prompt_eval_count": 100,
     }
 
 

@@ -18,6 +18,10 @@ class InterpretedAction(BaseModel):
     item_name: str | None = None
     raw_input: str
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Exploration extras
+    talk_topic: str | None = None
+    search_detail: str | None = None
+    improvise_description: str | None = None
 
 
 class NarrativeResult(BaseModel):

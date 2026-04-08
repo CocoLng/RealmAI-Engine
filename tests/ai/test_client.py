@@ -1,10 +1,12 @@
 """Tests for OllamaClient."""
 
 import json
+import logging
 import pytest
 from pytest_httpx import HTTPXMock
+from unittest.mock import patch
 
-from ai.client import OllamaClient, OllamaUnavailableError
+from ai.client import LLMParseError, OllamaClient, OllamaUnavailableError
 from tests.ai.conftest import CHAT_URL, TAGS_URL, make_ollama_response
 
 
@@ -39,14 +41,21 @@ def test_chat_json_raises_on_connection_error(
 def test_chat_json_raises_on_invalid_json(
     httpx_mock: HTTPXMock, ollama_client: OllamaClient,
 ) -> None:
-    """OllamaClient propagates JSONDecodeError when LLM returns non-JSON."""
+    """OllamaClient raises LLMParseError when LLM returns non-JSON.
+
+    LLMParseError subclasses ValueError so existing retry handlers keep
+    working, but carries the raw response text for offline diagnosis.
+    """
     bad_response = make_ollama_response("This is not JSON at all")
     httpx_mock.add_response(url=CHAT_URL, json=bad_response)
 
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(LLMParseError) as exc_info:
         ollama_client.chat_json(
             model="qwen3.5:9b", messages=[{"role": "user", "content": "x"}],
         )
+    assert exc_info.value.raw_response == "This is not JSON at all"
+    assert exc_info.value.model == "qwen3.5:9b"
+    assert isinstance(exc_info.value, ValueError)
 
 
 def test_chat_json_uses_custom_base_url(httpx_mock: HTTPXMock) -> None:
@@ -87,44 +96,68 @@ def test_chat_json_sends_think_parameter(
     chat_request = requests[-1]
     payload = json.loads(chat_request.content)
     assert payload["think"] is True
-    assert payload["options"]["num_ctx"] == 4096
+    assert payload["options"]["num_ctx"] == 16384
     assert payload["keep_alive"] == "10m"
 
 
-def test_chat_json_with_think_boosts_num_predict(
+def test_chat_json_default_num_predict_is_unlimited(
     httpx_mock: HTTPXMock, ollama_client: OllamaClient,
 ) -> None:
-    """When think=True, num_predict is boosted by 2048 for thinking overhead."""
+    """Default num_predict must be -1 (unlimited, bounded only by num_ctx).
+
+    Regression guard: the pre-migration OpenAI-compat client set no
+    ``max_tokens``, which Ollama maps to ``num_predict=-1``.  An arc with
+    10-15 beats in structured JSON routinely needs > 2000 tokens, so any
+    artificial cap truncates the response to ``done=length``.
+    """
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
 
     ollama_client.chat_json(
         model="qwen3.5:9b",
         messages=[{"role": "user", "content": "test"}],
-        think=True,
-        num_predict=500,
     )
 
     chat_request = httpx_mock.get_requests()[-1]
     payload = json.loads(chat_request.content)
-    assert payload["options"]["num_predict"] == 500 + 2048
+    assert payload["options"]["num_predict"] == -1
 
 
-def test_chat_json_no_boost_without_think(
+def test_chat_json_default_num_ctx_is_16384(
     httpx_mock: HTTPXMock, ollama_client: OllamaClient,
 ) -> None:
-    """When think=False, num_predict is sent as-is."""
+    """Default num_ctx must be large enough to hold thinking + content.
+
+    Qwen 3.5 9b thinking mode can emit 6000+ tokens of reasoning before the
+    content phase, and a full arc JSON is ~2500-3500 tokens on top.  A
+    16384 context window is the empirically-tested minimum.
+    """
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
 
     ollama_client.chat_json(
         model="qwen3.5:9b",
         messages=[{"role": "user", "content": "test"}],
-        think=False,
-        num_predict=500,
     )
 
     chat_request = httpx_mock.get_requests()[-1]
     payload = json.loads(chat_request.content)
-    assert payload["options"]["num_predict"] == 500
+    assert payload["options"]["num_ctx"] == 16384
+
+
+def test_chat_json_caller_can_override_num_predict(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    """Callers may pin num_predict to a hard ceiling when they really need one."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    ollama_client.chat_json(
+        model="qwen3.5:9b",
+        messages=[{"role": "user", "content": "test"}],
+        num_predict=300,
+    )
+
+    chat_request = httpx_mock.get_requests()[-1]
+    payload = json.loads(chat_request.content)
+    assert payload["options"]["num_predict"] == 300
 
 
 def test_chat_json_raises_on_empty_content_with_think(
@@ -140,6 +173,53 @@ def test_chat_json_raises_on_empty_content_with_think(
             messages=[{"role": "user", "content": "test"}],
             think=True,
         )
+
+
+def test_chat_json_surfaces_done_reason_on_empty(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Empty-content error must include done_reason for fast diagnosis.
+
+    Regression guard: a length-truncated response (thinking exhausted the
+    token budget) must surface done=length in both the warning log and the
+    ValueError message so operators can distinguish it from other failures.
+    """
+    response = make_ollama_response("", thinking="lots of reasoning…")
+    response["done_reason"] = "length"
+    response["eval_count"] = 6644
+    httpx_mock.add_response(url=CHAT_URL, json=response)
+
+    with caplog.at_level(logging.WARNING, logger="ai.client"):
+        with pytest.raises(ValueError, match="done=length"):
+            ollama_client.chat_json(
+                model="qwen3.5:9b",
+                messages=[{"role": "user", "content": "test"}],
+                think=True,
+            )
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("done=length" in m and "gen_tok=6644" in m for m in warnings), (
+        f"Expected warning with done=length and gen_tok, got: {warnings}"
+    )
+
+
+def test_chat_json_logs_done_reason_on_success(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Successful calls log done_reason + prompt_tok + gen_tok at INFO."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    with caplog.at_level(logging.INFO, logger="ai.client"):
+        ollama_client.chat_json(
+            model="qwen3.5:9b",
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+    info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert any(
+        "done=stop" in m and "prompt_tok=100" in m and "gen_tok=20" in m
+        for m in info_msgs
+    ), f"Expected INFO log with done+tok counts, got: {info_msgs}"
 
 
 def test_chat_json_parses_content_with_thinking_field(
@@ -175,3 +255,50 @@ def test_chat_json_uses_longer_timeout_with_think(
     # the client constants are correctly set.
     assert OllamaClient.THINKING_TIMEOUT == 600.0
     assert OllamaClient.DEFAULT_TIMEOUT == 120.0
+
+
+# ---------------------------------------------------------------------------
+# REALM_LLM_DEBUG mode
+# ---------------------------------------------------------------------------
+
+
+def test_debug_mode_logs_truncated_prompt_and_response(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With REALM_LLM_DEBUG=1, truncated prompt and response appear in DEBUG logs."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    with patch.dict("os.environ", {"REALM_LLM_DEBUG": "1"}):
+        with caplog.at_level(logging.DEBUG, logger="ai.client"):
+            ollama_client.chat_json(
+                model="qwen3.5:9b",
+                messages=[{"role": "user", "content": "Describe the dungeon."}],
+            )
+
+    debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    prompt_logs = [m for m in debug_msgs if "prompt[200]" in m]
+    resp_logs = [m for m in debug_msgs if "resp[200]" in m]
+    assert len(prompt_logs) == 1, f"Expected 1 prompt debug log, got: {debug_msgs}"
+    assert len(resp_logs) == 1, f"Expected 1 resp debug log, got: {debug_msgs}"
+    assert "Describe the dungeon" in prompt_logs[0]
+
+
+def test_debug_mode_off_by_default(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without REALM_LLM_DEBUG, no prompt/response content appears in logs."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    with patch.dict("os.environ", {}, clear=False):
+        # Ensure the var is absent
+        import os
+        os.environ.pop("REALM_LLM_DEBUG", None)
+        with caplog.at_level(logging.DEBUG, logger="ai.client"):
+            ollama_client.chat_json(
+                model="qwen3.5:9b",
+                messages=[{"role": "user", "content": "Secret prompt text here."}],
+            )
+
+    debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    content_logs = [m for m in debug_msgs if "prompt[200]" in m or "resp[200]" in m]
+    assert content_logs == [], f"Unexpected content debug logs: {content_logs}"

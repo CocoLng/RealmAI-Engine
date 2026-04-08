@@ -22,6 +22,7 @@ from bot.action_pipeline import (
     UnknownEntityResult,
 )
 from bot.embeds.action_progress_embed import build_action_progress_embed
+from bot.embeds.beat_embed import build_beat_advance_embed
 from bot.embeds.narrative_embed import build_narrative_embed
 from bot.embeds.scene_embed import build_scene_embed
 from bot.views.clarification_view import (
@@ -119,7 +120,16 @@ class ActionHandlerCog(commands.Cog):
             )
             return
 
-        await self._run_pipeline(message, session, raw_text)
+        # 7. Serialize actions per session — refuse if one is in progress.
+        if session.action_lock.locked():
+            await message.reply(
+                "⏳ Une action est déjà en cours de résolution. "
+                "Attends que la scène soit terminée puis renvoie ton message.",
+            )
+            return
+
+        async with session.action_lock:
+            await self._run_pipeline(message, session, raw_text)
 
     # ------------------------------------------------------------------
     # Pipeline orchestration
@@ -171,6 +181,8 @@ class ActionHandlerCog(commands.Cog):
             campaign_id=session.campaign.id,
             combat_state=session.combat_state,
             inventory=session.inventories.get(message.author.id),
+            session=session,
+            db_factory=self.bot.db_factory,
         )
 
         logger.info(
@@ -231,6 +243,26 @@ class ActionHandlerCog(commands.Cog):
                 logger.debug(
                     "SCENE post-after-move skipped: missing action attributes",
                 )
+            # Lot D — celebrate beat progression with a "Nouveau chapitre" embed.
+            if result.new_beat is not None and session.story_arc is not None:
+                try:
+                    await message.channel.send(
+                        embed=build_beat_advance_embed(
+                            beat=result.new_beat,
+                            total_beats=len(session.story_arc.beats),
+                            language=session.language,
+                        ),
+                    )
+                    logger.info(
+                        "BEAT embed posted campaign=%s beat=%d",
+                        session.campaign.id,
+                        result.new_beat.beat_number,
+                    )
+                except Exception:
+                    logger.exception(
+                        "BEAT embed post failed campaign=%s",
+                        session.campaign.id,
+                    )
         elif isinstance(result, AmbiguityResult):
             await self._render_ambiguity(
                 progress_msg, result, message.author.id, pipeline,

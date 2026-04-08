@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -509,56 +508,5 @@ class TestProgressCallback:
         assert seen_phases == sorted(seen_phases, key=lambda p: p.value)
 
 
-# ---------------------------------------------------------------------------
-# Concurrent action serialization (session lock)
-# ---------------------------------------------------------------------------
-
-
-class TestConcurrencyLock:
-    @pytest.mark.asyncio
-    async def test_two_pipelines_same_campaign_share_lock(
-        self,
-        cathedral: Location,
-        aldric: NPC,
-    ) -> None:
-        """Two pipelines for the same campaign serialize their RESOLVING_ACTION
-        phase via the shared session lock."""
-        interp1 = FakeInterpreter(
-            response=InterpretedAction(
-                action_type=ActionType.LOOK,
-                actor_name="Aldric",
-                raw_input="je regarde",
-                confidence=0.95,
-            ),
-        )
-        narrator1 = FakeNarrator(
-            responses=[NarrativeResult(narrative="x1", tone="dramatic")],
-        )
-        interp2 = FakeInterpreter(
-            response=InterpretedAction(
-                action_type=ActionType.LOOK,
-                actor_name="Bera",
-                raw_input="je regarde aussi",
-                confidence=0.95,
-            ),
-        )
-        narrator2 = FakeNarrator(
-            responses=[NarrativeResult(narrative="x2", tone="dramatic")],
-        )
-        p1 = _make_pipeline(
-            interp1, narrator1, cathedral,
-            {aldric.name: aldric},
-            campaign_id="shared",
-        )
-        p2 = _make_pipeline(
-            interp2, narrator2, cathedral,
-            {aldric.name: aldric},
-            campaign_id="shared",
-        )
-
-        results = await asyncio.gather(
-            p1.process(player_text="je regarde"),
-            p2.process(player_text="je regarde aussi"),
-        )
-        assert all(isinstance(r, ActionPipelineResult) for r in results)
-        assert ActionPipeline._get_lock("shared") is ActionPipeline._get_lock("shared")
+# Concurrency serialization is enforced by the action_handler cog via
+# GameSession.action_lock — see tests/test_cog_exploration.py.

@@ -45,6 +45,7 @@ class NPCRow(Base):
     description: Mapped[str] = mapped_column(String, default="")
     personality: Mapped[str] = mapped_column(String, default="")
     location_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    aliases: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
 
 
 class LocationRow(Base):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -86,6 +87,7 @@ def _make_session(
     session.language = "fr"
     session.interpreter = MagicMock() if interpreter is _SENTINEL else interpreter
     session.narrator = MagicMock() if narrator is _SENTINEL else narrator
+    session.action_lock = asyncio.Lock()
     return session
 
 
@@ -461,6 +463,79 @@ class TestOnMessageDispatch:
             e for e in embeds_sent if e.title and "Le Village" in (e.title or "")
         ]
         assert scene_embeds, "expected a scene embed posted after MOVE"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_action_is_refused_with_wait_message(self) -> None:
+        """While one action is being processed, a second @bot mention in the
+        same channel must be refused with a wait message — not dispatched."""
+        session = _make_session(player_id=1)
+        # Add a second registered player so the second message passes filters.
+        scores = AbilityScores(
+            STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10,
+        )
+        session.characters[2] = create_character(
+            "Bera", Race.HUMAN, CharacterClass.FIGHTER, scores,
+        )
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+
+        gate = asyncio.Event()
+        process_calls: list[str] = []
+
+        def factory(**kwargs: Any) -> Any:
+            pipeline = MagicMock()
+
+            async def process(player_text: str, progress_callback: Any = None) -> Any:
+                process_calls.append(player_text)
+                await gate.wait()
+                return ActionPipelineResult(
+                    narrative="ok",
+                    tone="dramatic",
+                    mechanics_text="ok",
+                    interpreted_action=InterpretedAction(
+                        action_type=ActionType.LOOK,
+                        actor_name="Aldric",
+                        raw_input=player_text,
+                    ),
+                )
+
+            pipeline.process = process
+            return pipeline
+
+        cog._pipeline_factory = factory  # type: ignore[assignment]
+
+        msg1 = FakeMessage(
+            content="<@9999> je fouille l'autel",
+            author=FakeAuthor(id=1),
+            channel=FakeChannel(id=1),
+            mentions=[bot.user],
+        )
+        msg2 = FakeMessage(
+            content="<@9999> j'attaque le gobelin",
+            author=FakeAuthor(id=2),
+            channel=FakeChannel(id=1),
+            mentions=[bot.user],
+        )
+
+        # Start the first action; it will block on the gate.
+        task1 = asyncio.create_task(cog.on_message(msg1))  # type: ignore[arg-type]
+        # Yield until the first pipeline is actually running.
+        for _ in range(20):
+            if process_calls:
+                break
+            await asyncio.sleep(0)
+
+        # Now fire the second action — it must be refused immediately.
+        await cog.on_message(msg2)  # type: ignore[arg-type]
+
+        msg2.reply.assert_called_once()
+        wait_text = msg2.reply.call_args.args[0]
+        assert "cours" in wait_text.lower() or "attends" in wait_text.lower()
+        assert process_calls == ["je fouille l'autel"]
+
+        # Release the first action and let it finish cleanly.
+        gate.set()
+        await task1
 
     @pytest.mark.asyncio
     async def test_post_non_move_does_not_post_scene(self) -> None:

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import time
 from typing import Any, cast
 
@@ -12,6 +13,29 @@ logger = logging.getLogger(__name__)
 
 class OllamaUnavailableError(Exception):
     """Raised when the Ollama server is unreachable."""
+
+
+class LLMParseError(ValueError):
+    """Raised when an LLM response cannot be parsed as JSON.
+
+    Carries the raw response text and call metadata so the retry layer can
+    persist it for offline diagnosis. Subclasses ``ValueError`` so existing
+    ``except ValueError`` retry handlers keep working unchanged.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        raw_response: str,
+        model: str,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.raw_response = raw_response
+        self.model = model
+        self.messages = messages
 
 
 class OllamaClient:
@@ -48,8 +72,8 @@ class OllamaClient:
         messages: list[dict[str, Any]],
         temperature: float = 0.7,
         think: bool = False,
-        num_predict: int = 300,
-        num_ctx: int = 4096,
+        num_predict: int = -1,
+        num_ctx: int = 16384,
     ) -> dict[str, Any]:
         """Call the model in JSON mode and return the parsed response dict.
 
@@ -58,8 +82,15 @@ class OllamaClient:
             messages: OpenAI-format message list.
             temperature: Sampling temperature (0.0-1.0).
             think: Enable Qwen 3.5 thinking mode for deeper reasoning.
-            num_predict: Maximum tokens to generate.
-            num_ctx: Context window size.
+                Warning: Qwen 3.5 has no API-level thinking budget cap — on
+                some prompts the model enters runaway reasoning.  The only
+                safeguard is a large enough ``num_ctx``.
+            num_predict: Maximum tokens to generate.  Defaults to ``-1``
+                (unlimited, bounded only by ``num_ctx``).  This matches the
+                pre-migration OpenAI-compat behaviour where no cap was set.
+                Override only if you need a hard ceiling.
+            num_ctx: Context window size.  Must be large enough to hold
+                prompt + (optional thinking trace) + content JSON.
 
         Returns:
             Parsed JSON dict from the model response.
@@ -68,11 +99,6 @@ class OllamaClient:
             OllamaUnavailableError: If the Ollama server is unreachable.
             json.JSONDecodeError: If the model returns non-JSON content.
         """
-        # When thinking is enabled, the model uses num_predict tokens for
-        # BOTH thinking and content.  Add a budget so the caller's
-        # num_predict remains the *content* target.
-        effective_num_predict = num_predict + 2048 if think else num_predict
-
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -82,7 +108,7 @@ class OllamaClient:
             "keep_alive": "10m",
             "options": {
                 "temperature": temperature,
-                "num_predict": effective_num_predict,
+                "num_predict": num_predict,
                 "num_ctx": num_ctx,
             },
         }
@@ -121,18 +147,53 @@ class OllamaClient:
         content = msg.get("content", "")
         thinking = msg.get("thinking", "")
 
+        # Ollama native API exposes these per response — essential for
+        # diagnosing length-limit truncation vs. normal stops.
+        done_reason = data.get("done_reason", "unknown")
+        eval_count = data.get("eval_count", 0)
+        prompt_eval_count = data.get("prompt_eval_count", 0)
+
         if thinking:
             logger.debug("OLLAMA thinking=%d chars", len(thinking))
 
-        logger.info("OLLAMA model=%s think=%s time=%.1fs", model, think, elapsed)
+        logger.info(
+            "OLLAMA model=%s think=%s time=%.1fs done=%s prompt_tok=%d gen_tok=%d",
+            model, think, elapsed, done_reason, prompt_eval_count, eval_count,
+        )
+
+        prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        logger.debug(
+            "OLLAMA io model=%s prompt_chars=%d resp_chars=%d",
+            model, prompt_chars, len(content),
+        )
+
+        if os.getenv("REALM_LLM_DEBUG"):
+            prompt_str = " | ".join(str(m.get("content", ""))[:100] for m in messages)
+            logger.debug("OLLAMA prompt[200] model=%s: %s…", model, prompt_str[:200])
+            logger.debug("OLLAMA resp[200]   model=%s: %s…", model, content[:200])
 
         if not content.strip():
             logger.warning(
-                "OLLAMA empty content model=%s think=%s thinking=%d chars",
-                model, think, len(thinking),
+                "OLLAMA empty content model=%s think=%s done=%s gen_tok=%d thinking=%d chars",
+                model, think, done_reason, eval_count, len(thinking),
             )
-            raise ValueError(
-                f"LLM returned empty content (model={model}, think={think})"
+            raise LLMParseError(
+                f"LLM returned empty content (model={model}, think={think}, done={done_reason})",
+                raw_response=content,
+                model=model,
+                messages=messages,
             )
 
-        return cast(dict, json.loads(content))
+        try:
+            return cast(dict, json.loads(content))
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "OLLAMA non-JSON content model=%s done=%s gen_tok=%d reason=%s",
+                model, done_reason, eval_count, exc,
+            )
+            raise LLMParseError(
+                f"LLM returned non-JSON content (model={model}, done={done_reason}): {exc}",
+                raw_response=content,
+                model=model,
+                messages=messages,
+            ) from exc

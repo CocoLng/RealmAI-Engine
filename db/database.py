@@ -66,6 +66,15 @@ def _migrate_schema(engine: Engine) -> None:
             )
             conn.commit()
 
+        # Add aliases column to npcs if missing (Lot B)
+        result3 = conn.execute(text("PRAGMA table_info(npcs)"))
+        npc_columns = {row[1] for row in result3}
+        if npc_columns and "aliases" not in npc_columns:
+            conn.execute(
+                text("ALTER TABLE npcs ADD COLUMN aliases JSON DEFAULT '[]'")
+            )
+            conn.commit()
+
 
 def init_db(engine: Engine | None = None) -> None:
     """Create all tables. Creates data/ directory if needed."""

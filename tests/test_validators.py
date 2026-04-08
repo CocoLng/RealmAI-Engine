@@ -32,6 +32,7 @@ from engine.validators import (
     validate_attack,
     validate_cast_spell,
     validate_defend,
+    validate_exploration_action,
     validate_flee,
     validate_use_item,
 )
@@ -573,3 +574,164 @@ class TestValidateAction:
         )
         result = validate_action(action, state)
         assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# Exploration ActionType values
+# ---------------------------------------------------------------------------
+
+
+class TestExplorationActionTypes:
+    """The new exploration ActionType values must be defined."""
+
+    def test_look_action_type_exists(self) -> None:
+        assert ActionType.LOOK.value == "Look"
+
+    def test_search_action_type_exists(self) -> None:
+        assert ActionType.SEARCH.value == "Search"
+
+    def test_talk_action_type_exists(self) -> None:
+        assert ActionType.TALK.value == "Talk"
+
+    def test_move_action_type_exists(self) -> None:
+        assert ActionType.MOVE.value == "Move"
+
+    def test_interact_action_type_exists(self) -> None:
+        assert ActionType.INTERACT.value == "Interact"
+
+    def test_improvise_action_type_exists(self) -> None:
+        assert ActionType.IMPROVISE.value == "Improvise"
+
+
+# ---------------------------------------------------------------------------
+# validate_exploration_action — rule-only checks (entity existence is handled
+# upstream by the EntityResolver before validation runs).
+# ---------------------------------------------------------------------------
+
+
+class TestValidateLook:
+    """LOOK is always legal — it is a free observation action."""
+
+    def test_look_always_valid(self) -> None:
+        action = Action(actor_name="Arden", action_type=ActionType.LOOK)
+        result = validate_exploration_action(action)
+        assert result.is_valid
+        assert result.error_message is None
+
+    def test_look_ignores_target(self) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.LOOK,
+            target_name="nothing in particular",
+        )
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+
+class TestValidateMove:
+    """MOVE requires a target (the exit name)."""
+
+    def test_move_with_target(self) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.MOVE,
+            target_name="Intérieur de la cathédrale",
+        )
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+    def test_move_without_target(self) -> None:
+        action = Action(actor_name="Arden", action_type=ActionType.MOVE)
+        result = validate_exploration_action(action)
+        assert not result.is_valid
+        assert "Move requires a target" in (result.error_message or "")
+
+
+class TestValidateTalk:
+    """TALK requires a target (the NPC name, already resolved upstream)."""
+
+    def test_talk_with_target(self) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.TALK,
+            target_name="Père Aldric",
+        )
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+    def test_talk_without_target(self) -> None:
+        action = Action(actor_name="Arden", action_type=ActionType.TALK)
+        result = validate_exploration_action(action)
+        assert not result.is_valid
+        assert "Talk requires a target" in (result.error_message or "")
+
+
+class TestValidateSearch:
+    """SEARCH is always valid — narrator arbitrates whether anything is found."""
+
+    def test_search_without_target_valid(self) -> None:
+        action = Action(actor_name="Arden", action_type=ActionType.SEARCH)
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+    def test_search_with_target_valid(self) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.SEARCH,
+            target_name="Autel de pierre",
+        )
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+
+class TestValidateInteract:
+    """INTERACT requires a target (the object to manipulate)."""
+
+    def test_interact_with_target_valid(self) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.INTERACT,
+            target_name="levier de pierre",
+        )
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+    def test_interact_without_target_invalid(self) -> None:
+        action = Action(actor_name="Arden", action_type=ActionType.INTERACT)
+        result = validate_exploration_action(action)
+        assert not result.is_valid
+        assert "Interact requires a target" in (result.error_message or "")
+
+
+class TestValidateImprovise:
+    """IMPROVISE is always valid — the narrator arbitrates the outcome."""
+
+    def test_improvise_without_target_valid(self) -> None:
+        action = Action(actor_name="Arden", action_type=ActionType.IMPROVISE)
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+    def test_improvise_with_description_valid(self) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.IMPROVISE,
+            target_name="the chandelier",
+        )
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+
+class TestValidateExplorationDispatch:
+    """validate_exploration_action dispatches based on ActionType."""
+
+    def test_rejects_combat_action_type(self) -> None:
+        """Combat action types should be routed through validate_action, not here."""
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.ATTACK,
+            target_name="Goblin",
+            weapon_name="Longsword",
+        )
+        result = validate_exploration_action(action)
+        assert not result.is_valid
+        assert "not an exploration action" in (result.error_message or "").lower()

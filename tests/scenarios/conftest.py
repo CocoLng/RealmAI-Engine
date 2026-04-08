@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from pytest_httpx import HTTPXMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from ai.client import OllamaClient
 from db.database import Base
 from engine.character import (
     Ability,
@@ -30,6 +32,21 @@ from engine.inventory import (
 )
 
 from tests.scenarios.scenario_runner import ScenarioRunner
+
+# ---------------------------------------------------------------------------
+# Ollama mock fixture (re-exported here so tests/scenarios/* can use it
+# without importing from tests/ai/conftest.py).
+# ---------------------------------------------------------------------------
+
+OLLAMA_BASE = "http://localhost:11434"
+TAGS_URL = f"{OLLAMA_BASE}/api/tags"
+
+
+@pytest.fixture()
+def ollama_client(httpx_mock: HTTPXMock) -> OllamaClient:
+    """Create an OllamaClient with the /api/tags health check mocked."""
+    httpx_mock.add_response(url=TAGS_URL, json={"models": []})
+    return OllamaClient()
 
 
 @pytest.fixture()

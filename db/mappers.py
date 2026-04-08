@@ -86,6 +86,7 @@ def npc_to_db(npc: NPC, campaign_id: str) -> NPCRow:
         description=npc.description,
         personality=npc.personality,
         location_name=npc.location_name,
+        aliases=list(npc.aliases),
     )
 
 
@@ -105,6 +106,7 @@ def npc_from_db(row: NPCRow) -> NPC:
         description=row.description,
         personality=row.personality,
         location_name=row.location_name,
+        aliases=list(row.aliases) if row.aliases else [],
     )
 
 

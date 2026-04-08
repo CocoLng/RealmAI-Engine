@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import difflib
 import logging
+import unicodedata
 from dataclasses import dataclass, field
 
 from engine.character import Character
@@ -13,12 +16,15 @@ from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC
 from world.quest import Quest
-from world.story_arc import StoryArc
+from world.story_arc import StoryArc, StoryBeat, advance_beat
 
 from ai.client import OllamaClient, OllamaUnavailableError
 from ai.interpreter import Interpreter
 from ai.narrator import Narrator
 from ai.npc_agent import NPCAgent
+from ai.story_director import StoryDirector
+from bot.story_bible_logger import StoryBibleLogger
+from memory.semantic import SemanticMemory
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +53,72 @@ class GameSession:
     narrator: Narrator | None = None
     interpreter: Interpreter | None = None
     npc_agent: NPCAgent | None = None
+    story_director: StoryDirector | None = None
+    semantic_memory: SemanticMemory | None = None
+
+    # Audit log — always created, independent of Ollama availability
+    story_bible: StoryBibleLogger | None = None
+
+    # Serializes player actions per session: only one pipeline runs at a time.
+    action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    # ------------------------------------------------------------------
+    # Lot D — story beat progression
+    # ------------------------------------------------------------------
+
+    def advance_beat_if_ready(self) -> StoryBeat | None:
+        """Advance ``story_arc`` if the current location matches the next beat.
+
+        Uses fuzzy matching (lowercase + accent-strip + difflib ratio) on
+        ``next_beat.location_hint`` vs ``current_location.name``. Threshold
+        of 0.7 (location_hint is freeform LLM output, looser than the
+        entity-resolver's 0.75).
+
+        Returns the new :class:`StoryBeat` if advanced, ``None`` otherwise.
+        """
+        if self.story_arc is None or self.current_location is None:
+            return None
+        arc = self.story_arc
+        next_idx = arc.current_beat_index + 1
+        if next_idx >= len(arc.beats):
+            return None
+        next_beat = arc.beats[next_idx]
+        ratio = difflib.SequenceMatcher(
+            None,
+            _normalize_location(next_beat.location_hint),
+            _normalize_location(self.current_location.name),
+        ).ratio()
+        if ratio < 0.7:
+            return None
+        self.story_arc = advance_beat(arc)
+        new_beat = self.story_arc.beats[self.story_arc.current_beat_index]
+        logger.info(
+            "BEAT advance ratio=%.2f hint=%r location=%r → beat %d/%d %r",
+            ratio,
+            next_beat.location_hint,
+            self.current_location.name,
+            self.story_arc.current_beat_index + 1,
+            len(self.story_arc.beats),
+            new_beat.title,
+        )
+        return new_beat
+
+
+def _normalize_location(text: str) -> str:
+    """Lowercase + strip accents for fuzzy comparison."""
+    nfkd = unicodedata.normalize("NFKD", text)
+    return nfkd.encode("ascii", "ignore").decode("ascii").lower().strip()
 
 
 def create_ai_services(session: GameSession) -> None:
     """Attempt to initialize AI services on a session.
 
     Silent failure if Ollama is unreachable — cogs check for None.
+    The story bible logger is always created (it does not depend on Ollama).
     """
+    # Audit logger is always available, even without an LLM backend.
+    session.story_bible = StoryBibleLogger(session.campaign.id)
+
     try:
         client = OllamaClient()
         # Quick connectivity check
@@ -61,6 +126,16 @@ def create_ai_services(session: GameSession) -> None:
         session.narrator = Narrator(client)
         session.interpreter = Interpreter(client)
         session.npc_agent = NPCAgent(client)
+        try:
+            session.semantic_memory = SemanticMemory()
+            session.story_director = StoryDirector(client, session.semantic_memory)
+        except Exception:
+            logger.warning(
+                "Story Director init failed for campaign %s", session.campaign.id,
+                exc_info=True,
+            )
+            session.semantic_memory = None
+            session.story_director = None
         logger.info("AI services initialized for campaign %s", session.campaign.id)
     except (OllamaUnavailableError, Exception):
         logger.warning(

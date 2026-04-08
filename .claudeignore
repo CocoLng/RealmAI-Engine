@@ -17,3 +17,7 @@ __pycache__/
 
 # uv cache
 .uv/
+
+# Tests - excluded from broad exploration to save context.
+# Claude can still Read specific test files directly when needed.
+tests/

@@ -27,6 +27,7 @@ from engine.inventory import (
     WeaponCategory,
     WeaponProperty,
 )
+from world.npc import NPC
 from engine.spells import (
     Spell,
     SpellcasterState,
@@ -630,3 +631,76 @@ def apply_healing(combatant: Combatant, healing: int) -> Combatant:
         combatant.death_saves = DeathSaves()
 
     return combatant
+
+
+# ---------------------------------------------------------------------------
+# Trivial NPC resolution (Lot E) — auto-resolve overwhelming attacks against
+# defenseless NPCs without spinning up a CombatState. One attack, one damage
+# roll, possibly one death.
+# ---------------------------------------------------------------------------
+
+
+class TrivialResolveResult(BaseModel):
+    """Outcome of a trivial NPC resolution (one swing, no rounds)."""
+
+    hit: bool
+    damage: int
+    target_killed: bool
+    description: str
+
+
+def trivial_resolve(
+    attacker: Character,
+    target_npc: NPC,
+    weapon: Weapon | None = None,
+) -> TrivialResolveResult:
+    """Auto-resolve an attack against a defenseless NPC.
+
+    Assumes the attacker has overwhelming advantage. Rolls one attack and
+    one damage. The target is killed if HP reaches 0. Does NOT create or
+    mutate any CombatState — that's the entire point.
+    """
+    str_mod = compute_modifier(attacker.ability_scores.get(Ability.STR))
+    attack_bonus = str_mod + attacker.proficiency_bonus
+
+    attack_check = roll_check(f"1d20+{attack_bonus}", target_npc.ac)
+    hit = (
+        attack_check.outcome != RollOutcome.CRITICAL_FAILURE
+        and attack_check.total >= target_npc.ac
+    )
+
+    if not hit:
+        return TrivialResolveResult(
+            hit=False,
+            damage=0,
+            target_killed=False,
+            description=(
+                f"{attacker.name} manque {target_npc.name} de peu — "
+                "celui-ci s'enfuit en panique."
+            ),
+        )
+
+    damage_dice = weapon.damage_dice if weapon is not None else "1d4"
+    damage_roll = roll(damage_dice)
+    damage = max(1, damage_roll.total + str_mod)
+
+    target_npc.hp = max(0, target_npc.hp - damage)
+    killed = target_npc.hp <= 0
+    if killed:
+        target_npc.kill()
+        description = (
+            f"{attacker.name} frappe {target_npc.name} d'un coup décisif "
+            f"({damage} dégâts) — {target_npc.name} s'effondre, mort."
+        )
+    else:
+        description = (
+            f"{attacker.name} frappe {target_npc.name} ({damage} dégâts), "
+            f"qui chancelle mais tient debout."
+        )
+
+    return TrivialResolveResult(
+        hit=True,
+        damage=damage,
+        target_killed=killed,
+        description=description,
+    )

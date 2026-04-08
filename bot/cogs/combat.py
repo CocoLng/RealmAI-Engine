@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from bot.embeds.combat_embed import build_combat_embed
 from bot.embeds.narrative_embed import build_narrative_embed
+from bot.story_bible_logger import record_turn_and_maybe_check
 from bot.views.combat_view import CombatView
 from bot.views.spell_select import SpellSelectView
 from bot.views.target_select import TargetSelectView
@@ -25,8 +26,15 @@ from engine.combat import (
     resolve_spell,
     start_combat,
 )
-from engine.inventory import EquipmentSlot, Weapon
+from engine.character import (
+    Ability,
+    Character,
+    CharacterClass,
+    Size,
+)
+from engine.inventory import EquipmentSlot, Weapon, create_inventory
 from engine.spells import SPELL_CATALOG, can_cast_spell
+from world.npc import NPC
 
 if TYPE_CHECKING:
     from bot.bot import RealmBot
@@ -35,6 +43,55 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 XP_PER_ENEMY = 100
+
+
+def build_pc_combatants(session: "GameSession") -> list[Combatant]:
+    """Convert all PCs of a session into PLAYER-side Combatants."""
+    combatants: list[Combatant] = []
+    for user_id, char in session.characters.items():
+        inv = session.inventories.get(user_id)
+        spell = session.spellcasters.get(user_id)
+        combatants.append(
+            Combatant(
+                name=char.name,
+                side=CombatSide.PLAYER,
+                character=char,
+                inventory=inv if inv is not None else create_inventory(),
+                spellcaster=spell,
+            )
+        )
+    return combatants
+
+
+def build_npc_combatant(npc: NPC) -> Combatant:
+    """Wrap an NPC into an ENEMY-side Combatant for bootstrap encounters.
+
+    NPCs do not carry full Character stats — fill in sensible defaults so
+    the engine can drive a fight (Lot C). Inventory is empty (NPC fights
+    barehanded for now); a future lot may attach default weapons.
+    """
+    char_class = npc.char_class or CharacterClass.FIGHTER
+    char = Character(
+        name=npc.name,
+        race=npc.race,
+        char_class=char_class,
+        level=npc.level,
+        ability_scores=npc.ability_scores,
+        hp=npc.hp,
+        max_hp=npc.max_hp,
+        ac=npc.ac,
+        speed=30,
+        proficiency_bonus=2,
+        saving_throw_proficiencies=(Ability.STR, Ability.CON),
+        hit_die="1d8",
+        size=Size.MEDIUM,
+    )
+    return Combatant(
+        name=npc.name,
+        side=CombatSide.ENEMY,
+        character=char,
+        inventory=create_inventory(),
+    )
 
 
 class CombatCog(commands.Cog):
@@ -50,20 +107,7 @@ class CombatCog(commands.Cog):
         enemies: list[Combatant],
     ) -> None:
         """Start a combat encounter. Called by other cogs (e.g. exploration)."""
-        combatants: list[Combatant] = []
-        for user_id, char in session.characters.items():
-            inv = session.inventories.get(user_id)
-            spell = session.spellcasters.get(user_id)
-            from engine.inventory import create_inventory
-            combatant = Combatant(
-                name=char.name,
-                side=CombatSide.PLAYER,
-                character=char,
-                inventory=inv if inv is not None else create_inventory(),
-                spellcaster=spell,
-            )
-            combatants.append(combatant)
-
+        combatants: list[Combatant] = build_pc_combatants(session)
         combatants.extend(enemies)
         state = start_combat(combatants)
         session.combat_state = state
@@ -144,11 +188,27 @@ class CombatCog(commands.Cog):
             narrative, tone = await self._narrate(session, mechanics)
             embed = build_narrative_embed(narrative, mechanics, tone)
             await channel.send(embed=embed)
+            await record_turn_and_maybe_check(
+                session,
+                user_name=combatant.name,
+                command="combat:defend",
+                args="",
+                mechanics=mechanics,
+                narrative=narrative,
+            )
         elif action == "flee":
             mechanics = f"{combatant.name} tente de fuir !"
             narrative, tone = await self._narrate(session, mechanics)
             embed = build_narrative_embed(narrative, mechanics, tone)
             await channel.send(embed=embed)
+            await record_turn_and_maybe_check(
+                session,
+                user_name=combatant.name,
+                command="combat:flee",
+                args="",
+                mechanics=mechanics,
+                narrative=narrative,
+            )
 
         advance_turn(state)
         if is_combat_over(state):
@@ -217,6 +277,14 @@ class CombatCog(commands.Cog):
         narrative, tone = await self._narrate(session, mechanics)
         embed = build_narrative_embed(narrative, mechanics, tone)
         await channel.send(embed=embed)
+        await record_turn_and_maybe_check(
+            session,
+            user_name=combatant.name,
+            command="combat:attack",
+            args=f'target="{target.name}"',
+            mechanics=mechanics,
+            narrative=narrative,
+        )
 
     async def _handle_cast_spell(
         self,
@@ -294,6 +362,15 @@ class CombatCog(commands.Cog):
         narrative, tone = await self._narrate(session, mechanics)
         embed = build_narrative_embed(narrative, mechanics, tone)
         await channel.send(embed=embed)
+        await record_turn_and_maybe_check(
+            session,
+            user_name=combatant.name,
+            command="combat:cast_spell",
+            args=f'spell="{spell.name}"'
+            + (f' target="{target.name}"' if target else ""),
+            mechanics=mechanics,
+            narrative=narrative,
+        )
 
     async def _resolve_enemy_turn(
         self,
@@ -335,6 +412,14 @@ class CombatCog(commands.Cog):
             narrative, tone = await self._narrate(session, mechanics)
             embed = build_narrative_embed(narrative, mechanics, tone)
             await channel.send(embed=embed)
+            await record_turn_and_maybe_check(
+                session,
+                user_name=enemy.name,
+                command="combat:enemy_turn",
+                args=f'target="{target.name}"',
+                mechanics=mechanics,
+                narrative=narrative,
+            )
             advance_turn(state)
 
         if is_combat_over(state):

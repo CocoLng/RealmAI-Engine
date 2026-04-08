@@ -12,6 +12,12 @@ Return JSON only:
   "description": "<2-4 sentence atmospheric description>",
   "connections": ["<connected location 1>", "<connected location 2>"],
   "npcs_present": ["<NPC name 1>"],
+  "npc_details": [
+    {
+      "name": "<exact NPC name from npcs_present>",
+      "aliases": ["<archetype>", "<variante de genre/nombre>", "..."]
+    }
+  ],
   "items_available": ["<item name 1>"]
 }
 
@@ -19,4 +25,9 @@ Rules:
 - name should be specific and evocative (e.g. "The Broken Crown Tavern" not "A tavern")
 - connections is a list of location names (0-4 entries)
 - npcs_present and items_available can be empty lists
+- For each NPC in npcs_present, include an entry in npc_details with 2-6 aliases:
+  generic words a player could use to refer to this character (gender, profession,
+  archetype, nicknames). Include masculine/feminine and singular/plural variants
+  when relevant. Example for "Jeanne, la Villageoise Terrifiée":
+  ["villageoise", "villageois", "villageur", "femme", "paysanne", "habitante"]
 - Return valid JSON only

@@ -47,7 +47,7 @@ class ArcGenerator:
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.8, think=True, num_predict=800)
+        data = self._client.chat_json(self.MODEL, messages, temperature=0.8, think=True)
         arc = StoryArc.model_validate(data)
         logger.info(
             "ARC theme=%r beats=%d villain=%r",

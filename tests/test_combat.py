@@ -17,6 +17,7 @@ from engine.character import (
 from engine.combat import (
     CombatSide,
     Combatant,
+    TrivialResolveResult,
     advance_turn,
     apply_damage,
     apply_healing,
@@ -29,7 +30,9 @@ from engine.combat import (
     resolve_spell,
     roll_initiative,
     start_combat,
+    trivial_resolve,
 )
+from world.npc import NPC, NPCDisposition
 from engine.conditions import ActiveCondition, ConditionType, has_condition
 from engine.dice import D20CheckResult, DiceResult, RollOutcome, _compute_outcome
 from engine.inventory import (
@@ -648,3 +651,104 @@ class TestApplyHealing:
         assert not has_condition(fighter.conditions, ConditionType.UNCONSCIOUS)
         assert fighter.death_saves.successes == 0
         assert fighter.death_saves.failures == 0
+
+
+# ---------------------------------------------------------------------------
+# Trivial NPC resolution (Lot E)
+# ---------------------------------------------------------------------------
+
+
+def _make_commoner(name: str = "Jeanne", hp: int = 4) -> NPC:
+    return NPC(
+        name=name,
+        race=Race.HUMAN,
+        char_class=None,
+        level=1,
+        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+        hp=hp,
+        max_hp=hp,
+        ac=10,
+        disposition=NPCDisposition.FRIENDLY,
+    )
+
+
+class TestTrivialResolve:
+    def test_hit_kills_low_hp_target(self, fighter: Combatant, monkeypatch) -> None:
+        npc = _make_commoner(hp=4)
+        # Force a guaranteed hit (nat 15) and damage roll of 6.
+        from engine import combat as combat_mod
+
+        def fake_roll_check(expr: str, dc: int):
+            return D20CheckResult(
+                expression=expr, rolls=[15], modifier=0, total=15 + 5,
+                dc=dc, outcome=RollOutcome.SUCCESS, margin=20 - dc,
+            )
+
+        def fake_roll(expr: str):
+            return DiceResult(expression=expr, rolls=[6], modifier=0, total=6)
+
+        monkeypatch.setattr(combat_mod, "roll_check", fake_roll_check)
+        monkeypatch.setattr(combat_mod, "roll", fake_roll)
+
+        weapon = ITEM_CATALOG["Longsword"]
+        assert isinstance(weapon, Weapon)
+        result = trivial_resolve(fighter.character, npc, weapon=weapon)
+
+        assert isinstance(result, TrivialResolveResult)
+        assert result.hit is True
+        assert result.target_killed is True
+        assert npc.is_alive is False
+        assert npc.hp == 0
+        assert "décisif" in result.description.lower() or "mort" in result.description.lower()
+
+    def test_hit_survives_when_hp_higher(self, fighter: Combatant, monkeypatch) -> None:
+        npc = _make_commoner(hp=20)
+        from engine import combat as combat_mod
+
+        monkeypatch.setattr(
+            combat_mod, "roll_check",
+            lambda expr, dc: D20CheckResult(
+                expression=expr, rolls=[15], modifier=0, total=20,
+                dc=dc, outcome=RollOutcome.SUCCESS, margin=20 - dc,
+            ),
+        )
+        monkeypatch.setattr(
+            combat_mod, "roll",
+            lambda expr: DiceResult(expression=expr, rolls=[3], modifier=0, total=3),
+        )
+
+        weapon = ITEM_CATALOG["Longsword"]
+        assert isinstance(weapon, Weapon)
+        result = trivial_resolve(fighter.character, npc, weapon=weapon)
+        assert result.hit is True
+        assert result.target_killed is False
+        assert npc.is_alive is True
+        assert npc.hp < npc.max_hp
+
+    def test_miss_on_nat_one(self, fighter: Combatant, monkeypatch) -> None:
+        npc = _make_commoner(hp=4)
+        from engine import combat as combat_mod
+
+        monkeypatch.setattr(
+            combat_mod, "roll_check",
+            lambda expr, dc: D20CheckResult(
+                expression=expr, rolls=[1], modifier=0, total=1,
+                dc=dc, outcome=RollOutcome.CRITICAL_FAILURE, margin=1 - dc,
+            ),
+        )
+
+        weapon = ITEM_CATALOG["Longsword"]
+        assert isinstance(weapon, Weapon)
+        result = trivial_resolve(fighter.character, npc, weapon=weapon)
+        assert result.hit is False
+        assert result.damage == 0
+        assert result.target_killed is False
+        assert npc.is_alive is True
+        assert npc.hp == 4
+
+    def test_npc_kill_helper_is_idempotent(self) -> None:
+        npc = _make_commoner(hp=4)
+        npc.kill()
+        npc.kill()
+        assert npc.is_alive is False
+        assert npc.hp == 0
