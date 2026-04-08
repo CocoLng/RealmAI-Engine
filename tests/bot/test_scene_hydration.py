@@ -9,12 +9,18 @@ those would defeat the purpose of these tests).
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from bot.scene_hydration import hydrate_scene, take_scene_item
+from bot.scene_hydration import (
+    describe_scene_for_narrator,
+    hydrate_scene,
+    take_scene_item,
+)
+from world.npc import NPC, NPCDisposition
 from db.database import Base
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
@@ -242,12 +248,6 @@ def test_pickup_validator_accepts_target_or_item() -> None:
 # ---------------------------------------------------------------------------
 # describe_scene_for_narrator
 # ---------------------------------------------------------------------------
-
-from unittest.mock import MagicMock
-
-from bot.scene_hydration import describe_scene_for_narrator
-from world.npc import NPC, NPCDisposition
-
 
 def _npc(name: str, *, location: str, disposition=NPCDisposition.NEUTRAL,
          description="", personality="") -> NPC:
