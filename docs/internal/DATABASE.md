@@ -13,11 +13,10 @@ Défini dans [db/database.py](../../db/database.py).
 
 - **SQLite** (`data/realm.db` par défaut, paramétrable par env).
 - `PRAGMA foreign_keys=ON` forcé à chaque connexion.
-- **Migrations** : `_migrate_schema()` ajoute les colonnes manquantes via `ALTER TABLE` à chaque startup. Colonnes incrémentales ajoutées :
-  - `combat_state_json`, `language` (guild config)
-  - `aliases`, `secrets`, `knowledge`, `dialogue_history` (NPCs)
-  - `item_descriptions` (locations)
-- Stratégie brittle mais fonctionnelle ; pas de rollback si migration casse en cours.
+- **Migrations versionnées** via `PRAGMA user_version`. Chaque version correspond à une fonction `_migrate_vN_to_vN+1(raw)` exécutée dans une transaction avec rollback automatique en cas d'échec.
+  - **V0→V1** : colonnes historiques (`combat_state_json`, `language`, `aliases`, `secrets`, `knowledge`, `dialogue_history`, `item_descriptions`). Gardes d'existence conservées pour compatibilité avec les BDD existantes.
+  - **V1→V2** : extraction de `current_beat_index` en colonne dédiée sur `story_arcs` (auparavant enfoui dans le blob JSON).
+- Pattern d'ajout de migration : créer `_migrate_vN_to_vN+1(raw)` et l'ajouter à la liste `_MIGRATIONS`. Le système exécute automatiquement les migrations manquantes au startup.
 
 ## Schéma — 10 tables
 
@@ -79,9 +78,9 @@ start_interaction, end_interaction, created_at
 
 #### `story_arcs`
 ```
-campaign_id (PK, FK), arc_json (TEXT)
+campaign_id (PK, FK), arc_json (TEXT), current_beat_index (INTEGER DEFAULT 0)
 ```
-Sérialisation complète via `StoryArc.model_dump_json()`. Empêche les updates partiels.
+`arc_json` contient le blob complet de `StoryArc`. `current_beat_index` est extrait en colonne dédiée (V2) pour permettre des updates partiels efficaces. À la lecture, la colonne est autoritaire (la valeur dans le JSON est ignorée).
 
 #### `player_characters`
 ```
@@ -217,7 +216,7 @@ Voir [ISSUES.md](ISSUES.md). Extraits :
 
 - 🟠 `NPCRepository.update()` perd `aliases/secrets/knowledge/dialogue_history`.
 - 🟡 Pas d'index sur `(campaign_id, interaction_number)` dans `exchanges`.
-- 🟡 Migrations manuelles via `ALTER TABLE` sans rollback.
-- 🟡 `StoryArc` en JSON blob unique → pas d'update partiel possible.
+- ~~🟡 Migrations manuelles via `ALTER TABLE` sans rollback.~~ ✅ Corrigé — migrations versionnées via `PRAGMA user_version`.
+- ~~🟡 `StoryArc` en JSON blob unique → pas d'update partiel possible.~~ ✅ Corrigé — `current_beat_index` extrait en colonne dédiée.
 - 🟢 Orphan ChromaDB collections si `/delete campaign` (non implémenté actuellement).
 - 🟢 `guild_configs.language` stocké mais i18n dynamique incomplète.

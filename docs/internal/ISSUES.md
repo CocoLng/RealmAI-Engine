@@ -79,15 +79,13 @@ Snapshot 2026-04-09. Classement par sévérité. Chaque entrée inclut la locali
 **Problème** : `ExchangeRepository.get_recent()` et `get_unsummarized()` scanent sans index. OK à petite échelle, problématique > 1 000 tours.
 **Fix** : ajouter un index composite `(campaign_id, interaction_number)`.
 
-### M4. Migration schema brittle
+### ~~M4. Migration schema brittle~~ ✅ FIXED
 **Où** : [db/database.py](../../db/database.py), `_migrate_schema()`.
-**Problème** : `ALTER TABLE ADD COLUMN` séquentiels, sans rollback si crash en milieu de migration. Aucun test de migration.
-**Fix** : passer à Alembic quand une colonne doit être renommée/supprimée.
+**Résolu** : migrations versionnées via `PRAGMA user_version`, chaque étape dans une transaction avec rollback automatique. Tests de migration ajoutés dans `test_database.py`.
 
-### M5. `StoryArc` en JSON blob unique
-**Où** : table `story_arcs`, colonne `arc_json`.
-**Problème** : updates partiels impossibles — il faut load + modify + dump. Pour une simple incrémentation de `current_beat_index`, on réécrit tout.
-**Fix** : extraire `current_beat_index` en colonne séparée (au moins).
+### ~~M5. `StoryArc` en JSON blob unique~~ ✅ FIXED
+**Où** : table `story_arcs`, colonne `arc_json` + nouvelle colonne `current_beat_index`.
+**Résolu** : `current_beat_index` extrait en colonne dédiée (migration V2). `StoryArcRepository.update_beat_index()` permet des updates partiels efficaces. La colonne est autoritaire à la lecture.
 
 ### M6. Combat bootstrap sans armes pour PNJ
 **Où** : [bot/action_pipeline.py](../../bot/action_pipeline.py) Lot C.
@@ -171,7 +169,7 @@ Les mêmes hooks peuvent revenir à plusieurs checks successifs, polluant le RAG
 - **Prompt tokenizer réel** (tiktoken-like) pour remplacer `word_count * 1.3`.
 - **Extract `ITEM_CATALOG` et `SPELL_CATALOG`** dans des YAML éditables.
 - **Config du budget mémoire** par campagne (actuellement global dans `ContextBudget`).
-- **Alembic** pour les migrations au lieu de `ALTER TABLE` manuel.
+- **Alembic** si besoin de renommage/suppression de colonnes (migrations actuelles via `PRAGMA user_version` suffisent pour les ajouts).
 - **Métriques** Prometheus/OpenTelemetry.
 - **Dashboard admin** pour inspecter `GameSession` live.
 - **Tests d'intégration vrai Ollama** en CI optionnelle.

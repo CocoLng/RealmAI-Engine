@@ -346,9 +346,17 @@ def story_arc_to_db(arc: StoryArc) -> StoryArcRow:
     return StoryArcRow(
         campaign_id=arc.campaign_id,
         arc_json=arc.model_dump_json(),
+        current_beat_index=arc.current_beat_index,
     )
 
 
 def story_arc_from_db(row: StoryArcRow) -> StoryArc:
-    """Convert a StoryArcRow to a StoryArc domain model."""
-    return StoryArc.model_validate_json(row.arc_json)
+    """Convert a StoryArcRow to a StoryArc domain model.
+
+    The dedicated ``current_beat_index`` column is authoritative;
+    the value inside ``arc_json`` is ignored for this field.
+    """
+    arc = StoryArc.model_validate_json(row.arc_json)
+    if arc.current_beat_index != row.current_beat_index:
+        arc = arc.model_copy(update={"current_beat_index": row.current_beat_index})
+    return arc

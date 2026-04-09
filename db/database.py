@@ -1,5 +1,7 @@
 """Database setup — SQLAlchemy engine, session factory, initialization."""
 
+import logging
+import sqlite3
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, text
@@ -8,12 +10,14 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 DB_PATH = Path("data/realmai.db")
 
+logger = logging.getLogger(__name__)
+
 
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy table models."""
 
 
-def _enable_sqlite_fk(dbapi_conn, connection_record):  # type: ignore[no-untyped-def]  # noqa: ANN001
+def _enable_sqlite_fk(dbapi_conn: sqlite3.Connection, connection_record: object) -> None:
     """Enable foreign key enforcement for SQLite connections."""
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
@@ -39,68 +43,91 @@ def get_session_factory(engine: Engine | None = None) -> sessionmaker[Session]:
     return sessionmaker(bind=engine)
 
 
-def _migrate_schema(engine: Engine) -> None:
-    """Add columns introduced after initial schema creation.
+# ---------------------------------------------------------------------------
+# Schema migrations — versioned via PRAGMA user_version
+# ---------------------------------------------------------------------------
 
-    SQLAlchemy's create_all() only creates missing tables, not missing columns.
-    This handles incremental column additions for existing databases.
+
+def _get_table_columns(raw: sqlite3.Connection, table: str) -> set[str]:
+    """Return column names for a table, or empty set if table doesn't exist."""
+    result = raw.execute(f"PRAGMA table_info({table})")  # noqa: S608
+    return {row[1] for row in result}
+
+
+def _add_column_if_missing(
+    raw: sqlite3.Connection, table: str, column: str, col_type: str,
+) -> None:
+    """Add a column to a table if it doesn't already exist (safety guard)."""
+    columns = _get_table_columns(raw, table)
+    if columns and column not in columns:
+        raw.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
+
+
+def _migrate_v0_to_v1(raw: sqlite3.Connection) -> None:
+    """V0 → V1: all columns added before versioned migrations.
+
+    Column-existence guards kept for safety with pre-existing databases
+    that may already have some of these columns.
+    """
+    # campaigns
+    _add_column_if_missing(raw, "campaigns", "combat_state_json", "TEXT")
+
+    # guild_configs
+    _add_column_if_missing(raw, "guild_configs", "language", "TEXT DEFAULT 'fr'")
+
+    # npcs
+    _add_column_if_missing(raw, "npcs", "aliases", "JSON DEFAULT '[]'")
+    _add_column_if_missing(raw, "npcs", "secrets", "JSON DEFAULT '[]'")
+    _add_column_if_missing(raw, "npcs", "knowledge", "JSON DEFAULT '[]'")
+    _add_column_if_missing(raw, "npcs", "dialogue_history", "JSON DEFAULT '[]'")
+
+    # locations
+    _add_column_if_missing(raw, "locations", "item_descriptions", "JSON DEFAULT '{}'")
+
+
+def _migrate_v1_to_v2(raw: sqlite3.Connection) -> None:
+    """V1 → V2: extract current_beat_index from story_arcs JSON blob."""
+    _add_column_if_missing(
+        raw, "story_arcs", "current_beat_index", "INTEGER DEFAULT 0",
+    )
+
+
+# Ordered list of migration functions. Index 0 = v0→v1, index 1 = v1→v2, etc.
+_MIGRATIONS = [_migrate_v0_to_v1, _migrate_v1_to_v2]
+
+
+def _migrate_schema(engine: Engine) -> None:
+    """Run pending schema migrations using PRAGMA user_version for tracking.
+
+    Each migration step runs inside a transaction. On failure the
+    transaction is rolled back and the exception re-raised so that
+    the database is never left in a half-migrated state.
     """
     with engine.connect() as conn:
+        # Check that at least the campaigns table exists (models imported)
         result = conn.execute(text("PRAGMA table_info(campaigns)"))
-        columns = {row[1] for row in result}
-        if not columns:
-            # Table doesn't exist yet (no models imported) — skip migration
+        if not {row[1] for row in result}:
             return
-        if "combat_state_json" not in columns:
-            conn.execute(
-                text("ALTER TABLE campaigns ADD COLUMN combat_state_json TEXT")
-            )
-            conn.commit()
 
-        # Add language column to guild_configs if missing
-        result2 = conn.execute(text("PRAGMA table_info(guild_configs)"))
-        gc_columns = {row[1] for row in result2}
-        if gc_columns and "language" not in gc_columns:
-            conn.execute(
-                text("ALTER TABLE guild_configs ADD COLUMN language TEXT DEFAULT 'fr'")
-            )
-            conn.commit()
+        raw: sqlite3.Connection = conn.connection.dbapi_connection  # type: ignore[assignment]
 
-        # Add aliases column to npcs if missing (Lot B)
-        result3 = conn.execute(text("PRAGMA table_info(npcs)"))
-        npc_columns = {row[1] for row in result3}
-        if npc_columns and "aliases" not in npc_columns:
-            conn.execute(
-                text("ALTER TABLE npcs ADD COLUMN aliases JSON DEFAULT '[]'")
-            )
-            conn.commit()
+        current_version: int = raw.execute("PRAGMA user_version").fetchone()[0]
 
-        if npc_columns and "secrets" not in npc_columns:
-            conn.execute(
-                text("ALTER TABLE npcs ADD COLUMN secrets JSON DEFAULT '[]'")
-            )
-            conn.commit()
-
-        if npc_columns and "knowledge" not in npc_columns:
-            conn.execute(
-                text("ALTER TABLE npcs ADD COLUMN knowledge JSON DEFAULT '[]'")
-            )
-            conn.commit()
-
-        if npc_columns and "dialogue_history" not in npc_columns:
-            conn.execute(
-                text("ALTER TABLE npcs ADD COLUMN dialogue_history JSON DEFAULT '[]'")
-            )
-            conn.commit()
-
-        # Add item_descriptions column to locations if missing (rich-context lot)
-        result4 = conn.execute(text("PRAGMA table_info(locations)"))
-        loc_columns = {row[1] for row in result4}
-        if loc_columns and "item_descriptions" not in loc_columns:
-            conn.execute(
-                text("ALTER TABLE locations ADD COLUMN item_descriptions JSON DEFAULT '{}'")
-            )
-            conn.commit()
+        for version, migrate_fn in enumerate(_MIGRATIONS, start=1):
+            if current_version < version:
+                try:
+                    migrate_fn(raw)
+                    raw.execute(f"PRAGMA user_version = {version}")
+                    raw.commit()
+                    logger.info("Schema migrated to version %d", version)
+                except Exception:
+                    raw.rollback()
+                    logger.exception(
+                        "Schema migration to version %d failed — rolled back",
+                        version,
+                    )
+                    raise
+                current_version = version
 
 
 def init_db(engine: Engine | None = None) -> None:

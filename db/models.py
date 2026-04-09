@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
@@ -169,3 +169,4 @@ class StoryArcRow(Base):
         primary_key=True,
     )
     arc_json: Mapped[str] = mapped_column(Text, nullable=False)
+    current_beat_index: Mapped[int] = mapped_column(Integer, default=0)
