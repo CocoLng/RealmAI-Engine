@@ -3,6 +3,7 @@
 Pure deterministic Python (no LLM).
 """
 
+import logging
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field
 from engine.character import Ability, CharacterClass, compute_modifier
 from engine.dice import parse_dice
 from engine.inventory import DamageType
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +279,14 @@ def cast_spell(
 
     state.spell_slots_remaining[slot_level] = remaining - 1
 
-    # Concentration management
+    # Concentration management: casting a new concentration spell ends the old one (SRD 5e)
     if spell.concentration:
+        if state.concentration_spell is not None:
+            logger.info(
+                "Concentration on '%s' broken by casting '%s'",
+                state.concentration_spell,
+                spell.name,
+            )
         state.concentration_spell = spell.name
 
     return state

@@ -791,3 +791,29 @@ class TestConcentrationLogging:
             validate_cast_spell(action, state)
         assert "Hunter's Mark" in caplog.text
         assert "Bless" in caplog.text
+
+    def test_non_concentration_spell_no_log(
+        self,
+        wizard_combatant: Combatant,
+        goblin_combatant: Combatant,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Casting a non-concentration spell while concentrating should not log."""
+        import logging
+
+        wizard_combatant.spellcaster.concentration_spell = "Hunter's Mark"  # type: ignore[union-attr]
+        state = CombatState(
+            combatants=[wizard_combatant, goblin_combatant],
+            round_number=1,
+            current_turn_index=0,
+        )
+        action = Action(
+            actor_name="Elara",
+            action_type=ActionType.CAST_SPELL,
+            spell_name="Magic Missile",
+            target_name="Goblin",
+        )
+        with caplog.at_level(logging.INFO, logger="engine.validators"):
+            result = validate_cast_spell(action, state)
+        assert result.is_valid
+        assert "Hunter's Mark" not in caplog.text

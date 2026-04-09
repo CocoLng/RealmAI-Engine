@@ -349,6 +349,19 @@ class TestCastSpell:
         cast_spell(wizard_state, SPELL_CATALOG["Hold Person"])
         assert wizard_state.concentration_spell == "Hold Person"
 
+    def test_concentration_replace_logs_break(
+        self, wizard_state: SpellcasterState, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Replacing a concentration spell should log that the old one was broken."""
+        import logging
+
+        cast_spell(wizard_state, SPELL_CATALOG["Bless"])
+        with caplog.at_level(logging.INFO, logger="engine.spells"):
+            cast_spell(wizard_state, SPELL_CATALOG["Hold Person"])
+        assert "Bless" in caplog.text
+        assert "Hold Person" in caplog.text
+        assert wizard_state.concentration_spell == "Hold Person"
+
     def test_concentration_cantrip(self, wizard_state: SpellcasterState) -> None:
         cast_spell(wizard_state, SPELL_CATALOG["Guidance"])
         assert wizard_state.concentration_spell == "Guidance"

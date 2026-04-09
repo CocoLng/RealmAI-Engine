@@ -193,6 +193,11 @@ def validate_attack(action: Action, state: CombatState) -> ValidationResult:
             error_message=f"Weapon '{action.weapon_name}' is not equipped",
         )
 
+    # TODO: Check weapon proficiency once the proficiency system is implemented.
+    # Character currently has no weapon_proficiencies field. When added, verify
+    # the weapon's category is in the character's proficiency list and adjust
+    # the attack roll accordingly (no proficiency bonus if not proficient).
+
     return ValidationResult(is_valid=True)
 
 
