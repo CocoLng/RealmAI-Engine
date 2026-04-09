@@ -1,0 +1,195 @@
+# Cohérence narrative
+
+Comment le projet maintient la **cohérence** d'une campagne : canon respecté, PNJs qui évoluent logiquement, arc qui progresse, et un filet de sécurité via le Story Director.
+
+## 1. Canon verrouillé (locked facts)
+
+Le principe : **le code est seul propriétaire de la vérité mécanique et factuelle ; le LLM n'a que droit de description.**
+
+### Sources de vérité
+
+| Fait | Source | Écrit par |
+|---|---|---|
+| HP / AC / inventory | `Character` + `Inventory` in-memory + DB | `engine/` |
+| Disposition PNJ | `NPC.disposition` | `ai.npc_agent` (retourne un delta) → appliqué par `action_pipeline` → persisté |
+| Nom, description, exits d'une location | `Location` | `ai.world_generator` (une fois) puis immuable |
+| Items d'une location | `Location.items_available` + `item_descriptions` | `world_generator` (avec validation stricte) |
+| État d'arc | `StoryArc.current_beat_index` | `session.advance_beat_if_ready()` |
+| Mort d'un PNJ | `NPC.is_alive` | `engine.combat.trivial_resolve()` ou apply_damage |
+
+### Protection dans les prompts
+
+- `system_narrator.txt` contient explicitement :
+  - « La description de la location et des items sont ABSOLUS et CANONIQUES — ne contredis jamais. »
+  - « Si tu vois `<NPCName> dit : "…"` dans les State changes, tu DOIS reproduire ce dialogue VERBATIM entre guillemets dans ta narration. » (règle Lot F)
+  - « Le `player_intent` est comment le joueur a phrasé son action — c'est du style, pas une vérité. »
+- `system_world_generator.txt` force : chaque item doit avoir une description explicite (matériau, époque, état) — pas de « une petite chose » générique.
+
+### Validation défensive
+
+- `WorldGenerator.generate()` filtre silencieusement les `item_descriptions` dont la clé ne correspond à aucun item de `items_available`. Empêche une hallucination du LLM de polluer le canon. ⚠ Silencieux — idéalement logger, voir [ISSUES.md](ISSUES.md).
+- `Narrator` attend un JSON strict `{narrative, tone}`. Sur échec de parse, retry + dump sur disque.
+
+## 2. PNJs — disposition et dialogue
+
+Défini dans [ai/npc_agent.py](../../ai/npc_agent.py) + `ai/prompts/system_npc_agent.txt`.
+
+### Modèle `NPC` ([world/npc.py](../../world/npc.py))
+
+Champs pertinents pour la cohérence :
+- `disposition` ∈ {`HOSTILE`, `UNFRIENDLY`, `NEUTRAL`, `FRIENDLY`, `ALLIED`}
+- `secrets[]` — info dangereuse, révélée seulement sous haute confiance
+- `knowledge[]` — info publique, partagée largement
+- `dialogue_history[]` — 5 derniers échanges (`DialogueExchange(player_said, npc_said, revealed[])`)
+- `personality`, `description`, `aliases[]` — générés par `NPCGenerator` à la première rencontre
+
+### Flux d'un `TALK`
+
+1. **Lazy generation** : si le PNJ n'a pas de sheet (personnalité, secrets, knowledge), `NPCGenerator.generate(name, location_context, campaign_theme)` est appelé (pipeline a intégré cela via Lot A / scene hydration).
+2. **`NPCAgent.respond(npc, player_input, context_prompt)`** → `NPCResponse(dialogue, disposition_change, revealed_info)`
+   - Le prompt système impose :
+     - Knowledge partagé généreusement (même à faible disposition, sauf `HOSTILE`).
+     - Secrets révélés seulement si `FRIENDLY + ≥2 positive exchanges` ou si le joueur tape pile sur le sujet.
+     - Disposition peut **remonter** après un geste correctif — pas de verrou descendant.
+   - `disposition_change` ∈ [-2, +2].
+3. **Application côté pipeline** : `npc.disposition = clamp(current + delta)`. Les `revealed_info` sont ajoutés au `dialogue_history`.
+4. **Narrator reçoit le dialogue** dans les `outcome_facts` : `{npc_name} dit : "..."` → il DOIT le reproduire verbatim (règle Lot F).
+
+### Contagion d'hostilité
+
+Si un joueur tue un PNJ pacifique devant témoins, les témoins (`disposition >= FRIENDLY` présents dans la même location) basculent en `HOSTILE`. Logique simpliste, dans `bot/action_pipeline.py` (pas de système de factions ou de témoins complexe).
+
+## 3. Story arc — beats et progression
+
+Défini dans [world/story_arc.py](../../world/story_arc.py) + [ai/arc_generator.py](../../ai/arc_generator.py).
+
+### Structure
+
+```python
+StoryArc(
+    campaign_id: str,
+    theme: str,
+    premise: str,
+    beats: list[StoryBeat],   # 10-15 beats, dernier = encounter_type=boss
+    current_beat_index: int,
+    villain_name: str,
+    villain_motivation: str,
+)
+
+StoryBeat(
+    beat_number: int,
+    title: str,
+    description: str,
+    location_hint: str,           # nom approximatif de la location attendue
+    npc_names: list[str],
+    encounter_type: Literal["social", "combat", "exploration", "puzzle", "boss"],
+    is_twist: bool,
+)
+```
+
+L'arc est généré **une fois** à la création de la campagne, avec `think=True` (mode raisonnement étendu de Qwen 3.5) pour la cohérence narrative.
+
+### Avancement (Lot D)
+
+Appelé après chaque tour dans [bot/game_session.py](../../bot/game_session.py) :
+
+```python
+def advance_beat_if_ready(self) -> bool:
+    next_beat = self.story_arc.beats[self.story_arc.current_beat_index + 1]
+    ratio = difflib.SequenceMatcher(
+        None,
+        self.current_location.name.lower(),
+        next_beat.location_hint.lower(),
+    ).ratio()
+    if ratio >= 0.7:
+        self.story_arc.current_beat_index += 1
+        return True
+    return False
+```
+
+Si un nouveau beat est atteint → post d'un `beat_embed` (titre, description, encounter_type, twist).
+
+⚠ **Fuzzy matching seul** — peut rater si le `location_hint` du générateur d'arc ne matche pas le nom effectif du `WorldGenerator`. Idéalement l'arc devrait contraindre le world generator. Voir [ISSUES.md](ISSUES.md).
+
+## 4. Story Director — coherence check périodique
+
+Défini dans [ai/story_director.py](../../ai/story_director.py) + `ai/prompts/system_story_director.txt`.
+
+### Déclenchement
+
+Appelé par le cog toutes les ~20 interactions (`campaign.interaction_count % 20 == 0`). ⚠ Le module **ne s'auto-déclenche pas** — c'est au caller de vérifier la condition. Actuellement c'est hooké post-pipeline dans `action_handler_cog`.
+
+### Fonctionnement
+
+1. `context_prompt` = sortie complète de `ContextAssembler` (4 couches) — donc le directeur voit l'état + l'historique + les résumés + le RAG.
+2. Appel Qwen 3.5 9B avec `think=True`.
+3. Sortie : `DirectorNote`
+   ```python
+   DirectorNote(
+       coherence_issues: list[str],    # "le PNJ X est mort au tour 12 mais apparaît au tour 18"
+       suggested_hooks: list[str],     # "et si le villageois révélait qu'il connaît le villain ?"
+       priority: Literal["low", "medium", "high"],
+   )
+   ```
+4. **Side-effect** : stocké en `SemanticMemory` comme `SemanticDocument(doc_type=DirectorNote metadata)` pour consommation au prochain assemblage de contexte — le Narrator et l'Interpreter peuvent voir ces notes lors des tours suivants, ce qui pousse la suite de la campagne à intégrer les hooks.
+5. Logué dans la story bible (`story_bible_logger.log_coherence_check()`).
+
+### Limites connues
+
+- Pas de dédup : les mêmes hooks peuvent revenir à plusieurs checks.
+- Pas de remédiation automatique : le directeur **signale** les incohérences, il ne les corrige pas.
+- `SemanticMemory` indisponible (ChromaDB cassé) → directeur désactivé silencieusement.
+
+## 5. Story Bible — audit append-only
+
+Défini dans [bot/story_bible_logger.py](../../bot/story_bible_logger.py). Un fichier Markdown par campagne dans `logs/campaigns/<campaign_id>.md`.
+
+### Sections
+
+1. **Header** (écrit une fois au launch) :
+   - Nom de campagne, ID, date.
+   - Liste des personnages joueurs (race, classe).
+   - Arc complet : thème, premise, villain + motivation.
+   - **Tous les beats** : numéro, titre, encounter type, twist flag, location hint, NPCs attendus.
+   - Location de départ (nom, description, exits, PNJs, items).
+
+2. **Journal** (append, 1 entrée par tour) :
+   - Turn number, timestamp, acteur, beat marker.
+   - Commande (brute).
+   - Mechanics summary.
+   - Narrative excerpt (400 premiers caractères).
+
+3. **Coherence checks** (tous les ~10-20 tours) :
+   - Issues + hooks du Story Director.
+   - Priority flag.
+
+4. **World events** (à la demande) :
+   - Morts de PNJ, basculements de faction.
+
+Thread-safe (`threading.Lock`). **Durabilité > throughput** — écriture synchrone, pas de buffer.
+
+Sert deux buts :
+- **Pour le joueur/MJ humain** : relire sa campagne, écrire un blog post.
+- **Pour l'agent** : analyser post-mortem ce qui a cassé (utilisé pendant les lots A-F).
+
+## 6. Validation avant canonisation
+
+Quelques barrières qui empêchent le LLM de casser le canon :
+
+- `WorldGenerator.generate()` : `item_descriptions` filtré par intersection avec `items_available`.
+- `ArcGenerator` : prompt force le dernier beat en `boss` (pas enforced code).
+- `NPCAgent.respond()` : `disposition_change` clamped par l'application post-call.
+- `Narrator` : JSON strict ; un fallback narratif est posté si LLMParseError.
+- `Interpreter` : sur parse failure → `DEFEND`/`IMPROVISE` déterministe.
+- `EntityResolver` : si entité inconnue → `UnknownEntityResult` narré comme refus in-character, **pas de création dynamique**.
+
+## 7. Dette / gaps identifiés
+
+Voir [ISSUES.md](ISSUES.md) pour le détail. Extraits :
+
+- Pas d'enforcement code du beat boss final.
+- Pas de dédup des hooks du Story Director.
+- Pas de check de cohérence entre `ArcGenerator.beats[].location_hint` et les locations effectivement générées par `WorldGenerator`.
+- La contagion d'hostilité est naïve (pas de témoins hors location, pas de propagation retardée).
+- Le `NPC.update()` repository **perd** `dialogue_history`, `secrets`, `knowledge`, `aliases` — bug moyen.
+- Story Director ne tourne pas si `SemanticMemory` est indisponible (silent fail).

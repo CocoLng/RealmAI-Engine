@@ -75,11 +75,31 @@ realmAI-engine/
 ├── ai/               # GenAI layer (narrator, interpreter, story director)
 ├── memory/           # 4-layer memory system
 ├── world/            # World state Pydantic models
-├── bot/              # Discord bot (slash commands, views, embeds)
-├── mcp_server/       # MCP server (tools, resources, prompts)
-├── db/               # SQLAlchemy models + database
-└── tests/            # pytest (mirrors engine/ structure)
+├── bot/              # Discord bot (cogs, action pipeline, views, embeds, launcher)
+├── mcp_discord/      # MCP server for Discord live-testing automation
+├── db/               # SQLAlchemy models, mappers, repositories
+├── docs/
+│   ├── internal/     # Up-to-date technical docs (architecture, flows, state, issues)
+│   └── superpowers/  # Historical design plans & specs
+└── tests/            # pytest unit tests + ScenarioRunner end-to-end scenarios
 ```
+
+## Documentation
+
+The most up-to-date description of what's actually in the code lives in [docs/internal/](docs/internal/README.md):
+
+- [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — layered architecture, data flow, stack
+- [CAMPAIGN_LIFECYCLE.md](docs/internal/CAMPAIGN_LIFECYCLE.md) — `/start_campaign` → onboarding → save/resume → `/end_campaign`
+- [ACTION_PIPELINE.md](docs/internal/ACTION_PIPELINE.md) — the 6-phase pipeline turning free text into narration
+- [NARRATIVE_COHERENCE.md](docs/internal/NARRATIVE_COHERENCE.md) — locked canon, NPC disposition, story arc beats, Story Director
+- [MEMORY_SYSTEM.md](docs/internal/MEMORY_SYSTEM.md) — 4-layer context assembly
+- [GAME_ENGINE.md](docs/internal/GAME_ENGINE.md) — deterministic rules engine module by module
+- [AI_LAYER.md](docs/internal/AI_LAYER.md) — Ollama services, prompts, retry logic
+- [DISCORD_BOT.md](docs/internal/DISCORD_BOT.md) — cogs, views, embeds, session management
+- [DATABASE.md](docs/internal/DATABASE.md) — SQLAlchemy schema + repositories
+- [TESTING.md](docs/internal/TESTING.md) — pytest, ScenarioRunner, MCP Discord
+- [STATE.md](docs/internal/STATE.md) — what's implemented vs pending
+- [ISSUES.md](docs/internal/ISSUES.md) — known bugs, anomalies, improvement backlog
 
 ## Getting Started
 
