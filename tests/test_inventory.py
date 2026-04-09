@@ -382,11 +382,11 @@ class TestAddItem:
         assert len(result.items) == 1
         assert result.items[0].name == "Torch"
 
-    def test_returns_new_inventory(self) -> None:
+    def test_mutates_in_place(self) -> None:
         inv = create_inventory()
         torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
         result = add_item(inv, torch)
-        assert result is not inv
+        assert result is inv
 
     def test_add_stackable_increments_quantity(self) -> None:
         arrows = Item(
@@ -426,11 +426,11 @@ class TestRemoveItem:
         assert len(result.items) == 0
         assert removed.name == "Torch"
 
-    def test_returns_new_inventory(self) -> None:
+    def test_mutates_in_place(self) -> None:
         torch = Item(name="Torch", item_type=ItemType.ADVENTURING_GEAR, weight=1.0)
         inv = Inventory(items=[torch])
         result, _ = remove_item(inv, "Torch")
-        assert result is not inv
+        assert result is inv
 
     def test_remove_from_stack(self) -> None:
         arrows = Item(
@@ -493,7 +493,7 @@ class TestEquipItem:
         assert result.equipped[EquipmentSlot.MAIN_HAND].name == "Longsword"
         assert len(result.items) == 0
 
-    def test_returns_new_inventory(self) -> None:
+    def test_mutates_in_place(self) -> None:
         sword = Weapon(
             name="Longsword",
             weight=3.0,
@@ -503,7 +503,7 @@ class TestEquipItem:
         )
         inv = Inventory(items=[sword])
         result = equip_item(inv, "Longsword", EquipmentSlot.MAIN_HAND)
-        assert result is not inv
+        assert result is inv
 
     def test_equip_armor_to_armor_slot(self) -> None:
         leather = Armor(
@@ -610,7 +610,7 @@ class TestUnequipItem:
         assert EquipmentSlot.MAIN_HAND not in result.equipped
         assert any(i.name == "Longsword" for i in result.items)
 
-    def test_returns_new_inventory(self) -> None:
+    def test_mutates_in_place(self) -> None:
         sword = Weapon(
             name="Longsword",
             weight=3.0,
@@ -620,7 +620,7 @@ class TestUnequipItem:
         )
         inv = Inventory(equipped={EquipmentSlot.MAIN_HAND: sword})
         result = unequip_item(inv, EquipmentSlot.MAIN_HAND)
-        assert result is not inv
+        assert result is inv
 
     def test_empty_slot_raises(self) -> None:
         inv = create_inventory()
@@ -647,7 +647,7 @@ class TestAttuneItem:
         assert len(result.attuned) == 1
         assert result.attuned[0].name == "Ring of Protection"
 
-    def test_returns_new_inventory(self) -> None:
+    def test_mutates_in_place(self) -> None:
         ring = Item(
             name="Ring of Protection",
             item_type=ItemType.ADVENTURING_GEAR,
@@ -657,7 +657,7 @@ class TestAttuneItem:
         )
         inv = Inventory(items=[ring])
         result = attune_item(inv, "Ring of Protection")
-        assert result is not inv
+        assert result is inv
 
     def test_max_attunement_raises(self) -> None:
         items = [
@@ -716,7 +716,7 @@ class TestUnattuneItem:
         result = unattune_item(inv, "Ring of Protection")
         assert len(result.attuned) == 0
 
-    def test_returns_new_inventory(self) -> None:
+    def test_mutates_in_place(self) -> None:
         ring = Item(
             name="Ring of Protection",
             item_type=ItemType.ADVENTURING_GEAR,
@@ -726,7 +726,7 @@ class TestUnattuneItem:
         )
         inv = Inventory(attuned=[ring])
         result = unattune_item(inv, "Ring of Protection")
-        assert result is not inv
+        assert result is inv
 
     def test_not_attuned_raises(self) -> None:
         inv = create_inventory()

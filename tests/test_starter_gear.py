@@ -110,16 +110,15 @@ def test_savage_fighter_adds_two_handaxes() -> None:
     assert total_handaxes == 2
 
 
-def test_apply_starter_kit_does_not_mutate_original() -> None:
-    """apply_starter_kit() returns a new inventory, not mutating the original."""
+def test_apply_starter_kit_mutates_in_place() -> None:
+    """apply_starter_kit() mutates the inventory in-place and returns it."""
     kit = get_starter_kits(CharacterClass.CLERIC)[0]
     original = Inventory()
     result = apply_starter_kit(kit, original)
 
-    assert len(original.items) == 0
-    assert len(original.equipped) == 0
-    assert original.gold == 0
-    assert result is not original
+    assert result is original
+    assert len(result.items) > 0 or len(result.equipped) > 0
+    assert result.gold == kit.gold
 
 
 @pytest.mark.parametrize("char_class", list(CharacterClass))

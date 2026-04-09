@@ -63,7 +63,7 @@ def wizard() -> Character:
 def inventory_with_items(fighter) -> Inventory:
     """An inventory with gold, equipped sword, and backpack items."""
     inv = create_inventory()
-    inv = inv.model_copy(update={"gold": 50})
+    inv.gold = 50
 
     sword = Weapon(
         name="Longsword",

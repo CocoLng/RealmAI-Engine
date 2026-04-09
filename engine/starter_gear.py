@@ -138,7 +138,7 @@ def get_starter_kits(char_class: CharacterClass) -> list[StarterKit]:
 def apply_starter_kit(kit: StarterKit, inventory: Inventory) -> Inventory:
     """Populate inventory with kit items and auto-equip weapon + armor.
 
-    Returns a new Inventory with:
+    Mutates inventory in-place:
     - All items from the kit added
     - Gold set to the kit amount
     - First weapon auto-equipped to MAIN_HAND
@@ -150,31 +150,36 @@ def apply_starter_kit(kit: StarterKit, inventory: Inventory) -> Inventory:
         inventory: The inventory to populate.
 
     Returns:
-        A new Inventory with kit items added and equipped.
+        The same Inventory, mutated in-place.
     """
-    inv = inventory.model_copy(update={"gold": kit.gold})
+    inventory.gold = kit.gold
 
-    # Add all items from the kit
+    # Step 1: Add all kit items to the backpack before equipping anything.
+    # This ensures every item is available in inventory.items for the
+    # equip calls below.
     for item_name in kit.items:
         catalog_item = ITEM_CATALOG[item_name]
-        inv = add_item(inv, catalog_item.model_copy())
+        add_item(inventory, catalog_item.model_copy())
 
-    # Auto-equip the first weapon found
-    for item in inv.items:
+    # Step 2: Auto-equip the first weapon found to MAIN_HAND.
+    # We iterate a snapshot of items since equip_item mutates the list.
+    for item in list(inventory.items):
         if isinstance(item, Weapon):
-            inv = equip_item(inv, item.name, EquipmentSlot.MAIN_HAND)
+            equip_item(inventory, item.name, EquipmentSlot.MAIN_HAND)
             break
 
-    # Auto-equip the first armor found
-    for item in inv.items:
+    # Step 3: Auto-equip the first armor found to the ARMOR slot.
+    for item in list(inventory.items):
         if isinstance(item, Armor):
-            inv = equip_item(inv, item.name, EquipmentSlot.ARMOR)
+            equip_item(inventory, item.name, EquipmentSlot.ARMOR)
             break
 
-    # Auto-equip shield to off-hand if present (type-based detection)
-    for item in inv.items:
+    # Step 4: Auto-equip shield to OFF_HAND if present.
+    # Uses item_type (not isinstance) because shields are plain Items,
+    # not a dedicated Shield subclass.
+    for item in list(inventory.items):
         if item.item_type == ItemType.SHIELD:
-            inv = equip_item(inv, item.name, EquipmentSlot.OFF_HAND)
+            equip_item(inventory, item.name, EquipmentSlot.OFF_HAND)
             break
 
-    return inv
+    return inventory

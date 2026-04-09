@@ -151,6 +151,13 @@ class Inventory(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_CARRYING_CAPACITY_MULTIPLIER: float = 15.0
+"""SRD 5e carrying capacity = STR x 15 pounds."""
+
+# ---------------------------------------------------------------------------
 # Pure functions
 # ---------------------------------------------------------------------------
 
@@ -175,7 +182,7 @@ def compute_carrying_capacity(strength: int, size: Size) -> float:
     """
     if not 1 <= strength <= 30:
         raise ValueError(f"Strength must be 1-30, got {strength}")
-    capacity = strength * 15.0
+    capacity = strength * _CARRYING_CAPACITY_MULTIPLIER
     if size == Size.SMALL:
         capacity /= 2
     return capacity
@@ -200,53 +207,49 @@ def is_encumbered(inventory: Inventory, strength: int, size: Size) -> bool:
 
 
 def add_item(inventory: Inventory, item: Item) -> Inventory:
-    """Add an item to the inventory. Returns a new Inventory (immutable pattern).
+    """Add an item to the inventory. Mutates inventory in-place.
 
     Stackable items with the same name merge quantities.
     """
-    new_items = list(inventory.items)
     if item.stackable:
-        for i, existing in enumerate(new_items):
+        for i, existing in enumerate(inventory.items):
             if existing.name == item.name and existing.stackable:
-                merged = existing.model_copy(
+                inventory.items[i] = existing.model_copy(
                     update={"quantity": existing.quantity + item.quantity},
                 )
-                new_items[i] = merged
-                return inventory.model_copy(update={"items": new_items})
-    new_items.append(item)
-    return inventory.model_copy(update={"items": new_items})
+                return inventory
+    inventory.items.append(item)
+    return inventory
 
 
 def remove_item(
     inventory: Inventory, item_name: str, quantity: int = 1,
 ) -> tuple[Inventory, Item]:
-    """Remove an item by name. Returns (new_inventory, removed_item).
+    """Remove an item by name. Mutates inventory in-place, returns (inventory, removed_item).
 
     For stackable items, decrements quantity. Removes entirely if quantity reaches 0.
 
     Raises:
         ValueError: If item not found or insufficient quantity.
     """
-    new_items = list(inventory.items)
-    for i, existing in enumerate(new_items):
+    for i, existing in enumerate(inventory.items):
         if existing.name == item_name:
             if existing.stackable and existing.quantity > quantity:
-                updated = existing.model_copy(
+                removed = existing.model_copy(update={"quantity": quantity})
+                inventory.items[i] = existing.model_copy(
                     update={"quantity": existing.quantity - quantity},
                 )
-                removed = existing.model_copy(update={"quantity": quantity})
-                new_items[i] = updated
-                return inventory.model_copy(update={"items": new_items}), removed
+                return inventory, removed
             if existing.stackable and existing.quantity < quantity:
                 raise ValueError(
                     f"Insufficient quantity of '{item_name}': "
                     f"has {existing.quantity}, need {quantity}"
                 )
             # Non-stackable or exact quantity match
-            removed = new_items.pop(i)
+            removed = inventory.items.pop(i)
             if existing.stackable:
                 removed = removed.model_copy(update={"quantity": quantity})
-            return inventory.model_copy(update={"items": new_items}), removed
+            return inventory, removed
     raise ValueError(f"Item '{item_name}' not found in inventory")
 
 
@@ -267,7 +270,7 @@ _SLOT_COMPATIBILITY: dict[EquipmentSlot, set[ItemType]] = {
 def equip_item(
     inventory: Inventory, item_name: str, slot: EquipmentSlot,
 ) -> Inventory:
-    """Equip an item from the items list into a slot. Returns a new Inventory (immutable pattern).
+    """Equip an item from the items list into a slot. Mutates inventory in-place.
 
     If the slot is occupied, the previous item goes back to items.
     Two-handed weapons clear the off-hand slot.
@@ -293,13 +296,11 @@ def equip_item(
             f"Cannot equip {item.item_type} in {slot} slot"
         )
 
-    new_items = list(inventory.items)
-    new_items.pop(item_index)
-    new_equipped = dict(inventory.equipped)
+    inventory.items.pop(item_index)
 
     # Return previously equipped item to items
-    if slot in new_equipped:
-        new_items.append(new_equipped[slot])
+    if slot in inventory.equipped:
+        inventory.items.append(inventory.equipped[slot])
 
     # Two-handed weapons clear off-hand
     if (
@@ -307,16 +308,16 @@ def equip_item(
         and WeaponProperty.TWO_HANDED in item.properties
         and slot == EquipmentSlot.MAIN_HAND
     ):
-        off_hand = new_equipped.pop(EquipmentSlot.OFF_HAND, None)
+        off_hand = inventory.equipped.pop(EquipmentSlot.OFF_HAND, None)
         if off_hand is not None:
-            new_items.append(off_hand)
+            inventory.items.append(off_hand)
 
-    new_equipped[slot] = item
-    return inventory.model_copy(update={"items": new_items, "equipped": new_equipped})
+    inventory.equipped[slot] = item
+    return inventory
 
 
 def unequip_item(inventory: Inventory, slot: EquipmentSlot) -> Inventory:
-    """Unequip an item from a slot back to items. Returns a new Inventory.
+    """Unequip an item from a slot back to items. Mutates inventory in-place.
 
     Raises:
         ValueError: If slot is empty.
@@ -324,18 +325,16 @@ def unequip_item(inventory: Inventory, slot: EquipmentSlot) -> Inventory:
     if slot not in inventory.equipped:
         raise ValueError(f"Nothing equipped in {slot} slot")
 
-    new_items = list(inventory.items)
-    new_equipped = dict(inventory.equipped)
-    item = new_equipped.pop(slot)
-    new_items.append(item)
-    return inventory.model_copy(update={"items": new_items, "equipped": new_equipped})
+    item = inventory.equipped.pop(slot)
+    inventory.items.append(item)
+    return inventory
 
 
 MAX_ATTUNEMENT = 3
 
 
 def attune_item(inventory: Inventory, item_name: str) -> Inventory:
-    """Attune to an item. Returns a new Inventory.
+    """Attune to an item. Mutates inventory in-place.
 
     The item must be in the items list or equipped and require attunement.
     Maximum 3 attuned items (SRD rule).
@@ -370,22 +369,20 @@ def attune_item(inventory: Inventory, item_name: str) -> Inventory:
     if not item.requires_attunement:
         raise ValueError(f"'{item_name}' does not require attunement")
 
-    new_attuned = list(inventory.attuned)
-    new_attuned.append(item)
-    return inventory.model_copy(update={"attuned": new_attuned})
+    inventory.attuned.append(item)
+    return inventory
 
 
 def unattune_item(inventory: Inventory, item_name: str) -> Inventory:
-    """Remove attunement from an item. Returns a new Inventory.
+    """Remove attunement from an item. Mutates inventory in-place.
 
     Raises:
         ValueError: If item is not attuned.
     """
-    new_attuned = list(inventory.attuned)
-    for i, item in enumerate(new_attuned):
+    for i, item in enumerate(inventory.attuned):
         if item.name == item_name:
-            new_attuned.pop(i)
-            return inventory.model_copy(update={"attuned": new_attuned})
+            inventory.attuned.pop(i)
+            return inventory
     raise ValueError(f"'{item_name}' is not attuned")
 
 
