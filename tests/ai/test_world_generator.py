@@ -9,12 +9,35 @@ from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.location import Location
 
 
+def _make_brainstorm_response() -> dict:
+    """Build a valid brainstorm response."""
+    return {
+        "options": [
+            {
+                "concept": "A smoke-filled tavern with dark secrets",
+                "key_elements": ["low rafters", "stale ale", "innkeeper with a past"],
+                "risk": "Might be too cliche",
+                "selected": True,
+            },
+            {
+                "concept": "A bright and welcoming inn",
+                "key_elements": ["warm hearth", "singing bard", "traveling merchants"],
+                "risk": "Too safe",
+                "selected": False,
+            },
+            {
+                "concept": "A ruined tavern haunted by ghosts",
+                "key_elements": ["broken windows", "spectral barkeep", "cursed ale"],
+                "risk": "Too scary for early game",
+                "selected": False,
+            },
+        ]
+    }
+
 
 @pytest.fixture
 def generator(ollama_client: OllamaClient) -> WorldGenerator:
     return WorldGenerator(ollama_client)
-
-
 
 
 def test_generate_returns_location_with_name_and_description(
@@ -32,6 +55,7 @@ def test_generate_returns_location_with_name_and_description(
         "npcs_present": ["Marta the Innkeeper", "Old Gruff"],
         "items_available": ["Healing Potion", "Traveler's Rations"],
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -55,6 +79,7 @@ def test_generate_connections_populated(
         "npcs_present": ["Guard Sergeant Bram"],
         "items_available": [],
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -83,6 +108,7 @@ def test_generate_empty_npcs_and_items(
         "npcs_present": [],
         "items_available": [],
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -108,6 +134,7 @@ def test_generate_with_optional_location_name(
         "npcs_present": [],
         "items_available": ["Room Key"],
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -136,6 +163,7 @@ def test_generate_populates_item_descriptions(
             "Cierge pourri": "Un cierge consumé, la cire jaunie et craquelée.",
         },
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -153,7 +181,7 @@ def test_generate_drops_descriptions_for_unknown_items(
     """Descriptions whose key is NOT in items_available are dropped (anti-leak)."""
     response_data = {
         "name": "La Crypte",
-        "description": "…",
+        "description": "...",
         "connections": [],
         "npcs_present": [],
         "items_available": ["Croix de fer"],
@@ -162,9 +190,10 @@ def test_generate_drops_descriptions_for_unknown_items(
             "Épée d'or": "Une lame légendaire qui n'existe pas dans la scène.",
         },
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
-    result = generator.generate(campaign_context="…", location_type="crypt")
+    result = generator.generate(campaign_context="...", location_type="crypt")
 
     assert "Croix de fer" in result.item_descriptions
     assert "Épée d'or" not in result.item_descriptions
@@ -181,8 +210,29 @@ def test_generate_missing_item_descriptions_defaults_empty(
         "npcs_present": [],
         "items_available": ["Lanterne"],
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
-    result = generator.generate(campaign_context="…", location_type="bridge")
+    result = generator.generate(campaign_context="...", location_type="bridge")
 
     assert result.item_descriptions == {}
+
+
+def test_generate_falls_back_on_brainstorm_failure(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """If brainstorm fails, generate() still works with a single call."""
+    response_data = {
+        "name": "The Fallback Tavern",
+        "description": "A simple tavern.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("not json"))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(campaign_context="...", location_type="tavern")
+
+    assert isinstance(result, Location)
+    assert result.name == "The Fallback Tavern"

@@ -77,6 +77,7 @@ class OllamaClient:
         think: bool = False,
         num_predict: int = -1,
         num_ctx: int = 16384,
+        thinking_budget: int | None = None,
     ) -> dict[str, Any]:
         """Call the model in JSON mode and return the parsed response dict.
 
@@ -94,6 +95,10 @@ class OllamaClient:
                 Override only if you need a hard ceiling.
             num_ctx: Context window size.  Must be large enough to hold
                 prompt + (optional thinking trace) + content JSON.
+            thinking_budget: Per-call override for ``_THINKING_TOKEN_CAP``.
+                Only used when ``think=True`` and ``num_predict`` is not
+                explicitly set.  Allows callers to control thinking budget
+                without touching the global default.
 
         Returns:
             Parsed JSON dict from the model response.
@@ -106,7 +111,7 @@ class OllamaClient:
         # num_predict, cap generation to avoid runaway reasoning.
         effective_num_predict = num_predict
         if think and num_predict == -1:
-            effective_num_predict = _THINKING_TOKEN_CAP
+            effective_num_predict = thinking_budget if thinking_budget is not None else _THINKING_TOKEN_CAP
 
         payload: dict[str, Any] = {
             "model": model,

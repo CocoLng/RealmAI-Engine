@@ -57,11 +57,22 @@ class NPCGenerator:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
+        secrets = [str(s).strip() for s in data.get("secrets", []) if str(s).strip()]
+        knowledge = [str(k).strip() for k in data.get("knowledge", []) if str(k).strip()]
+
+        # M11: Guarantee non-empty secrets and knowledge with fallback defaults
+        if not secrets:
+            secrets = ["A un secret qu'il/elle ne révèle pas facilement"]
+            logger.warning("NPCGEN name=%r: empty secrets, using fallback", npc_name)
+        if not knowledge:
+            knowledge = ["Connaît bien les environs"]
+            logger.warning("NPCGEN name=%r: empty knowledge, using fallback", npc_name)
+
         sheet = NPCSheet(
             personality=str(data.get("personality", "")).strip(),
             description=str(data.get("description", "")).strip(),
-            secrets=[str(s).strip() for s in data.get("secrets", []) if str(s).strip()],
-            knowledge=[str(k).strip() for k in data.get("knowledge", []) if str(k).strip()],
+            secrets=secrets,
+            knowledge=knowledge,
         )
         logger.info(
             "NPCGEN name=%r secrets=%d knowledge=%d",

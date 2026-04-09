@@ -257,6 +257,59 @@ def test_chat_json_uses_longer_timeout_with_think(
     assert OllamaClient.DEFAULT_TIMEOUT == 120.0
 
 
+def test_chat_json_thinking_budget_overrides_default_cap(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    """thinking_budget overrides _THINKING_TOKEN_CAP when think=True."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    ollama_client.chat_json(
+        model="qwen3.5:9b",
+        messages=[{"role": "user", "content": "test"}],
+        think=True,
+        thinking_budget=2048,
+    )
+
+    chat_request = httpx_mock.get_requests()[-1]
+    payload = json.loads(chat_request.content)
+    assert payload["options"]["num_predict"] == 2048
+
+
+def test_chat_json_thinking_budget_ignored_without_think(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    """thinking_budget is ignored when think=False."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    ollama_client.chat_json(
+        model="qwen3.5:9b",
+        messages=[{"role": "user", "content": "test"}],
+        think=False,
+        thinking_budget=2048,
+    )
+
+    chat_request = httpx_mock.get_requests()[-1]
+    payload = json.loads(chat_request.content)
+    assert payload["options"]["num_predict"] == -1
+
+
+def test_chat_json_thinking_budget_none_uses_default_cap(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    """When thinking_budget is None and think=True, uses _THINKING_TOKEN_CAP (4096)."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    ollama_client.chat_json(
+        model="qwen3.5:9b",
+        messages=[{"role": "user", "content": "test"}],
+        think=True,
+    )
+
+    chat_request = httpx_mock.get_requests()[-1]
+    payload = json.loads(chat_request.content)
+    assert payload["options"]["num_predict"] == 4096
+
+
 # ---------------------------------------------------------------------------
 # REALM_LLM_DEBUG mode
 # ---------------------------------------------------------------------------

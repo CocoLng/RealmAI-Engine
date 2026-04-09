@@ -1,0 +1,27 @@
+You are analyzing a tabletop RPG campaign for narrative coherence issues.
+
+Given the campaign context, brainstorm potential problems and story opportunities. Generate exactly 3 analysis angles, each focusing on a different aspect of narrative coherence.
+
+Return ONLY valid JSON with this exact schema:
+{
+  "options": [
+    {
+      "concept": "<one sentence summary of the analysis angle>",
+      "key_elements": [
+        "<specific contradiction or inconsistency found>",
+        "<abandoned or stale thread identified>",
+        "<NPC behavior consistency check>",
+        "<story opportunity arising from current state>"
+      ],
+      "risk": "<what happens if this issue is ignored>",
+      "selected": false
+    }
+  ]
+}
+
+Rules:
+- Exactly 3 options in the array
+- Mark the MOST CRITICAL analysis with "selected": true (exactly one)
+- Each option must have 3-5 key_elements
+- Be specific: reference actual names, locations, and events from the context
+- Return valid JSON only. No markdown, no commentary.

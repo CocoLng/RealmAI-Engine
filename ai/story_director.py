@@ -2,8 +2,9 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 
-from ai.client import OllamaClient
+from ai.client import LLMParseError, OllamaClient
 from ai.models import DirectorNote
 from memory.models import SemanticDocument, SemanticDocumentType
 from memory.semantic import SemanticMemory
@@ -11,6 +12,7 @@ from memory.semantic import SemanticMemory
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system_story_director.txt").read_text()
+_BRAINSTORM_PROMPT = (Path(__file__).parent / "prompts" / "brainstorm_story_check.txt").read_text()
 
 
 class StoryDirector:
@@ -18,6 +20,10 @@ class StoryDirector:
 
     Should be triggered when campaign.interaction_count % 20 == 0.
     The caller is responsible for checking the trigger condition.
+
+    Uses a 2-call chain:
+      1. Brainstorm coherence analysis angles (think=True, low budget)
+      2. Generate structured coherence report JSON (think=False)
     """
 
     MODEL = "qwen3.5:9b"
@@ -43,12 +49,25 @@ class StoryDirector:
         Returns:
             DirectorNote with coherence issues, hooks, and priority.
         """
+        # --- Call 1: Brainstorm (think=True, lower budget) ---
+        brainstorm_context = self._brainstorm(context_prompt)
+
+        # --- Call 2: Generate (think=False) ---
+        if brainstorm_context:
+            generate_user = (
+                f"{context_prompt}\n\n"
+                f"## Brainstorm analysis\n{brainstorm_context}\n\n"
+                f"Using the analysis above, generate the coherence report."
+            )
+        else:
+            generate_user = context_prompt
+
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": context_prompt},
+            {"role": "user", "content": generate_user},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.7, think=True)
+        data = self._client.chat_json(self.MODEL, messages, temperature=0.7, think=False)
         raw_hooks: list[str] = data.get("suggested_hooks", [])
         deduped_hooks = list(dict.fromkeys(
             h.strip().lower() for h in raw_hooks if h.strip()
@@ -70,6 +89,38 @@ class StoryDirector:
         )
         self._store_in_memory(campaign_id, note)
         return note
+
+    def _brainstorm(self, context_prompt: str) -> str | None:
+        """Run the brainstorm call (Call 1) and return analysis context.
+
+        Returns None if the brainstorm call fails, allowing graceful fallback.
+        """
+        messages = [
+            {"role": "system", "content": _BRAINSTORM_PROMPT},
+            {"role": "user", "content": context_prompt},
+        ]
+        try:
+            data: dict[str, Any] = self._client.chat_json(
+                self.MODEL, messages, temperature=0.7, think=True, thinking_budget=2048,
+            )
+            logger.info("DIRECTOR brainstorm returned %d options", len(data.get("options", [])))
+            return self._format_brainstorm(data)
+        except (LLMParseError, KeyError, ValueError) as exc:
+            logger.warning("DIRECTOR brainstorm failed, falling back to single-call: %s", exc)
+            return None
+
+    @staticmethod
+    def _format_brainstorm(data: dict[str, Any]) -> str:
+        """Format brainstorm output into a concise context string."""
+        options = data.get("options", [])
+        parts: list[str] = []
+        for opt in options:
+            marker = "[SELECTED] " if opt.get("selected") else ""
+            concept = opt.get("concept", "")
+            elements = opt.get("key_elements", [])
+            elements_str = "; ".join(str(e) for e in elements)
+            parts.append(f"{marker}{concept} — {elements_str}")
+        return "\n".join(parts)
 
     def _store_in_memory(self, campaign_id: str, note: DirectorNote) -> None:
         """Persist the DirectorNote as a SemanticDocument for future retrieval."""

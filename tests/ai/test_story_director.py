@@ -11,6 +11,34 @@ from memory.semantic import SemanticMemory
 from tests.ai.conftest import CHAT_URL, make_ollama_response
 
 
+def _make_brainstorm_response() -> dict:
+    """Build a valid brainstorm response."""
+    return {
+        "options": [
+            {
+                "concept": "Quest giver NPC inconsistency",
+                "key_elements": [
+                    "NPC mentioned as dead but still appears",
+                    "Quest log references outdated location",
+                ],
+                "risk": "Players will notice the contradiction",
+                "selected": True,
+            },
+            {
+                "concept": "Stale side quest",
+                "key_elements": ["Old fetch quest never resolved", "NPC waiting forever"],
+                "risk": "Immersion break",
+                "selected": False,
+            },
+            {
+                "concept": "Faction tension opportunity",
+                "key_elements": ["Two factions both helped", "Conflict brewing"],
+                "risk": "Could derail main plot",
+                "selected": False,
+            },
+        ]
+    }
+
 
 @pytest.fixture
 def mock_semantic() -> MagicMock:
@@ -31,6 +59,7 @@ def test_check_coherence_returns_director_note(
         "suggested_hooks": ["The merchant's revenge plot"],
         "priority": "high",
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = director.check_coherence(
@@ -55,6 +84,7 @@ def test_check_coherence_stores_semantic_document(
         "suggested_hooks": ["Explore the old mine"],
         "priority": "low",
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     director.check_coherence(
@@ -80,6 +110,7 @@ def test_check_coherence_low_priority(
         "suggested_hooks": ["An old legend about the forest"],
         "priority": "low",
     }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = director.check_coherence(
@@ -89,3 +120,24 @@ def test_check_coherence_low_priority(
 
     assert result.priority == "low"
     assert result.coherence_issues == []
+
+
+def test_check_coherence_falls_back_on_brainstorm_failure(
+    httpx_mock: HTTPXMock, director: StoryDirector
+) -> None:
+    """If brainstorm fails, check_coherence() still works with a single call."""
+    response_data = {
+        "coherence_issues": [],
+        "suggested_hooks": ["A fallback hook"],
+        "priority": "low",
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("not json"))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = director.check_coherence(
+        campaign_id="camp-fallback",
+        context_prompt="Test context.",
+    )
+
+    assert isinstance(result, DirectorNote)
+    assert result.priority == "low"

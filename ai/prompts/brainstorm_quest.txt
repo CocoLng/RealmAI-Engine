@@ -1,0 +1,28 @@
+You are brainstorming quest hooks for a tabletop RPG adventure.
+
+Given the campaign context, current location, and available NPCs, generate exactly 3 quest concept options. Each option proposes a different objective, reward structure, and NPC involvement.
+
+Return ONLY valid JSON with this exact schema:
+{
+  "options": [
+    {
+      "concept": "<one sentence pitch for the quest>",
+      "key_elements": [
+        "<primary objective>",
+        "<quest giver and their motivation>",
+        "<key challenge or obstacle>",
+        "<reward type and scale>",
+        "<connection to broader story>"
+      ],
+      "risk": "<potential issue with this direction>",
+      "selected": false
+    }
+  ]
+}
+
+Rules:
+- Exactly 3 options in the array
+- Mark the BEST option with "selected": true (exactly one)
+- Each option must have 3-5 key_elements
+- Quest concepts should involve the available NPCs naturally
+- Return valid JSON only. No markdown, no commentary.
