@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock
 
+import pytest
+from pydantic import ValidationError
+
 from ai.models import NPCSheet
 from ai.npc_generator import NPCGenerator
 
@@ -38,15 +41,15 @@ def test_generate_returns_npc_sheet():
     assert "sous une église" in user_msg
 
 
-def test_generate_handles_missing_fields():
+def test_generate_rejects_missing_secrets_and_knowledge():
+    """NPCSheet requires at least one secret and one knowledge item."""
     client = MagicMock()
     client.chat_json.return_value = {
         "personality": "Stoïque.",
         "description": "Sombre.",
     }
     generator = NPCGenerator(client)
-    sheet = generator.generate(
-        npc_name="X", location_context="Y", campaign_theme="Z",
-    )
-    assert sheet.secrets == []
-    assert sheet.knowledge == []
+    with pytest.raises(ValidationError):
+        generator.generate(
+            npc_name="X", location_context="Y", campaign_theme="Z",
+        )

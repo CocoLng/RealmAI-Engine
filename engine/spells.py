@@ -8,6 +8,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from engine.character import Ability, CharacterClass, compute_modifier
+from engine.dice import parse_dice
 from engine.inventory import DamageType
 
 
@@ -196,7 +197,7 @@ def compute_spell_attack_bonus(ability_score: int, proficiency_bonus: int) -> in
 
 
 def get_cantrip_damage_dice(spell: Spell, caster_level: int) -> str:
-    """Scale cantrip damage dice by caster level.
+    """Scale cantrip damage dice by caster level. Returns a new dice expression string (no mutation).
 
     Raises:
         ValueError: If spell is not a cantrip or has no damage_dice.
@@ -213,11 +214,9 @@ def get_cantrip_damage_dice(spell: Spell, caster_level: int) -> str:
             num_dice = dice_count
             break
 
-    # Parse the base die (e.g. "1d10" -> "d10")
-    # Extract die type from damage_dice
-    parts = spell.damage_dice.split("d")
-    die_type = parts[1]
-    return f"{num_dice}d{die_type}"
+    # Parse the base die using canonical regex parser
+    _, sides, _ = parse_dice(spell.damage_dice)
+    return f"{num_dice}d{sides}"
 
 
 def can_cast_spell(state: SpellcasterState, spell: Spell) -> bool:

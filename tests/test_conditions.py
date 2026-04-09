@@ -186,10 +186,12 @@ class TestRemoveCondition:
         assert len(conditions) == 1
         assert conditions[0].condition_type == ConditionType.POISONED
 
-    def test_remove_not_found_raises(self) -> None:
+    def test_remove_not_found_is_noop(self) -> None:
         conditions = [ActiveCondition(condition_type=ConditionType.BLINDED)]
-        with pytest.raises(ValueError, match="Condition Prone not found"):
-            remove_condition(conditions, ConditionType.PRONE)
+        result = remove_condition(conditions, ConditionType.PRONE)
+        assert result is conditions
+        assert len(result) == 1
+        assert result[0].condition_type == ConditionType.BLINDED
 
     def test_returns_same_list(self) -> None:
         conditions = [ActiveCondition(condition_type=ConditionType.STUNNED)]

@@ -5,8 +5,12 @@ import pytest
 from engine.dice import (
     D20CheckResult,
     DiceResult,
+    MARGIN_HARD_FAIL,
+    MARGIN_PASS,
+    MARGIN_SOLID_SUCCESS,
     RollOutcome,
     _compute_outcome,
+    parse_dice,
     roll,
     roll_check,
 )
@@ -267,3 +271,54 @@ class TestRollCheck:
         assert result.modifier == 5
         assert result.total == result.rolls[0] + 5
         assert result.margin == result.total - 15
+
+
+# ---------------------------------------------------------------------------
+# Named constants tests
+# ---------------------------------------------------------------------------
+
+
+class TestMarginConstants:
+    """Verify margin constants have expected values."""
+
+    def test_margin_hard_fail(self) -> None:
+        assert MARGIN_HARD_FAIL == -5
+
+    def test_margin_pass(self) -> None:
+        assert MARGIN_PASS == 0
+
+    def test_margin_solid_success(self) -> None:
+        assert MARGIN_SOLID_SUCCESS == 5
+
+
+# ---------------------------------------------------------------------------
+# parse_dice tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseDice:
+    """Tests for parse_dice() helper."""
+
+    def test_simple(self) -> None:
+        assert parse_dice("1d6") == (1, 6, 0)
+
+    def test_with_positive_modifier(self) -> None:
+        assert parse_dice("2d8+3") == (2, 8, 3)
+
+    def test_with_negative_modifier(self) -> None:
+        assert parse_dice("1d4-1") == (1, 4, -1)
+
+    def test_whitespace_stripped(self) -> None:
+        assert parse_dice(" 3d6 + 2 ") == (3, 6, 2)
+
+    def test_invalid_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid dice expression"):
+            parse_dice("not_dice")
+
+    def test_zero_dice_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid dice expression"):
+            parse_dice("0d6")
+
+    def test_zero_sides_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid dice expression"):
+            parse_dice("1d0")

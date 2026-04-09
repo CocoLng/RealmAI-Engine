@@ -735,3 +735,59 @@ class TestValidateExplorationDispatch:
         result = validate_exploration_action(action)
         assert not result.is_valid
         assert "not an exploration action" in (result.error_message or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Concentration conflict info logging (M9)
+# ---------------------------------------------------------------------------
+
+
+class TestConcentrationLogging:
+    """Casting a concentration spell while already concentrating is legal but logged."""
+
+    def test_concentration_conflict_still_valid(
+        self, wizard_combatant: Combatant, goblin_combatant: Combatant
+    ) -> None:
+        """Casting a new concentration spell when already concentrating should pass."""
+        wizard_combatant.spellcaster.spells_known.append("Bless")  # type: ignore[union-attr]
+        wizard_combatant.spellcaster.concentration_spell = "Hunter's Mark"  # type: ignore[union-attr]
+        state = CombatState(
+            combatants=[wizard_combatant, goblin_combatant],
+            round_number=1,
+            current_turn_index=0,
+        )
+        action = Action(
+            actor_name="Elara",
+            action_type=ActionType.CAST_SPELL,
+            spell_name="Bless",
+            target_name="Goblin",
+        )
+        result = validate_cast_spell(action, state)
+        assert result.is_valid
+
+    def test_concentration_conflict_logs_info(
+        self,
+        wizard_combatant: Combatant,
+        goblin_combatant: Combatant,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Casting a new concentration spell should log that the old one will drop."""
+        import logging
+
+        wizard_combatant.spellcaster.spells_known.append("Bless")  # type: ignore[union-attr]
+        wizard_combatant.spellcaster.concentration_spell = "Hunter's Mark"  # type: ignore[union-attr]
+        state = CombatState(
+            combatants=[wizard_combatant, goblin_combatant],
+            round_number=1,
+            current_turn_index=0,
+        )
+        action = Action(
+            actor_name="Elara",
+            action_type=ActionType.CAST_SPELL,
+            spell_name="Bless",
+            target_name="Goblin",
+        )
+        with caplog.at_level(logging.INFO, logger="engine.validators"):
+            validate_cast_spell(action, state)
+        assert "Hunter's Mark" in caplog.text
+        assert "Bless" in caplog.text

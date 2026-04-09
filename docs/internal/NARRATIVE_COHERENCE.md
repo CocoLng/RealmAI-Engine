@@ -117,7 +117,7 @@ Défini dans [ai/story_director.py](../../ai/story_director.py) + `ai/prompts/sy
 
 ### Déclenchement
 
-Appelé par le cog toutes les ~20 interactions (`campaign.interaction_count % 20 == 0`). ⚠ Le module **ne s'auto-déclenche pas** — c'est au caller de vérifier la condition. Actuellement c'est hooké post-pipeline dans `action_handler_cog`.
+Auto-déclenché toutes les 20 interactions (`turn_number % _DIRECTOR_INTERVAL == 0`) dans `StoryBibleLogger.log_turn()`.
 
 ### Fonctionnement
 
@@ -159,7 +159,7 @@ Défini dans [bot/story_bible_logger.py](../../bot/story_bible_logger.py). Un fi
    - Mechanics summary.
    - Narrative excerpt (400 premiers caractères).
 
-3. **Coherence checks** (tous les ~10-20 tours) :
+3. **Coherence checks** (tous les 20 tours) :
    - Issues + hooks du Story Director.
    - Priority flag.
 
@@ -191,5 +191,5 @@ Voir [ISSUES.md](ISSUES.md) pour le détail. Extraits :
 - Pas de dédup des hooks du Story Director.
 - ~~Pas de check de cohérence arc/world~~ : les `location_hint` de l'arc sont maintenant passés au `WorldGenerator` via `location_hints`, qui instruit le LLM de réutiliser ces noms.
 - La contagion d'hostilité est naïve (pas de témoins hors location, pas de propagation retardée).
-- Le `NPC.update()` repository **perd** `dialogue_history`, `secrets`, `knowledge`, `aliases` — bug moyen.
-- Story Director ne tourne pas si `SemanticMemory` est indisponible (silent fail).
+- ~~Le `NPC.update()` repository perdait `dialogue_history`, `secrets`, `knowledge`, `aliases`~~ — corrigé.
+- ~~Story Director ne tourne pas si `SemanticMemory` est indisponible (silent fail)~~ — corrigé, log WARNING.

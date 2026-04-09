@@ -120,7 +120,7 @@ Toutes les couleurs sont pilotées par le `tone` renvoyé par le Narrator.
 | `combat_embed.py` | Round, current turn, combatants HP |
 | `inventory_embed.py` | Équipement + backpack + gold |
 
-Les titres de scène utilisent un emoji thématique choisi par keyword (⚔️ dungeon, 🏰 castle, 🌲 forest) — ⚠ fragile pour les noms non-anglais ([ISSUES.md](ISSUES.md)).
+Les titres de scène utilisent un emoji thématique choisi par keywords bilingues FR/EN (donjon/dungeon, château/castle, forêt/forest, etc.).
 
 ## `campaign_launcher.py` — `CampaignLauncher`
 

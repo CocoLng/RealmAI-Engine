@@ -44,15 +44,15 @@ _LABELS: dict[str, dict[str, str]] = {
 
 # (keywords, emoji) — first match wins, comparison is lowercase + accent-stripped.
 _TYPE_EMOJI: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("donjon", "dungeon", "crypte", "cave", "caverne", "mine"), "⚔️"),
-    (("chateau", "fort", "forteresse", "tour"), "🏰"),
-    (("village", "hameau", "bourg", "ville", "cite"), "🏘️"),
-    (("foret", "bois", "clairiere", "jungle"), "🌲"),
-    (("temple", "eglise", "chapelle", "sanctuaire", "monastere"), "⛪"),
-    (("taverne", "auberge"), "🍺"),
-    (("port", "quai", "rivage", "plage"), "⚓"),
-    (("montagne", "col", "pic"), "⛰️"),
-    (("marais", "marecage"), "🌫️"),
+    (("donjon", "dungeon", "crypte", "crypt", "cave", "caverne", "mine"), "⚔️"),
+    (("chateau", "castle", "fort", "fortress", "forteresse", "tour", "tower"), "🏰"),
+    (("village", "hameau", "bourg", "ville", "cite", "town", "city"), "🏘️"),
+    (("foret", "forest", "bois", "wood", "clairiere", "clearing", "jungle"), "🌲"),
+    (("temple", "church", "eglise", "chapelle", "chapel", "sanctuaire", "sanctuary", "monastere", "monastery"), "⛪"),
+    (("taverne", "tavern", "auberge", "inn"), "🍺"),
+    (("port", "harbor", "harbour", "dock", "quai", "rivage", "plage", "shore", "beach"), "⚓"),
+    (("montagne", "mountain", "col", "pic", "peak", "summit"), "🏔️"),
+    (("marais", "swamp", "marsh", "marecage", "bog"), "🌿"),
 )
 _DEFAULT_EMOJI = "📍"
 

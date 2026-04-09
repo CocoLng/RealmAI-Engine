@@ -200,7 +200,7 @@ def is_encumbered(inventory: Inventory, strength: int, size: Size) -> bool:
 
 
 def add_item(inventory: Inventory, item: Item) -> Inventory:
-    """Add an item to the inventory. Returns a new Inventory.
+    """Add an item to the inventory. Returns a new Inventory (immutable pattern).
 
     Stackable items with the same name merge quantities.
     """
@@ -267,7 +267,7 @@ _SLOT_COMPATIBILITY: dict[EquipmentSlot, set[ItemType]] = {
 def equip_item(
     inventory: Inventory, item_name: str, slot: EquipmentSlot,
 ) -> Inventory:
-    """Equip an item from the items list into a slot. Returns a new Inventory.
+    """Equip an item from the items list into a slot. Returns a new Inventory (immutable pattern).
 
     If the slot is occupied, the previous item goes back to items.
     Two-handed weapons clear the off-hand slot.

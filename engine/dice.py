@@ -27,6 +27,35 @@ class DiceResult(BaseModel):
 _DICE_RE = re.compile(r"^(\d+)d(\d+)([+-]\d+)?$")
 
 
+def parse_dice(expression: str) -> tuple[int, int, int]:
+    """Parse a dice expression like '2d6+3' into (count, sides, modifier).
+
+    Uses the canonical _DICE_RE regex for consistent parsing across the engine.
+
+    Args:
+        expression: Dice notation string (e.g. "1d20", "2d6+3", "1d8-1").
+
+    Returns:
+        Tuple of (num_dice, num_sides, modifier).
+
+    Raises:
+        ValueError: If the expression is not valid dice notation.
+    """
+    cleaned = expression.replace(" ", "")
+    match = _DICE_RE.match(cleaned)
+    if not match:
+        raise ValueError(f"Invalid dice expression: '{expression}'")
+
+    num_dice = int(match.group(1))
+    num_sides = int(match.group(2))
+    modifier = int(match.group(3)) if match.group(3) else 0
+
+    if num_dice < 1 or num_sides < 1:
+        raise ValueError(f"Invalid dice expression: '{expression}'")
+
+    return (num_dice, num_sides, modifier)
+
+
 def roll(expression: str) -> DiceResult:
     """Roll a dice expression like '2d6+3' and return a DiceResult.
 
@@ -91,6 +120,12 @@ class D20CheckResult(DiceResult):
     margin: int
 
 
+# Margin thresholds for outcome tiers (used by _compute_outcome)
+MARGIN_HARD_FAIL: int = -5
+MARGIN_PASS: int = 0
+MARGIN_SOLID_SUCCESS: int = 5
+
+
 def _compute_outcome(natural_roll: int, margin: int) -> RollOutcome:
     """Determine the 6-tier outcome from a natural d20 roll and margin.
 
@@ -100,11 +135,11 @@ def _compute_outcome(natural_roll: int, margin: int) -> RollOutcome:
         return RollOutcome.CRITICAL_FAILURE
     if natural_roll == 20:
         return RollOutcome.CRITICAL_SUCCESS
-    if margin <= -5:
+    if margin <= MARGIN_HARD_FAIL:
         return RollOutcome.FAILURE
-    if margin < 0:
+    if margin < MARGIN_PASS:
         return RollOutcome.NEAR_FAILURE
-    if margin < 5:
+    if margin < MARGIN_SOLID_SUCCESS:
         return RollOutcome.NEAR_SUCCESS
     return RollOutcome.SUCCESS
 

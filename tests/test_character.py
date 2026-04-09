@@ -13,7 +13,6 @@ from engine.character import (
     add_xp,
     apply_racial_bonuses,
     check_level_up,
-    compute_ac,
     compute_max_hp,
     compute_modifier,
     compute_proficiency_bonus,
@@ -248,27 +247,6 @@ class TestComputeMaxHP:
         self, char_class: CharacterClass, expected_level1: int
     ) -> None:
         assert compute_max_hp(char_class, 1, 0) == expected_level1
-
-
-# ---------------------------------------------------------------------------
-# compute_ac
-# ---------------------------------------------------------------------------
-
-
-class TestComputeAC:
-    """Base AC = 10 + DEX modifier."""
-
-    def test_dex_10_gives_ac_10(self) -> None:
-        char = _make_character(dex=10)
-        assert compute_ac(char) == 10
-
-    def test_dex_16_gives_ac_13(self) -> None:
-        char = _make_character(dex=16)
-        assert compute_ac(char) == 13
-
-    def test_dex_8_gives_ac_9(self) -> None:
-        char = _make_character(dex=8)
-        assert compute_ac(char) == 9
 
 
 # ---------------------------------------------------------------------------

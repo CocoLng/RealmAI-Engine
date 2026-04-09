@@ -65,6 +65,13 @@ class WorldGenerator:
             for name, desc in raw_descriptions.items()
             if name in items_available and str(desc).strip()
         }
+        filtered_keys = set(raw_descriptions.keys()) - set(item_descriptions.keys())
+        if filtered_keys:
+            logger.warning(
+                "Filtered %d item descriptions not in items_available: %s",
+                len(filtered_keys),
+                filtered_keys,
+            )
         location = Location(
             name=str(data["name"]),
             description=str(data["description"]),

@@ -70,6 +70,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+TRIVIAL_RESOLVE_HP_THRESHOLD = 10
+"""NPCs with ``max_hp`` below this value are auto-resolved on attack."""
 
 # ---------------------------------------------------------------------------
 # Phase enum + result types
@@ -458,7 +460,7 @@ class ActionPipeline:
             NPCDisposition.UNFRIENDLY,
         ):
             return False
-        if npc.max_hp >= 10:
+        if npc.max_hp >= TRIVIAL_RESOLVE_HP_THRESHOLD:
             return False
         return True
 

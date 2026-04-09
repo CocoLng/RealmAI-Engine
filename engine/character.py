@@ -242,11 +242,6 @@ def compute_max_hp(
     return total
 
 
-def compute_ac(character: Character) -> int:
-    """Compute base AC: 10 + DEX modifier. Does not account for armor."""
-    return 10 + compute_modifier(character.ability_scores.get(Ability.DEX))
-
-
 # ---------------------------------------------------------------------------
 # Racial bonuses
 # ---------------------------------------------------------------------------

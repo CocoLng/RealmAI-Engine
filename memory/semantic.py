@@ -72,7 +72,11 @@ class SemanticMemory:
         try:
             collection = self._client.get_collection(f"campaign_{campaign_id}")
         except Exception:
-            logger.debug("Collection campaign_%s not found", campaign_id)
+            logger.warning(
+                "Collection campaign_%s not found or ChromaDB error",
+                campaign_id,
+                exc_info=True,
+            )
             return []
 
         where_filter = {"doc_type": doc_type.value} if doc_type else None
@@ -122,6 +126,8 @@ class SemanticMemory:
         try:
             self._client.delete_collection(f"campaign_{campaign_id}")
         except Exception:
-            logger.debug(
-                "Collection campaign_%s not found for deletion", campaign_id
+            logger.warning(
+                "Collection campaign_%s not found for deletion",
+                campaign_id,
+                exc_info=True,
             )

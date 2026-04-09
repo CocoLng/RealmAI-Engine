@@ -3,6 +3,7 @@
 Pure deterministic Python (no LLM).
 """
 
+import logging
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -11,6 +12,8 @@ from engine.combat import CombatState, Combatant
 from engine.conditions import cannot_move, is_incapacitated
 from engine.inventory import EquipmentSlot, Weapon
 from engine.spells import SPELL_CATALOG, can_cast_spell
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +252,16 @@ def validate_cast_spell(action: Action, state: CombatState) -> ValidationResult:
                 is_valid=False,
                 error_message=f"Target '{action.target_name}' is not in combat",
             )
+
+    # Concentration info: casting a new concentration spell is always legal per
+    # SRD, but the old concentration drops. Log for upstream awareness.
+    if spell.concentration and actor.spellcaster.concentration_spell is not None:
+        logger.info(
+            "%s is already concentrating on '%s'; casting '%s' will end it",
+            actor.name,
+            actor.spellcaster.concentration_spell,
+            spell.name,
+        )
 
     return ValidationResult(is_valid=True)
 

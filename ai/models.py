@@ -133,7 +133,7 @@ class NPCSheet(BaseModel):
     when asked appropriately.
     """
 
-    personality: str
-    description: str
-    secrets: list[str] = Field(default_factory=list)
-    knowledge: list[str] = Field(default_factory=list)
+    personality: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=1)
+    secrets: list[str] = Field(default_factory=list, min_length=1)
+    knowledge: list[str] = Field(default_factory=list, min_length=1)

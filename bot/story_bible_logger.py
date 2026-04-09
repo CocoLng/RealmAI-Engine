@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LOG_DIR = Path("logs/campaigns")
-_DIRECTOR_INTERVAL = 10
+_DIRECTOR_INTERVAL = 20
 _RECENT_TURNS_MAX = 10
 _NARRATIVE_PREVIEW_CHARS = 400
 

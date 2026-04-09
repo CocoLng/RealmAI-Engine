@@ -95,7 +95,7 @@ class ExchangeRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     campaign_id: Mapped[str] = mapped_column(
-        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     role: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(String, nullable=False)
@@ -110,7 +110,7 @@ class SummaryRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     campaign_id: Mapped[str] = mapped_column(
-        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True
     )
     summary_text: Mapped[str] = mapped_column(String, nullable=False)
     start_interaction: Mapped[int] = mapped_column(nullable=False)

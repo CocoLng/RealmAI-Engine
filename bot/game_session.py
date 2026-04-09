@@ -109,10 +109,23 @@ class GameSession:
         return new_beat
 
 
+_ARTICLES = frozenset({
+    "the", "a", "an",
+    "le", "la", "les", "l", "un", "une", "des", "du", "de",
+})
+
+
 def _normalize_location(text: str) -> str:
-    """Lowercase + strip accents for fuzzy comparison."""
+    """Lowercase + strip accents + remove articles/punctuation for fuzzy comparison."""
+    import re
     nfkd = unicodedata.normalize("NFKD", text)
-    return nfkd.encode("ascii", "ignore").decode("ascii").lower().strip()
+    ascii_lower = nfkd.encode("ascii", "ignore").decode("ascii").lower()
+    # Remove punctuation (hyphens, apostrophes, etc.)
+    cleaned = re.sub(r"[^\w\s]", " ", ascii_lower)
+    # Remove common articles
+    words = [w for w in cleaned.split() if w not in _ARTICLES]
+    # Collapse whitespace
+    return " ".join(words)
 
 
 def create_ai_services(session: GameSession) -> None:

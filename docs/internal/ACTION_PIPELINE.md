@@ -86,7 +86,7 @@ Checks :
 ### Cas spéciaux (Lots)
 
 - **Lot C — Combat bootstrap** : si `ATTACK` hors combat sur un PNJ existant, crée un `CombatState` à la volée (joueur surprise ⇒ joueur initie). Implémenté dans l'action_pipeline directement (pas dans validators).
-- **Lot E — Trivial resolve** : si PNJ pacifique (`disposition ≥ NEUTRAL`) et fragile (heuristique `max_hp < 10`), appelle `engine.combat.trivial_resolve()` qui résout l'attaque en one-shot sans démarrer un `CombatState` complet. Flip l'état `is_alive=False` du PNJ.
+- **Lot E — Trivial resolve** : si PNJ pacifique (`disposition ≥ NEUTRAL`) et fragile (`max_hp < TRIVIAL_RESOLVE_HP_THRESHOLD`, =10), appelle `engine.combat.trivial_resolve()` qui résout l'attaque en one-shot sans démarrer un `CombatState` complet. Flip l'état `is_alive=False` du PNJ.
 - **Hostile witnessing** : si un PNJ ami voit un kill gratuit, il passe `HOSTILE` (logique de propagation simpliste, voir `bot/action_pipeline.py`).
 
 Sortie : `ValidationResult(is_valid, error_message)`. Si invalide → narré comme échec in-character.

@@ -48,7 +48,7 @@ ability_scores (JSON), hp, max_hp, ac, disposition, is_alive,
 description, personality, location_name,
 aliases (JSON), secrets (JSON), knowledge (JSON), dialogue_history (JSON)
 ```
-⚠ `NPCRepository.update()` **n'écrit pas** `aliases/secrets/knowledge/dialogue_history` — bug moyen, voir [ISSUES.md](ISSUES.md).
+`NPCRepository.update()` persiste tous les champs, y compris `aliases/secrets/knowledge/dialogue_history`.
 
 #### `locations`
 ```
@@ -68,7 +68,7 @@ objectives (JSON), reward_xp, reward_gold, giver_npc
 id, campaign_id, role (PLAYER/NARRATOR/SYSTEM),
 content, interaction_number, created_at
 ```
-⚠ Pas d'index sur `(campaign_id, interaction_number)` — scan O(n) sur campagnes longues.
+`campaign_id` indexé. Index composite `(campaign_id, interaction_number)` reste un nice-to-have.
 
 #### `summaries`
 ```

@@ -65,7 +65,7 @@ Thresholds hardcoded (pas de constantes nommées). Nat 1/20 overrides margin.
 - `apply_racial_bonuses(scores, race)` — retourne une copie modifiée
 - `create_character(name, race, char_class, scores, alignment)` — factory avec stats calculées
 - `compute_max_hp(char_class, level, con_mod)` — average hit die per level + CON
-- `compute_ac(character)` — ⚠ retourne 10 + DEX mod, **ignore l'armure**. Dead code de fait ; combat utilise `inventory.compute_ac_from_equipment()`. Voir [ISSUES.md](ISSUES.md).
+- ~~`compute_ac(character)`~~ — supprimé (dead code). L'AC est calculée par `inventory.compute_ac_from_equipment()`.
 - `add_xp(character, amount)` + `level_up(character)` — mutent en place
 
 ## `inventory.py`
@@ -145,15 +145,15 @@ ActiveCondition(
     type: ConditionType,
     source: str,
     duration_rounds: int | None,  # None = indéfini
-    save_ability: Ability | None,  # ⚠ dead field
-    save_dc: int | None,           # ⚠ dead field
+    save_ability: Ability | None,  # réservé pour future mécanique de saves de fin de condition
+    save_dc: int | None,           # réservé pour future mécanique de saves de fin de condition
     exhaustion_level: int,         # 0-6 pour EXHAUSTION
 )
 ```
 
 ### Functions utilitaires
 
-- `apply_condition`, `remove_condition` (raise ValueError si absent), `has_condition`, `get_condition`
+- `apply_condition`, `remove_condition` (no-op si absent, log warning), `has_condition`, `get_condition`
 - `tick_durations` — décrémente et retire quand ≤ 0
 - `has_disadvantage_on_attacks`, `grants_advantage_to_attackers`
 - `is_incapacitated`, `cannot_move`
@@ -229,13 +229,10 @@ Aucun import depuis `ai/`, `bot/`, `memory/`, `world/`, `db/` (sauf combat.py qu
 
 ## Idiomes / style
 
-⚠ **Inconsistance mutation vs copie** : certaines fonctions mutent en place ET retournent (`level_up`, `apply_damage`, `cast_spell`), d'autres retournent une copie (`add_item`, `equip_item`). Aucune convention claire.
+**Convention mutation vs copie** (documentée par docstrings) : `engine/inventory.py` retourne des copies (pattern immutable), tous les autres modules mutent en place et retournent l'objet.
 
 ### Points d'amélioration
 
 Voir [ISSUES.md](ISSUES.md). Synthèse :
-- Constantes magiques non extraites (thresholds outcome, attunement max, cantrip scale).
-- Dead fields (`ActiveCondition.save_ability`, `save_dc`) et dead function (`character.compute_ac`).
-- Parsing dé fragile (combat `_double_dice`, spells cantrip).
+- Constantes magiques restantes (attunement max, cantrip scale, fuzzy thresholds).
 - Pas de loader pour custom spells / items.
-- Mutation patterns incohérents.

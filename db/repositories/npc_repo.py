@@ -67,6 +67,10 @@ class NPCRepository:
         row.description = npc.description
         row.personality = npc.personality
         row.location_name = npc.location_name
+        row.aliases = list(npc.aliases)
+        row.secrets = list(npc.secrets)
+        row.knowledge = list(npc.knowledge)
+        row.dialogue_history = [exch.model_dump() for exch in npc.dialogue_history]
 
     def delete(self, name: str, campaign_id: str) -> None:
         """Delete an NPC by name within a campaign."""

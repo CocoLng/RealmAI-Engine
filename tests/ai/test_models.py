@@ -90,10 +90,36 @@ def test_npc_sheet_minimal():
     sheet = NPCSheet(
         personality="Vieil ermite méfiant.",
         description="Un homme voûté en robe de bure.",
+        secrets=["Il cache un talisman."],
+        knowledge=["Connaît les herbes locales."],
     )
     assert sheet.personality.startswith("Vieil")
-    assert sheet.secrets == []
-    assert sheet.knowledge == []
+    assert len(sheet.secrets) == 1
+    assert len(sheet.knowledge) == 1
+
+
+def test_npc_sheet_rejects_empty_personality():
+    from pydantic import ValidationError
+    from ai.models import NPCSheet
+    with pytest.raises(ValidationError):
+        NPCSheet(
+            personality="",
+            description="Un homme voûté.",
+            secrets=["Un secret."],
+            knowledge=["Un savoir."],
+        )
+
+
+def test_npc_sheet_rejects_empty_secrets():
+    from pydantic import ValidationError
+    from ai.models import NPCSheet
+    with pytest.raises(ValidationError):
+        NPCSheet(
+            personality="Méfiant.",
+            description="Un homme voûté.",
+            secrets=[],
+            knowledge=["Un savoir."],
+        )
 
 
 def test_npc_sheet_full():

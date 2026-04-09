@@ -10,7 +10,7 @@ from db.repositories.npc_repo import NPCRepository
 from db.repositories.quest_repo import QuestRepository
 from world.campaign import Campaign
 from world.location import Location
-from world.npc import NPC, NPCDisposition
+from world.npc import NPC, DialogueExchange, NPCDisposition
 from world.quest import Quest, QuestStatus
 
 
@@ -143,6 +143,55 @@ class TestNPCRepository:
         assert result is not None
         assert result.hp == 10
         assert result.disposition == NPCDisposition.HOSTILE
+
+    def test_update_preserves_all_fields(
+        self, db_session: Session, sample_campaign: Campaign, sample_npc: NPC,
+    ) -> None:
+        """Regression: update() must persist aliases, secrets, knowledge, dialogue_history."""
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = NPCRepository(db_session)
+
+        # Save NPC with rich data in the four previously-lost fields
+        npc_with_data = sample_npc.model_copy(update={
+            "aliases": ["Gundren", "The Rockseeker"],
+            "secrets": ["Knows location of Wave Echo Cave"],
+            "knowledge": ["Phandalin history", "Mining lore"],
+            "dialogue_history": [
+                DialogueExchange(
+                    player_said="Where is the cave?",
+                    npc_said="I cannot tell you yet.",
+                    revealed=["cave_exists"],
+                ),
+            ],
+        })
+        repo.save(npc_with_data, sample_campaign.id)
+        db_session.commit()
+
+        # Update: change disposition AND add more dialogue
+        updated = npc_with_data.model_copy(update={
+            "disposition": NPCDisposition.HOSTILE,
+            "dialogue_history": npc_with_data.dialogue_history + [
+                DialogueExchange(
+                    player_said="Tell me now!",
+                    npc_said="Fine, it is to the east.",
+                    revealed=["cave_location"],
+                ),
+            ],
+            "secrets": ["Knows location of Wave Echo Cave", "Has a map"],
+        })
+        repo.update(updated, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_npc.name, sample_campaign.id)
+        assert result is not None
+        assert result.disposition == NPCDisposition.HOSTILE
+        assert result.aliases == ["Gundren", "The Rockseeker"]
+        assert result.secrets == ["Knows location of Wave Echo Cave", "Has a map"]
+        assert result.knowledge == ["Phandalin history", "Mining lore"]
+        assert len(result.dialogue_history) == 2
+        assert result.dialogue_history[0].player_said == "Where is the cave?"
+        assert result.dialogue_history[1].npc_said == "Fine, it is to the east."
+        assert result.dialogue_history[1].revealed == ["cave_location"]
 
     def test_update_missing_raises(self, db_session: Session, sample_npc: NPC) -> None:
         repo = NPCRepository(db_session)

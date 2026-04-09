@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from ai.client import OllamaClient
+from ai.language import language_instruction
 from world.quest import Quest, QuestObjective, QuestStatus
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class QuestGenerator:
         campaign_context: str,
         location_name: str,
         available_npcs: list[str],
+        language: str = "fr",
     ) -> Quest:
         """Generate a new quest for the current situation.
 
@@ -35,13 +37,15 @@ class QuestGenerator:
             campaign_context: Assembled context describing the campaign state.
             location_name: Name of the current location.
             available_npcs: Names of NPCs available in the current location.
+            language: ISO 639-1 language code for narrative output.
 
         Returns:
             A Quest with status=AVAILABLE, ready to be saved.
         """
         user_content = self._build_user_message(campaign_context, location_name, available_npcs)
+        system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 

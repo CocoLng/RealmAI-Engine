@@ -468,7 +468,7 @@ class TestRecordTurnAndMaybeCheck:
         )
         session.story_director = director
 
-        for _ in range(10):
+        for _ in range(20):
             await record_turn_and_maybe_check(
                 session,
                 user_name="cocolng",
@@ -484,7 +484,7 @@ class TestRecordTurnAndMaybeCheck:
 
         assert session.story_bible is not None
         content = session.story_bible.path.read_text(encoding="utf-8")
-        assert "## Coherence Check — Turn 10 · priority: medium" in content
+        assert "## Coherence Check — Turn 20 · priority: medium" in content
         assert "drift" in content
         assert "hook" in content
 
@@ -494,7 +494,7 @@ class TestRecordTurnAndMaybeCheck:
     ) -> None:
         session = self._session(tmp_path)
         session.story_director = None
-        for _ in range(10):
+        for _ in range(20):
             await record_turn_and_maybe_check(
                 session,
                 user_name="cocolng",

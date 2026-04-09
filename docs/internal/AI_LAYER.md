@@ -9,7 +9,7 @@ Couche LLM pour narration, interprétation, génération de contenu et résoluti
   - `qwen3.5:4b` — rapide (~50-70 tok/s), utilisé pour classification (interpreter, NPC agent, NPC generator)
   - `qwen3.5:9b` — riche (~25-35 tok/s), utilisé pour narration, génération de monde/quests/arc, story director
   - Jamais chargés simultanément (limitation M3 Pro 18GB)
-- **Thinking mode** (`think=true`) activé pour : arc generation, world generation, quest generation, story director. ⚠ pas de budget cap — voir [ISSUES.md](ISSUES.md).
+- **Thinking mode** (`think=true`) activé pour : arc generation, world generation, quest generation, story director. Token budget cappé à `_THINKING_TOKEN_CAP = 4096`.
 - **JSON mode** : toujours `format: "json"` dans l'appel HTTP. Les sorties sont validées par Pydantic v2.
 
 ## Fichier par fichier
@@ -119,9 +119,7 @@ Construit un user message incluant : context + fiche NPC (perso, race, dispositi
 
 **Modèle** : `qwen3.5:9b` **avec `think=True`**, temperature 0.8.
 
-`generate(campaign_context, location_name, available_npcs) -> Quest`.
-
-⚠ **Pas de paramètre `language`** (incohérence avec arc/world generators) — voir [ISSUES.md](ISSUES.md).
+`generate(campaign_context, location_name, available_npcs, language="fr") -> Quest`.
 
 Contraintes enforced par prompt uniquement (pas code) :
 - 1-4 objectives

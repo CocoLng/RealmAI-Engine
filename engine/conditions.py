@@ -3,11 +3,17 @@
 Pure deterministic Python (no LLM).
 """
 
+import logging
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from engine.character import Ability
+
+logger = logging.getLogger(__name__)
+
+# Maximum exhaustion level (SRD 5e). Death occurs at this level.
+MAX_EXHAUSTION_LEVEL = 6
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +54,7 @@ class ActiveCondition(BaseModel):
     duration_rounds: int | None = Field(default=None, ge=1)
     save_ability: Ability | None = None
     save_dc: int | None = Field(default=None, ge=1)
+    # le=6 must be a literal for Pydantic; see MAX_EXHAUSTION_LEVEL constant.
     exhaustion_level: int = Field(default=0, ge=0, le=6)
 
 
@@ -106,19 +113,24 @@ CONDITIONS_AUTO_FAIL_STR_DEX_SAVES: frozenset[ConditionType] = frozenset({
 def apply_condition(
     conditions: list[ActiveCondition], condition: ActiveCondition
 ) -> list[ActiveCondition]:
-    """Add a condition to the list. Returns the same list (mutates in place).
+    """Add a condition to the list. Mutates the conditions list in place.
 
-    - EXHAUSTION: if already present, increments exhaustion_level (stacks to 6).
-      If already at 6, does nothing.
+    - EXHAUSTION: if already present, increments exhaustion_level (stacks to
+      MAX_EXHAUSTION_LEVEL). If already at max, does nothing.
     - Other types: if same type already present, replaces it (new source/duration).
     - If not present, appends.
     """
     for i, existing in enumerate(conditions):
         if existing.condition_type == condition.condition_type:
             if condition.condition_type == ConditionType.EXHAUSTION:
-                if existing.exhaustion_level < 6:
+                if existing.exhaustion_level < MAX_EXHAUSTION_LEVEL:
                     conditions[i] = existing.model_copy(
-                        update={"exhaustion_level": min(existing.exhaustion_level + 1, 6)}
+                        update={
+                            "exhaustion_level": min(
+                                existing.exhaustion_level + 1,
+                                MAX_EXHAUSTION_LEVEL,
+                            )
+                        }
                     )
             else:
                 conditions[i] = condition
@@ -130,13 +142,14 @@ def apply_condition(
 def remove_condition(
     conditions: list[ActiveCondition], condition_type: ConditionType
 ) -> list[ActiveCondition]:
-    """Remove all conditions of the given type. Returns the same list (mutates in place).
+    """Remove all conditions of the given type. Mutates the conditions list in place.
 
-    Raises ValueError if condition_type not found.
+    Returns the list unchanged if condition not found (logs a warning).
     """
     indices = [i for i, c in enumerate(conditions) if c.condition_type == condition_type]
     if not indices:
-        raise ValueError(f"Condition {condition_type} not found")
+        logger.warning("Condition %s not found, skipping removal", condition_type)
+        return conditions
     for i in reversed(indices):
         conditions.pop(i)
     return conditions

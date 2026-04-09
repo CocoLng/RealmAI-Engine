@@ -19,7 +19,7 @@ from engine.conditions import (
     remove_condition,
     tick_durations,
 )
-from engine.dice import RollOutcome, roll, roll_check
+from engine.dice import RollOutcome, parse_dice, roll, roll_check
 from engine.inventory import (
     DamageType,
     Inventory,
@@ -145,6 +145,7 @@ def roll_initiative(combatant: Combatant) -> Combatant:
 def start_combat(combatants: list[Combatant]) -> CombatState:
     """Roll initiative for all combatants, sort descending (ties: higher DEX first).
 
+    Mutates each combatant's initiative in place and sorts the list.
     Returns a new CombatState ready for the first turn.
     """
     for c in combatants:
@@ -281,18 +282,9 @@ def _double_dice(dice_expr: str) -> str:
     '1d8' -> '2d8', '3d4+3' -> '6d4+3'. Only the dice count is doubled;
     flat modifiers are preserved as-is.
     """
-    # Split on 'd', then isolate modifier from the die size
-    parts = dice_expr.split("d", maxsplit=1)
-    num = int(parts[0])
-    rest = parts[1]
-    # rest might be "8", "4+3", "6-1"
-    modifier = ""
-    for i, ch in enumerate(rest):
-        if ch in ("+", "-"):
-            modifier = rest[i:]
-            rest = rest[:i]
-            break
-    return f"{num * 2}d{rest}{modifier}"
+    count, sides, modifier = parse_dice(dice_expr)
+    mod_str = f"+{modifier}" if modifier > 0 else (str(modifier) if modifier < 0 else "")
+    return f"{count * 2}d{sides}{mod_str}"
 
 
 def resolve_attack(
@@ -302,7 +294,7 @@ def resolve_attack(
     advantage: bool = False,
     disadvantage: bool = False,
 ) -> AttackResult:
-    """Resolve a full weapon attack.
+    """Resolve a full weapon attack. Mutates defender HP in place. Returns AttackResult.
 
     1. Check conditions for advantage/disadvantage.
     2. Roll d20 (advantage: best of 2, disadvantage: worst of 2).
@@ -398,7 +390,7 @@ def resolve_spell(
     target: Combatant | None = None,
     slot_level: int | None = None,
 ) -> SpellCastResult:
-    """Resolve a spell cast.
+    """Resolve a spell cast. Mutates caster/target state in place. Returns SpellCastResult.
 
     1. Consume spell slot via cast_spell.
     2. Handle damage (with saving throw if applicable).
@@ -434,11 +426,11 @@ def resolve_spell(
             effective_slot = slot_level if slot_level is not None else spell.level
             extra_levels = effective_slot - spell.level
             if extra_levels > 0 and spell.higher_level_dice is not None:
-                extra_dice = spell.higher_level_dice
-                # Parse "1d6" → add N copies of the extra die
-                e_parts = extra_dice.split("d")
-                e_count = int(e_parts[0]) * extra_levels
-                extra_expr = f"{e_count}d{e_parts[1]}"
+                # Parse extra dice using canonical parser and scale by upcast levels
+                e_count, e_sides, e_mod = parse_dice(spell.higher_level_dice)
+                e_count *= extra_levels
+                mod_str = f"+{e_mod}" if e_mod > 0 else (str(e_mod) if e_mod < 0 else "")
+                extra_expr = f"{e_count}d{e_sides}{mod_str}"
                 # Roll base + extra separately and sum
                 base_result = roll(dice_expr)
                 extra_result = roll(extra_expr)
@@ -654,7 +646,7 @@ def trivial_resolve(
     target_npc: NPC,
     weapon: Weapon | None = None,
 ) -> TrivialResolveResult:
-    """Auto-resolve an attack against a defenseless NPC.
+    """Auto-resolve an attack against a defenseless NPC. Mutates target_npc.hp in place.
 
     Assumes the attacker has overwhelming advantage. Rolls one attack and
     one damage. The target is killed if HP reaches 0. Does NOT create or

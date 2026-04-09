@@ -10,6 +10,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_THINKING_TOKEN_CAP = 4096
+"""Default ``num_predict`` cap when thinking mode is enabled."""
+
 
 class OllamaUnavailableError(Exception):
     """Raised when the Ollama server is unreachable."""
@@ -99,6 +102,12 @@ class OllamaClient:
             OllamaUnavailableError: If the Ollama server is unreachable.
             json.JSONDecodeError: If the model returns non-JSON content.
         """
+        # When thinking is enabled and the caller didn't override
+        # num_predict, cap generation to avoid runaway reasoning.
+        effective_num_predict = num_predict
+        if think and num_predict == -1:
+            effective_num_predict = _THINKING_TOKEN_CAP
+
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -108,7 +117,7 @@ class OllamaClient:
             "keep_alive": "10m",
             "options": {
                 "temperature": temperature,
-                "num_predict": num_predict,
+                "num_predict": effective_num_predict,
                 "num_ctx": num_ctx,
             },
         }
