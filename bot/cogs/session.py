@@ -15,6 +15,7 @@ from discord.ext import commands
 from bot.campaign_launcher import CampaignLauncher
 from bot.config import GuildConfig
 from bot.game_session import GameSession, create_ai_services
+from bot.persistence import persist_session
 from bot.utils.channel_manager import archive_channel, create_session_channel
 from db.repositories import (
     CampaignChannelRepository,
@@ -305,6 +306,18 @@ class SessionCog(commands.Cog):
 
         # Persist before archiving
         self._persist_session(session)
+
+        # Clean up ChromaDB collection for this campaign (L5).
+        if session.semantic_memory is not None:
+            try:
+                session.semantic_memory.delete_campaign(session.campaign.id)
+            except Exception:
+                logger.warning(
+                    "Failed to delete ChromaDB collection for campaign %s",
+                    session.campaign.id,
+                    exc_info=True,
+                )
+
         logger.info(
             "SESSION end campaign=%s channel=%s",
             session.campaign.id, channel_id,
@@ -387,55 +400,7 @@ class SessionCog(commands.Cog):
 
     def _persist_session(self, session: GameSession) -> None:
         """Save campaign, characters, combat state, NPCs, and quests to DB."""
-        db_session = self.bot.db_factory()
-        try:
-            # Campaign + combat state
-            session.campaign.combat_state_json = (
-                session.combat_state.model_dump_json()
-                if session.combat_state is not None
-                else None
-            )
-            camp_repo = CampaignRepository(db_session)
-            camp_repo.update(session.campaign)
-
-            # Player characters
-            pc_repo = PlayerCharacterRepository(db_session)
-            for user_id, char in session.characters.items():
-                inv = session.inventories.get(user_id)
-                spell = session.spellcasters.get(user_id)
-                if inv is not None:
-                    try:
-                        pc_repo.update(user_id, session.campaign.id, char, inv, spell)
-                    except ValueError:
-                        pc_repo.save(user_id, session.campaign.id, char, inv, spell)
-
-            # NPCs
-            npc_repo = NPCRepository(db_session)
-            for npc in session.npcs.values():
-                try:
-                    npc_repo.update(npc, session.campaign.id)
-                except ValueError:
-                    npc_repo.save(npc, session.campaign.id)
-
-            # Quests
-            quest_repo = QuestRepository(db_session)
-            for quest in session.quests:
-                try:
-                    quest_repo.update(quest, session.campaign.id)
-                except ValueError:
-                    quest_repo.save(quest, session.campaign.id)
-
-            # Story arc
-            if session.story_arc:
-                arc_repo = StoryArcRepository(db_session)
-                try:
-                    arc_repo.update(session.story_arc)
-                except ValueError:
-                    arc_repo.save(session.story_arc)
-
-            db_session.commit()
-        finally:
-            db_session.close()
+        persist_session(self.bot.db_factory, session)
 
 
 async def setup(bot: commands.Bot) -> None:

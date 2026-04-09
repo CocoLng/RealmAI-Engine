@@ -49,6 +49,7 @@ from ai.models import (
 from ai.narrator import Narrator
 from ai.scene_context import SceneContext, build_scene_context
 from bot.llm_retry import retry_llm_call
+from bot.persistence import persist_session
 from engine.character import Character
 from engine.combat import CombatState, TrivialResolveResult, trivial_resolve
 from engine.inventory import EquipmentSlot, Inventory, Weapon
@@ -322,6 +323,15 @@ class ActionPipeline:
                     logger.exception(
                         "BEAT persist failed campaign=%s", self.campaign_id,
                     )
+
+        # Auto-checkpoint: persist full session state after every resolved action (B1).
+        if self.db_factory is not None and self.session is not None:
+            try:
+                await asyncio.to_thread(
+                    persist_session, self.db_factory, self.session,
+                )
+            except Exception:
+                logger.exception("AUTO-CHECKPOINT failed campaign=%s", self.campaign_id)
 
         await self._emit(progress_callback, PipelinePhase.DONE)
         result = ActionPipelineResult(
