@@ -11,7 +11,7 @@ Snapshot 2026-04-09. Classement par severite.
 ### B2. Runaway thinking mode Qwen 3.5
 **Ou** : [ai/client.py](../../ai/client.py), `chat_json(..., think=True)`.
 **Probleme** : pas de budget cap sur la phase de thinking. Un prompt long/ambigu peut faire hang le bot jusqu'au timeout (600s).
-**Fix** : ajouter un `num_predict` maximum dedie au thinking, ou un watchdog async cote caller.
+**Fix** : on garde le thinking mode cependant il faut s'assurer qu'il ne bouge pas en boucle et qu'il ne soit pas bloqué. Améliorer le prompt ppir garder de la créativité et en le strucurant dé maniere a répartir les taches de manière plus efficace. Voir faire une chaine de pensée plus structurée (ex. d'abord brainstorm, puis plan, puis exécution) avec des prompts dédiés et des checks intermédiaires.
 
 ---
 
