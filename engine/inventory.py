@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from engine.character import Size
+from engine.character import CharacterClass, Size
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +488,23 @@ ITEM_CATALOG: dict[str, Item] = {
         weapon_category=WeaponCategory.MARTIAL_MELEE,
         properties=[WeaponProperty.HEAVY, WeaponProperty.TWO_HANDED],
     ),
+    "Mace": Weapon(
+        name="Mace",
+        weight=4.0,
+        value_gp=5,
+        damage_dice="1d6",
+        damage_type=DamageType.BLUDGEONING,
+        weapon_category=WeaponCategory.SIMPLE_MELEE,
+    ),
+    "Rapier": Weapon(
+        name="Rapier",
+        weight=2.0,
+        value_gp=25,
+        damage_dice="1d8",
+        damage_type=DamageType.PIERCING,
+        weapon_category=WeaponCategory.MARTIAL_MELEE,
+        properties=[WeaponProperty.FINESSE],
+    ),
     "Shortbow": Weapon(
         name="Shortbow",
         weight=2.0,
@@ -629,3 +646,35 @@ ITEM_CATALOG: dict[str, Item] = {
         quantity=20,
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Default weapons by class (for NPC bootstrap)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_WEAPON_BY_CLASS: dict[CharacterClass, str] = {
+    CharacterClass.FIGHTER: "Longsword",
+    CharacterClass.RANGER: "Longsword",
+    CharacterClass.ROGUE: "Shortsword",
+    CharacterClass.BARBARIAN: "Greataxe",
+    CharacterClass.WIZARD: "Quarterstaff",
+    CharacterClass.CLERIC: "Mace",
+}
+
+
+def default_weapon_for_class(char_class: CharacterClass) -> Weapon:
+    """Return a sensible default weapon for a character class.
+
+    Used when bootstrapping NPC combatants that have no explicit weapon.
+    Falls back to Shortsword if the class has no specific mapping.
+
+    Args:
+        char_class: The character's class.
+
+    Returns:
+        A copy of the appropriate Weapon from the ITEM_CATALOG.
+    """
+    weapon_name = _DEFAULT_WEAPON_BY_CLASS.get(char_class, "Shortsword")
+    item = ITEM_CATALOG[weapon_name]
+    assert isinstance(item, Weapon)
+    return item.model_copy()

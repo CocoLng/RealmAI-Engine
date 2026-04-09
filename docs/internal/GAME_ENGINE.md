@@ -95,6 +95,7 @@ Thresholds hardcoded (pas de constantes nommées). Nat 1/20 overrides margin.
 - `compute_ac_from_equipment(equipped, dex_mod)` : la vraie fonction AC. Light = base + DEX, Medium = base + min(DEX, dex_cap ou 2), Heavy = base + 0 ; +2 si shield.
 - `compute_carrying_capacity(strength, size)` : `str × 15`, halved si SMALL
 - `is_encumbered(inventory, strength, size)`
+- `default_weapon_for_class(char_class)` : retourne une arme par défaut depuis `ITEM_CATALOG` selon la classe. Utilisé par `build_npc_combatant()` pour armer les PNJs bootstrappés en combat. Mapping : Fighter/Ranger → Longsword, Rogue → Shortsword, Barbarian → Greataxe, Wizard → Quarterstaff, Cleric → Mace. Fallback → Shortsword.
 
 ## `spells.py`
 

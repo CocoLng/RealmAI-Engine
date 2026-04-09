@@ -11,6 +11,7 @@ from engine.inventory import (
     Armor,
     EquipmentSlot,
     Inventory,
+    ItemType,
     Weapon,
     add_item,
     equip_item,
@@ -170,8 +171,10 @@ def apply_starter_kit(kit: StarterKit, inventory: Inventory) -> Inventory:
             inv = equip_item(inv, item.name, EquipmentSlot.ARMOR)
             break
 
-    # Auto-equip Shield to off-hand if present
-    if "Shield" in kit.items:
-        inv = equip_item(inv, "Shield", EquipmentSlot.OFF_HAND)
+    # Auto-equip shield to off-hand if present (type-based detection)
+    for item in inv.items:
+        if item.item_type == ItemType.SHIELD:
+            inv = equip_item(inv, item.name, EquipmentSlot.OFF_HAND)
+            break
 
     return inv

@@ -89,10 +89,10 @@ Snapshot 2026-04-09. Classement par sévérité. Chaque entrée inclut la locali
 **Problème** : updates partiels impossibles — il faut load + modify + dump. Pour une simple incrémentation de `current_beat_index`, on réécrit tout.
 **Fix** : extraire `current_beat_index` en colonne séparée (au moins).
 
-### M6. Combat bootstrap sans armes pour PNJ
-**Où** : [bot/action_pipeline.py](../../bot/action_pipeline.py) Lot C.
-**Problème** : les PNJs bootstrappés en combat depuis une attaque free-text combattent mains nues. Pas d'arme par défaut attachée.
-**Fix** : attribuer un weapon générique par race/class au moment de la génération de PNJ, ou au moment du bootstrap.
+### ~~M6. Combat bootstrap sans armes pour PNJ~~ ✅ FIXED
+**Où** : [bot/cogs/combat.py](../../bot/cogs/combat.py) `build_npc_combatant()`.
+**Problème** : les PNJs bootstrappés en combat depuis une attaque free-text combattaient mains nues. Pas d'arme par défaut attachée.
+**Fix** : ajout de `default_weapon_for_class()` dans `engine/inventory.py` qui mappe chaque classe à une arme sensible du `ITEM_CATALOG`. `build_npc_combatant()` appelle cette fonction et équipe l'arme en `MAIN_HAND`.
 
 ### M7. Trivial kill par heuristique `max_hp < 10`
 **Où** : [bot/action_pipeline.py](../../bot/action_pipeline.py) Lot E.
@@ -145,8 +145,8 @@ Pas de constante `MAX_EXHAUSTION_LEVEL`.
 ### L5. Orphan ChromaDB collections
 Si une campagne est supprimée, la collection ChromaDB `campaign_<id>` n'est pas nettoyée. Peu grave actuellement (pas de `/delete campaign`), à prévoir si on l'implémente.
 
-### L6. `starter_gear.apply_starter_kit` : auto-equip fragile
-- Lookup `"Shield"` par string — fail si item renommé.
+### ~~L6. `starter_gear.apply_starter_kit` : auto-equip fragile~~ ✅ PARTIALLY FIXED
+- ~~Lookup `"Shield"` par string~~ → remplacé par détection par type `item.item_type == ItemType.SHIELD`.
 - Si kit a 2+ armes, seule la première est équipée (pas de dual-wield auto).
 - Pas de gestion multi-armor (ex. casque + armure corps).
 
