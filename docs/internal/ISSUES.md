@@ -8,10 +8,10 @@ Snapshot 2026-04-09. Classement par sévérité. Chaque entrée inclut la locali
 
 ## 🔴 Bloquants (ou risques de perte de données)
 
-### B1. Perte de session sur crash du bot
+### B1. ~~Perte de session sur crash du bot~~ ✅ FIXED
 **Où** : [bot/bot.py](../../bot/bot.py), `bot.sessions` et `bot.launchers` in-memory only.
 **Problème** : un redémarrage ou un crash perd toute campagne active pour laquelle `/save` n'a pas été appelé. Combat en cours, modifs HP, items pickups non persistés disparaissent.
-**Fix** : flush auto après chaque action, ou utiliser `combat_state_json` + checkpoints après chaque mutation. Voir aussi B3.
+**Fix appliqué** : auto-checkpoint dans `ActionPipeline` — `persist_session()` (extrait dans `bot/persistence.py`) est appelé après chaque action résolue. Un crash ne perd plus que l'action en cours de traitement.
 
 ### B2. Runaway thinking mode Qwen 3.5
 **Où** : [ai/client.py](../../ai/client.py), `chat_json(..., think=True)`.
@@ -142,16 +142,18 @@ Snapshot 2026-04-09. Classement par sévérité. Chaque entrée inclut la locali
 ### L4. `ExhaustionLevel` hardcodé à 6
 Pas de constante `MAX_EXHAUSTION_LEVEL`.
 
-### L5. Orphan ChromaDB collections
-Si une campagne est supprimée, la collection ChromaDB `campaign_<id>` n'est pas nettoyée. Peu grave actuellement (pas de `/delete campaign`), à prévoir si on l'implémente.
+### L5. ~~Orphan ChromaDB collections~~ ✅ FIXED
+Si une campagne est supprimée, la collection ChromaDB `campaign_<id>` n'est pas nettoyée.
+**Fix appliqué** : `/end_campaign` appelle `SemanticMemory.delete_campaign()` avant l'archivage du salon.
 
 ### L6. `starter_gear.apply_starter_kit` : auto-equip fragile
 - Lookup `"Shield"` par string — fail si item renommé.
 - Si kit a 2+ armes, seule la première est équipée (pas de dual-wield auto).
 - Pas de gestion multi-armor (ex. casque + armure corps).
 
-### L7. `language` dans `guild_configs` stocké mais peu utilisé
-Le champ existe, est sauvé, mais l'i18n dynamique réelle dépend de la compliance du LLM (il n'y a pas de fallback Python si le narrator produit en anglais).
+### L7. ~~`language` dans `guild_configs` stocké mais peu utilisé~~ ✅ FIXED
+Le champ existe, est sauvé, mais l'i18n dynamique réelle dépend de la compliance du LLM.
+**Fix appliqué** : `guild_config.language` est lu et propagé à `GameSession.language` dans `/start_campaign` (via `CampaignLauncher`) et `/resume`. Le default "fr" reste en fallback.
 
 ### L8. `confidence` d'`InterpretedAction` non validé
 Le champ est attendu en `[0.0, 1.0]` mais aucun validator Pydantic ne le contraint.
@@ -188,4 +190,4 @@ Les mêmes hooks peuvent revenir à plusieurs checks successifs, polluant le RAG
 5. **H4/H5** — logger les silent fails — 20 minutes.
 6. **M1** — choisir et documenter convention mutation/copie en docstring — 1 heure.
 7. **M6** — attacher weapon par défaut au bootstrap combat — 2 heures.
-8. **B1** — checkpointing auto des sessions — plus gros chantier, ~1 jour.
+8. ~~**B1** — checkpointing auto des sessions~~ ✅ done.

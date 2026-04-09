@@ -92,6 +92,7 @@ Pour chaque tour :
 - Exécution des 6 phases — voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md).
 - Persistance immédiate quand il y a mutation concrète : move (update location courante), kill (update NPC), pickup (update inventory).
 - `session.advance_beat_if_ready()` — fuzzy match (`difflib ratio ≥ 0.7`) entre la location courante et le `location_hint` du prochain beat (Lot D).
+- **Auto-checkpoint** : après chaque action résolue, `persist_session()` sauvegarde l'intégralité de la session (campagne + combat_state_json, personnages, PNJs, quêtes, arc). Un crash ne perd plus que l'action en cours de traitement.
 - Exchange sauvé en Layer 2 (`ExchangeRepository`).
 - Tous les 20 tours : `Summarizer.summarize()` (Layer 3) + `StoryDirector.check_coherence()` (si déclenché par le cog).
 
@@ -101,7 +102,7 @@ Défini dans [bot/cogs/session.py](../../bot/cogs/session.py).
 
 - Flush atomique de tous les modèles in-memory vers la DB.
 - `CampaignRepository.update()`, `PlayerCharacterRepository.save()` pour chaque joueur, `NPCRepository.update()` pour chaque NPC, `LocationRepository.update()` pour la location courante, `StoryArcRepository.update()` pour l'arc (beat index avancé).
-- ⚠ Ne sauvegarde PAS le `CombatState` en cours — il est sérialisé dans `campaigns.combat_state_json` mais voir [ISSUES.md](ISSUES.md) pour les cas edge.
+- Sauvegarde le `CombatState` via `campaigns.combat_state_json`. Depuis le fix B1, le même flush est aussi déclenché automatiquement après chaque action (auto-checkpoint).
 
 ## 5. `/resume <campaign_id>`
 
@@ -113,6 +114,7 @@ Défini dans [bot/cogs/session.py](../../bot/cogs/session.py).
 ## 6. `/end_campaign`
 
 - `archive_channel()` : déplace le salon dans la catégorie `RealmAI Archives`, retire les droits d'écriture pour les joueurs.
+- Nettoyage ChromaDB : supprime la collection `campaign_<id>` via `SemanticMemory.delete_campaign()` (fix L5).
 - Ne supprime rien en DB — tout reste accessible pour `/resume` ultérieur ou analyse post-mortem.
 - `bot.sessions.pop(channel.id)`.
 
@@ -127,6 +129,5 @@ Les objets suivants **ne sont pas répliqués en DB** pendant la phase de jeu :
 - `bot.sessions: dict[channel_id, GameSession]`
 - `bot.launchers: dict[channel_id, CampaignLauncher]`
 - `session.action_lock`
-- `session.combat_state` (persisté en JSON uniquement sur `/save`)
 
-👉 Un crash du bot perd toute campagne pour laquelle `/save` n'a pas été appelé depuis le début du combat courant. Voir [ISSUES.md](ISSUES.md).
+Depuis le fix B1, `persist_session()` est appelé automatiquement après chaque action résolue (auto-checkpoint dans `ActionPipeline`). Un crash ne perd plus que l'action en cours de traitement. Le `combat_state` est inclus dans le checkpoint via `campaigns.combat_state_json`.
