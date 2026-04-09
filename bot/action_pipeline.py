@@ -52,6 +52,10 @@ from bot.llm_retry import retry_llm_call
 from bot.persistence import persist_session
 from engine.character import Character
 from engine.combat import CombatState, TrivialResolveResult, trivial_resolve
+from engine.conditions import (
+    ActiveCondition,
+    ConditionType,
+)
 from engine.inventory import EquipmentSlot, Inventory, Weapon
 from engine.validators import (
     Action,
@@ -72,6 +76,39 @@ logger = logging.getLogger(__name__)
 
 TRIVIAL_RESOLVE_HP_THRESHOLD = 10
 """NPCs with ``max_hp`` below this value are auto-resolved on attack."""
+
+TRIVIAL_RESOLVE_AC_THRESHOLD = 12
+"""NPCs with ``ac`` above this value are *not* trivially defeatable."""
+
+DEFENSIVE_CONDITIONS: frozenset[ConditionType] = frozenset({
+    ConditionType.INVISIBLE,
+    ConditionType.PETRIFIED,
+    ConditionType.RESTRAINED,
+    ConditionType.UNCONSCIOUS,
+})
+"""Conditions that make an NPC non-trivial to defeat outright."""
+
+
+def is_trivially_defeatable(npc: NPC) -> bool:
+    """Check whether an NPC can be auto-killed without a combat round.
+
+    All three criteria must be met:
+    - ``npc.max_hp`` is below :data:`TRIVIAL_RESOLVE_HP_THRESHOLD`
+    - ``npc.ac`` is at or below :data:`TRIVIAL_RESOLVE_AC_THRESHOLD`
+    - NPC has no active defensive conditions (forward-compatible; NPCs
+      don't carry conditions today, but the check is ready for when they do)
+    """
+    if npc.max_hp >= TRIVIAL_RESOLVE_HP_THRESHOLD:
+        return False
+    if npc.ac > TRIVIAL_RESOLVE_AC_THRESHOLD:
+        return False
+    # NPC model does not have conditions yet; use getattr for
+    # forward-compatibility.
+    conditions: list[ActiveCondition] = getattr(npc, "conditions", [])
+    if any(c.condition_type in DEFENSIVE_CONDITIONS for c in conditions):
+        return False
+    return True
+
 
 # ---------------------------------------------------------------------------
 # Phase enum + result types
@@ -451,7 +488,8 @@ class ActionPipeline:
         Trivial resolution applies to peaceful, defenseless NPCs that an
         adventurer would obviously overpower in one swing. We deliberately
         exclude HOSTILE / UNFRIENDLY NPCs (they fight back) and anything
-        with non-trivial HP.
+        that :func:`is_trivially_defeatable` rejects (HP, AC, or defensive
+        conditions).
         """
         if not npc.is_alive:
             return False
@@ -460,9 +498,7 @@ class ActionPipeline:
             NPCDisposition.UNFRIENDLY,
         ):
             return False
-        if npc.max_hp >= TRIVIAL_RESOLVE_HP_THRESHOLD:
-            return False
-        return True
+        return is_trivially_defeatable(npc)
 
     # ------------------------------------------------------------------
     # Lot E — trivial NPC death

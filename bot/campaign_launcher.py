@@ -532,6 +532,15 @@ class CampaignLauncher:
                     self.campaign.id, exc_info=True,
                 )
 
+        # Surface AI initialization warnings to the campaign channel.
+        for warning in session.ai_warnings:
+            try:
+                await self.channel.send(warning)
+            except Exception:
+                logger.warning(
+                    "Failed to send AI warning campaign=%s", self.campaign.id,
+                )
+
         # Move from launchers to sessions
         self.bot.sessions[self.channel.id] = session
         self.bot.launchers.pop(self.channel.id, None)

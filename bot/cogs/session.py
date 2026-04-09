@@ -266,6 +266,14 @@ class SessionCog(commands.Cog):
             f"-- {player_count} personnage(s), {npc_count} PNJ(s), {quest_count} quete(s){combat_msg}.",
         )
 
+        # Surface AI initialization warnings to the campaign channel.
+        if session.ai_warnings and interaction.channel is not None:
+            for warning in session.ai_warnings:
+                try:
+                    await interaction.channel.send(warning)
+                except Exception:
+                    logger.warning("Failed to send AI warning to channel %s", channel_id)
+
     # ------------------------------------------------------------------
     # /save
     # ------------------------------------------------------------------

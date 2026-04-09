@@ -64,6 +64,11 @@ class GameSession:
     # Audit log — always created, independent of Ollama availability
     story_bible: StoryBibleLogger | None = None
 
+    # Warnings collected during AI service initialization (e.g. ChromaDB
+    # unavailable). Cogs should check this list after session creation and
+    # post them to the campaign channel so users know about degraded features.
+    ai_warnings: list[str] = field(default_factory=list)
+
     # Serializes player actions per session: only one pipeline runs at a time.
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -155,6 +160,10 @@ def create_ai_services(session: GameSession) -> None:
             )
             session.semantic_memory = None
             session.story_director = None
+            session.ai_warnings.append(
+                "\u26a0\ufe0f M\u00e9moire s\u00e9mantique indisponible "
+                "\u2014 la coh\u00e9rence narrative long-terme est d\u00e9sactiv\u00e9e."
+            )
         logger.info("AI services initialized for campaign %s", session.campaign.id)
     except (OllamaUnavailableError, Exception):
         logger.warning(

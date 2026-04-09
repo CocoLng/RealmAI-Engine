@@ -25,6 +25,7 @@ from bot.embeds.action_progress_embed import build_action_progress_embed
 from bot.embeds.beat_embed import build_beat_advance_embed
 from bot.embeds.narrative_embed import build_narrative_embed
 from bot.embeds.scene_embed import build_scene_embed
+from bot.story_bible_logger import record_turn_and_maybe_check
 from bot.views.clarification_view import (
     ClarificationView,
     build_clarification_embed,
@@ -217,6 +218,16 @@ class ActionHandlerCog(commands.Cog):
         # 4. Dispatch on result type.
         if isinstance(result, ActionPipelineResult):
             await self._render_success(progress_msg, result)
+            # Story Director — record the turn and trigger a coherence
+            # check every N turns, same pattern as combat/exploration cogs.
+            await record_turn_and_maybe_check(
+                session,
+                user_name=actor_name,
+                command=f"@bot ({result.interpreted_action.action_type.value})",
+                args=raw_text[:120],
+                mechanics=result.mechanics_text,
+                narrative=result.narrative,
+            )
             # Lot A — scene awareness: re-display the scene after a MOVE so
             # players keep their bearings. NOTE: under Lot A alone,
             # session.current_location does not yet change on MOVE — Lot D
