@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
@@ -92,6 +92,9 @@ class ExchangeRow(Base):
     """Narrative exchanges table (Layer 2 memory)."""
 
     __tablename__ = "exchanges"
+    __table_args__ = (
+        Index("ix_exchanges_campaign_interaction", "campaign_id", "interaction_number"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     campaign_id: Mapped[str] = mapped_column(
@@ -107,6 +110,9 @@ class SummaryRow(Base):
     """Compressed summaries table (Layer 3 memory)."""
 
     __tablename__ = "summaries"
+    __table_args__ = (
+        Index("ix_summaries_campaign_start", "campaign_id", "start_interaction"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     campaign_id: Mapped[str] = mapped_column(
