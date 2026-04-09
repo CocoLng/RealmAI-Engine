@@ -77,12 +77,24 @@ async def change_location(
             from ai.world_generator import WorldGenerator
 
             gen = WorldGenerator(session.ollama_client)
+            # Pass arc location hints so generated names match the arc.
+            arc_hints: list[str] | None = None
+            if (
+                hasattr(session, "story_arc")
+                and session.story_arc is not None
+            ):
+                arc_hints = [
+                    beat.location_hint
+                    for beat in session.story_arc.beats
+                    if beat.location_hint
+                ]
             dest = await asyncio.to_thread(
                 gen.generate,
                 campaign_context=f"Moving from {current_name} to {destination_name}",
                 location_type="connected_area",
                 location_name=destination_name,
                 language=session.language,
+                location_hints=arc_hints,
             )
             generated = True
         except Exception as exc:  # noqa: BLE001

@@ -109,7 +109,7 @@ def advance_beat_if_ready(self) -> bool:
 
 Si un nouveau beat est atteint → post d'un `beat_embed` (titre, description, encounter_type, twist).
 
-⚠ **Fuzzy matching seul** — peut rater si le `location_hint` du générateur d'arc ne matche pas le nom effectif du `WorldGenerator`. Idéalement l'arc devrait contraindre le world generator. Voir [ISSUES.md](ISSUES.md).
+Le seuil de matching est défini par `_BEAT_MATCH_THRESHOLD` (constante nommée dans `game_session.py`). Pour garantir que les noms correspondent, les `location_hint` de l'arc sont passés au `WorldGenerator` via le paramètre `location_hints`. Le prompt système et le message utilisateur instruisent le LLM de réutiliser ces noms canoniques exactement, ce qui rend le fuzzy match fiable.
 
 ## 4. Story Director — coherence check périodique
 
@@ -136,7 +136,7 @@ Appelé par le cog toutes les ~20 interactions (`campaign.interaction_count % 20
 
 ### Limites connues
 
-- Pas de dédup : les mêmes hooks peuvent revenir à plusieurs checks.
+- ~~Pas de dédup~~ : les hooks sont maintenant dédupliqués (normalize + dict.fromkeys) dans `check_coherence()` avant stockage.
 - Pas de remédiation automatique : le directeur **signale** les incohérences, il ne les corrige pas.
 - `SemanticMemory` indisponible (ChromaDB cassé) → directeur désactivé silencieusement.
 
@@ -189,7 +189,7 @@ Voir [ISSUES.md](ISSUES.md) pour le détail. Extraits :
 
 - Pas d'enforcement code du beat boss final.
 - Pas de dédup des hooks du Story Director.
-- Pas de check de cohérence entre `ArcGenerator.beats[].location_hint` et les locations effectivement générées par `WorldGenerator`.
+- ~~Pas de check de cohérence arc/world~~ : les `location_hint` de l'arc sont maintenant passés au `WorldGenerator` via `location_hints`, qui instruit le LLM de réutiliser ces noms.
 - La contagion d'hostilité est naïve (pas de témoins hors location, pas de propagation retardée).
 - Le `NPC.update()` repository **perd** `dialogue_history`, `secrets`, `knowledge`, `aliases` — bug moyen.
 - Story Director ne tourne pas si `SemanticMemory` est indisponible (silent fail).

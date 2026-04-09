@@ -30,6 +30,7 @@ class WorldGenerator:
         location_type: str,
         location_name: str | None = None,
         language: str = "fr",
+        location_hints: list[str] | None = None,
     ) -> Location:
         """Generate a new location for the campaign.
 
@@ -38,11 +39,16 @@ class WorldGenerator:
             location_type: Type of location to generate (e.g. "tavern", "dungeon").
             location_name: Optional specific name for the location.
             language: ISO 639-1 language code for narrative output.
+            location_hints: Optional list of canonical location names from the
+                story arc. When provided, the LLM is instructed to reuse these
+                exact names for any locations it references (connections, name).
 
         Returns:
             A Location ready to be saved.
         """
-        user_content = self._build_user_message(campaign_context, location_type, location_name)
+        user_content = self._build_user_message(
+            campaign_context, location_type, location_name, location_hints,
+        )
         system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
             {"role": "system", "content": system_prompt},
@@ -74,7 +80,11 @@ class WorldGenerator:
         return location
 
     def _build_user_message(
-        self, campaign_context: str, location_type: str, location_name: str | None
+        self,
+        campaign_context: str,
+        location_type: str,
+        location_name: str | None,
+        location_hints: list[str] | None = None,
     ) -> str:
         """Build the user message for the LLM prompt.
 
@@ -82,6 +92,7 @@ class WorldGenerator:
             campaign_context: Assembled context describing the campaign state.
             location_type: Type of location to generate.
             location_name: Optional specific name for the location.
+            location_hints: Optional canonical location names from the story arc.
 
         Returns:
             Formatted user message string.
@@ -89,4 +100,12 @@ class WorldGenerator:
         parts = [campaign_context, f"Location type: {location_type}"]
         if location_name:
             parts.append(f"Suggested name: {location_name}")
+        if location_hints:
+            hint_list = ", ".join(location_hints)
+            parts.append(
+                f"Canonical location names from the story arc: {hint_list}\n"
+                "You MUST reuse these exact names when they match the location "
+                "you are generating or when listing connections. Do NOT invent "
+                "alternative names for locations that already appear in this list."
+            )
         return "\n\n".join(parts)

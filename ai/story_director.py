@@ -49,9 +49,17 @@ class StoryDirector:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.7, think=True)
+        raw_hooks: list[str] = data.get("suggested_hooks", [])
+        deduped_hooks = list(dict.fromkeys(
+            h.strip().lower() for h in raw_hooks if h.strip()
+        ))
+        # Restore original casing: pick the first raw hook matching each key.
+        hooks_by_key = {h.strip().lower(): h.strip() for h in reversed(raw_hooks) if h.strip()}
+        unique_hooks = [hooks_by_key[k] for k in deduped_hooks]
+
         note = DirectorNote(
             coherence_issues=data.get("coherence_issues", []),
-            suggested_hooks=data.get("suggested_hooks", []),
+            suggested_hooks=unique_hooks,
             priority=data.get("priority", "low"),
         )
 
