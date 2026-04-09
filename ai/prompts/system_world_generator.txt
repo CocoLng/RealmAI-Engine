@@ -25,6 +25,9 @@ Return JSON only:
 }
 
 Rules:
+- If the user message includes "Canonical location names from the story arc",
+  you MUST use those exact names for the generated location name (when one matches)
+  and for connections. Never rename, translate, or paraphrase a canonical name.
 - name should be specific and evocative (e.g. "The Broken Crown Tavern" not "A tavern")
 - connections is a list of location names (0-4 entries)
 - npcs_present and items_available can be empty lists

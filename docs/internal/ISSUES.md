@@ -48,10 +48,10 @@ Snapshot 2026-04-09. Classement par sévérité. Chaque entrée inclut la locali
 **Problème** : les clés qui ne matchent aucun `items_available` sont droppées sans log. Un bug de prompt ou une hallucination LLM perd des descriptions sans trace.
 **Fix** : logger la liste filtrée avec niveau WARNING.
 
-### H6. Beat advancement par fuzzy match seul
+### ~~H6. Beat advancement par fuzzy match seul~~ ✅ FIXED
 **Où** : [bot/game_session.py](../../bot/game_session.py), `advance_beat_if_ready()`.
 **Problème** : `difflib.ratio() >= 0.7` sur `current_location.name` vs `beat.location_hint`. Si le `WorldGenerator` nomme les locations différemment de l'`ArcGenerator`, l'arc ne progresse jamais.
-**Fix** : contraindre le `WorldGenerator` à accepter le `location_hint` comme nom suggéré, ou centraliser la génération dans un service unique qui réutilise les noms de l'arc.
+**Fix appliqué** : (1) seuil extrait en constante `_BEAT_MATCH_THRESHOLD` ; (2) `WorldGenerator.generate()` accepte `location_hints: list[str] | None` — les `location_hint` de l'arc sont passés au prompt pour que le LLM réutilise les noms canoniques ; (3) prompt système et user message mis à jour ; (4) call sites dans `campaign_launcher.py` et `world_navigation.py` câblés.
 
 ### H7. Quest generator sans paramètre langue
 **Où** : [ai/quest_generator.py](../../ai/quest_generator.py).
@@ -129,7 +129,7 @@ Snapshot 2026-04-09. Classement par sévérité. Chaque entrée inclut la locali
 - Thresholds outcome d20 (`-5`, `0`, `5`) dans `dice.py` — pas de constantes nommées.
 - Attunement max `3` dans `inventory.py`.
 - Cantrip scale `[(17,4),(11,3),(5,2),(1,1)]` dans `spells.py`.
-- Fuzzy thresholds `0.75` et `0.7` dans `entity_resolver.py` et `game_session.py`.
+- Fuzzy threshold `0.75` dans `entity_resolver.py` (déjà `FUZZY_THRESHOLD`). `0.7` dans `game_session.py` extrait en `_BEAT_MATCH_THRESHOLD` (H6 fix).
 - Budget tokens `450/700/400/350/2500` dans `memory/models.py` — OK car dans `ContextBudget`, mais pas exposés config.
 
 ### L3. Remove condition raise ValueError
@@ -154,8 +154,9 @@ Le champ existe, est sauvé, mais l'i18n dynamique réelle dépend de la complia
 ### L8. `confidence` d'`InterpretedAction` non validé
 Le champ est attendu en `[0.0, 1.0]` mais aucun validator Pydantic ne le contraint.
 
-### L9. Pas de dédup des hooks du Story Director
-Les mêmes hooks peuvent revenir à plusieurs checks successifs, polluant le RAG.
+### ~~L9. Pas de dédup des hooks du Story Director~~ ✅ FIXED
+Les mêmes hooks pouvaient revenir à plusieurs checks successifs, polluant le RAG.
+**Fix appliqué** : `check_coherence()` déduplique les hooks (normalize lowercase+strip, `dict.fromkeys`) avant de construire le `DirectorNote`. Le premier casing vu est préservé.
 
 ### L10. Empty scene handling
 `build_scene_context(location=None, …)` retourne `location_name=""` — un caller qui ne check pas peut se retrouver avec un contexte vide silencieux.

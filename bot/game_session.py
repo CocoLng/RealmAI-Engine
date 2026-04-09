@@ -29,6 +29,9 @@ from memory.semantic import SemanticMemory
 
 logger = logging.getLogger(__name__)
 
+_BEAT_MATCH_THRESHOLD = 0.7
+"""Minimum difflib ratio to consider a location name matching a beat hint."""
+
 
 @dataclass
 class GameSession:
@@ -73,8 +76,8 @@ class GameSession:
 
         Uses fuzzy matching (lowercase + accent-strip + difflib ratio) on
         ``next_beat.location_hint`` vs ``current_location.name``. Threshold
-        of 0.7 (location_hint is freeform LLM output, looser than the
-        entity-resolver's 0.75).
+        is ``_BEAT_MATCH_THRESHOLD`` (location_hint is freeform LLM output,
+        looser than the entity-resolver's 0.75).
 
         Returns the new :class:`StoryBeat` if advanced, ``None`` otherwise.
         """
@@ -90,7 +93,7 @@ class GameSession:
             _normalize_location(next_beat.location_hint),
             _normalize_location(self.current_location.name),
         ).ratio()
-        if ratio < 0.7:
+        if ratio < _BEAT_MATCH_THRESHOLD:
             return None
         self.story_arc = advance_beat(arc)
         new_beat = self.story_arc.beats[self.story_arc.current_beat_index]

@@ -359,12 +359,20 @@ class CampaignLauncher:
             f"Villain: {self.story_arc.villain_name}. "
             f"First beat: {self.story_arc.beats[0].description if self.story_arc.beats else 'unknown'}."
         )
+        # Extract canonical location names from the arc so the world
+        # generator reuses them (prevents name mismatch — see H6).
+        arc_location_hints = [
+            beat.location_hint
+            for beat in self.story_arc.beats
+            if beat.location_hint
+        ]
         try:
             location = await self._retry_llm_call(
                 lambda: world_gen.generate(
                     campaign_context=arc_context,
                     location_type="starting_area",
                     language=self.language,
+                    location_hints=arc_location_hints,
                 ),
             )
         except OllamaUnavailableError:
