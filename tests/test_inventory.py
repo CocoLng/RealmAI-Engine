@@ -2,7 +2,7 @@
 
 import pytest
 
-from engine.character import Size
+from engine.character import CharacterClass, Size
 from engine.inventory import (
     Armor,
     ArmorCategory,
@@ -22,6 +22,7 @@ from engine.inventory import (
     compute_carrying_capacity,
     compute_total_weight,
     create_inventory,
+    default_weapon_for_class,
     equip_item,
     is_encumbered,
     remove_item,
@@ -880,3 +881,50 @@ class TestItemCatalog:
         assert plate.base_ac == 18
         assert plate.dex_cap == 0
         assert plate.strength_required == 15
+
+    def test_mace_in_catalog(self) -> None:
+        mace = ITEM_CATALOG["Mace"]
+        assert isinstance(mace, Weapon)
+        assert mace.damage_dice == "1d6"
+        assert mace.damage_type == DamageType.BLUDGEONING
+
+    def test_rapier_in_catalog(self) -> None:
+        rapier = ITEM_CATALOG["Rapier"]
+        assert isinstance(rapier, Weapon)
+        assert rapier.damage_dice == "1d8"
+        assert rapier.damage_type == DamageType.PIERCING
+
+
+class TestDefaultWeaponForClass:
+    """Tests for default_weapon_for_class() — NPC weapon bootstrap."""
+
+    @pytest.mark.parametrize("char_class", list(CharacterClass))
+    def test_returns_weapon_for_every_class(self, char_class: CharacterClass) -> None:
+        """Every CharacterClass returns a valid Weapon."""
+        weapon = default_weapon_for_class(char_class)
+        assert isinstance(weapon, Weapon)
+        assert weapon.name in ITEM_CATALOG
+
+    def test_fighter_gets_longsword(self) -> None:
+        assert default_weapon_for_class(CharacterClass.FIGHTER).name == "Longsword"
+
+    def test_rogue_gets_shortsword(self) -> None:
+        assert default_weapon_for_class(CharacterClass.ROGUE).name == "Shortsword"
+
+    def test_barbarian_gets_greataxe(self) -> None:
+        assert default_weapon_for_class(CharacterClass.BARBARIAN).name == "Greataxe"
+
+    def test_wizard_gets_quarterstaff(self) -> None:
+        assert default_weapon_for_class(CharacterClass.WIZARD).name == "Quarterstaff"
+
+    def test_cleric_gets_mace(self) -> None:
+        assert default_weapon_for_class(CharacterClass.CLERIC).name == "Mace"
+
+    def test_ranger_gets_longsword(self) -> None:
+        assert default_weapon_for_class(CharacterClass.RANGER).name == "Longsword"
+
+    def test_returns_copy_not_catalog_original(self) -> None:
+        """Each call returns a fresh copy, not the catalog singleton."""
+        w1 = default_weapon_for_class(CharacterClass.FIGHTER)
+        w2 = default_weapon_for_class(CharacterClass.FIGHTER)
+        assert w1 is not w2

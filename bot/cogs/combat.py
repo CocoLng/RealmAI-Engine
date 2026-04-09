@@ -32,7 +32,14 @@ from engine.character import (
     CharacterClass,
     Size,
 )
-from engine.inventory import EquipmentSlot, Weapon, create_inventory
+from engine.inventory import (
+    EquipmentSlot,
+    Weapon,
+    add_item,
+    create_inventory,
+    default_weapon_for_class,
+    equip_item,
+)
 from engine.spells import SPELL_CATALOG, can_cast_spell
 from world.npc import NPC
 
@@ -86,11 +93,17 @@ def build_npc_combatant(npc: NPC) -> Combatant:
         hit_die="1d8",
         size=Size.MEDIUM,
     )
+    # Equip a default weapon based on class
+    weapon = default_weapon_for_class(char_class)
+    inv = create_inventory()
+    inv = add_item(inv, weapon)
+    inv = equip_item(inv, weapon.name, EquipmentSlot.MAIN_HAND)
+
     return Combatant(
         name=npc.name,
         side=CombatSide.ENEMY,
         character=char,
-        inventory=create_inventory(),
+        inventory=inv,
     )
 
 

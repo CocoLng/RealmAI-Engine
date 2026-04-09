@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bot.cogs.combat import CombatCog, XP_PER_ENEMY
+from bot.cogs.combat import CombatCog, XP_PER_ENEMY, build_npc_combatant
 from bot.game_session import GameSession
 from engine.character import (
     AbilityScores,
@@ -25,6 +25,7 @@ from engine.inventory import (
     equip_item,
 )
 from world.campaign import Campaign
+from world.npc import NPC
 
 
 # ---------------------------------------------------------------------------
@@ -252,3 +253,78 @@ class TestGetCombatantWeapon:
             inventory=create_inventory(),
         )
         assert CombatCog._get_combatant_weapon(combatant) is None
+
+
+# ---------------------------------------------------------------------------
+# build_npc_combatant tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildNpcCombatant:
+    """Tests for build_npc_combatant() — NPC bootstrap with default weapon."""
+
+    def _make_npc(
+        self, char_class: CharacterClass = CharacterClass.FIGHTER,
+    ) -> NPC:
+        return NPC(
+            name="Test NPC",
+            race=Race.HUMAN,
+            char_class=char_class,
+            level=3,
+            ability_scores=AbilityScores(
+                STR=14, DEX=12, CON=13, INT=10, WIS=10, CHA=8,
+            ),
+            hp=20,
+            max_hp=20,
+            ac=14,
+        )
+
+    def test_combatant_has_equipped_weapon(self) -> None:
+        """build_npc_combatant() equips a weapon in MAIN_HAND."""
+        npc = self._make_npc()
+        combatant = build_npc_combatant(npc)
+
+        assert EquipmentSlot.MAIN_HAND in combatant.inventory.equipped
+        assert isinstance(
+            combatant.inventory.equipped[EquipmentSlot.MAIN_HAND], Weapon,
+        )
+
+    def test_fighter_npc_gets_longsword(self) -> None:
+        npc = self._make_npc(CharacterClass.FIGHTER)
+        combatant = build_npc_combatant(npc)
+        weapon = combatant.inventory.equipped[EquipmentSlot.MAIN_HAND]
+        assert weapon.name == "Longsword"
+
+    def test_rogue_npc_gets_shortsword(self) -> None:
+        npc = self._make_npc(CharacterClass.ROGUE)
+        combatant = build_npc_combatant(npc)
+        weapon = combatant.inventory.equipped[EquipmentSlot.MAIN_HAND]
+        assert weapon.name == "Shortsword"
+
+    def test_npc_without_class_defaults_to_fighter(self) -> None:
+        """NPC with char_class=None should default to Fighter → Longsword."""
+        npc = NPC(
+            name="Bandit",
+            race=Race.HUMAN,
+            char_class=None,
+            ability_scores=AbilityScores(
+                STR=12, DEX=10, CON=10, INT=8, WIS=8, CHA=8,
+            ),
+            hp=10,
+            max_hp=10,
+            ac=12,
+        )
+        combatant = build_npc_combatant(npc)
+        assert EquipmentSlot.MAIN_HAND in combatant.inventory.equipped
+
+    @pytest.mark.parametrize("char_class", list(CharacterClass))
+    def test_every_class_produces_armed_combatant(
+        self, char_class: CharacterClass,
+    ) -> None:
+        """Every CharacterClass produces a combatant with an equipped weapon."""
+        npc = self._make_npc(char_class)
+        combatant = build_npc_combatant(npc)
+        assert EquipmentSlot.MAIN_HAND in combatant.inventory.equipped
+        assert isinstance(
+            combatant.inventory.equipped[EquipmentSlot.MAIN_HAND], Weapon,
+        )
