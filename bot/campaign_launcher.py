@@ -172,11 +172,34 @@ class CampaignLauncher:
             )
             return
 
-        if self.player_progress[user_id] != PlayerProgress.PENDING:
+        if self._launched:
             await interaction.response.send_message(
-                "Tu as deja cree ton personnage !", ephemeral=True,
+                "La partie a deja commence !", ephemeral=True,
             )
             return
+
+        if self.player_progress[user_id] != PlayerProgress.PENDING:
+            # Reset player state for re-creation
+            self.characters.pop(user_id, None)
+            self.inventories.pop(user_id, None)
+            self.spellcasters.pop(user_id, None)
+            self.player_progress[user_id] = PlayerProgress.PENDING
+            self._notified_players_ready = False
+
+            # Delete from DB
+            db_session = self.bot.db_factory()
+            try:
+                from db.repositories import PlayerCharacterRepository
+
+                PlayerCharacterRepository(db_session).delete(user_id, self.campaign.id)
+                db_session.commit()
+            finally:
+                db_session.close()
+
+            await self.channel.send(
+                f"**{interaction.user.display_name}** recommence la creation de son personnage.",
+            )
+            logger.info("ONBOARD reset user=%s campaign=%s", interaction.user, self.campaign.id)
 
         view = CharacterCreateView(language=self.language, on_complete=self._on_character_created)
         await interaction.response.send_message(
@@ -259,6 +282,11 @@ class CampaignLauncher:
     ) -> None:
         """Called when a player selects a starter gear kit."""
         user_id = interaction.user.id
+
+        if self.player_progress.get(user_id) == PlayerProgress.PENDING:
+            logger.warning("ONBOARD stale gear callback user=%s campaign=%s", interaction.user, self.campaign.id)
+            return
+
         inventory = self.inventories.get(user_id)
         character = self.characters.get(user_id)
 
