@@ -1,8 +1,12 @@
 """Tests for db/mappers.py — domain ↔ DB round-trip fidelity."""
 
+import json
+
 from sqlalchemy.orm import Session
 
 from engine.character import AbilityScores, CharacterClass, Race, create_character
+from engine.character.classes import CLASS_FEATURES
+from engine.character.races import RACIAL_FEATURES
 from engine.inventory import create_inventory
 from engine.spells import create_spellcaster_state
 from world.campaign import Campaign
@@ -11,6 +15,7 @@ from world.npc import NPC, DialogueExchange, NPCDisposition
 from world.quest import Quest, QuestStatus
 
 from db.mappers import (
+    backfill_character_features,
     campaign_channel_from_db,
     campaign_channel_to_db,
     campaign_from_db,
@@ -24,6 +29,7 @@ from db.mappers import (
     quest_from_db,
     quest_to_db,
 )
+from db.models import PlayerCharacterRow
 
 
 class TestCampaignMapper:
@@ -309,3 +315,179 @@ class TestCampaignChannelMapper:
         assert channel_id == 111
         assert campaign_id == "camp-1"
         assert guild_id == 222
+
+
+# ---------------------------------------------------------------------------
+# Legacy JSON deserialization & backfill tests
+# ---------------------------------------------------------------------------
+
+# Minimal character_json produced *before* features/skill_proficiencies were added.
+_LEGACY_CHARACTER_JSON = json.dumps({
+    "name": "Thorin",
+    "race": "Dwarf",
+    "char_class": "Fighter",
+    "level": 1,
+    "xp": 0,
+    "alignment": "True Neutral",
+    "ability_scores": {"STR": 16, "DEX": 12, "CON": 14, "INT": 10, "WIS": 13, "CHA": 8},
+    "hp": 11,
+    "max_hp": 11,
+    "ac": 16,
+    "speed": 25,
+    "proficiency_bonus": 2,
+    "saving_throw_proficiencies": ["STR", "CON"],
+    "hit_die": "1d10",
+    "size": "Medium",
+    # NOTE: "features" and "skill_proficiencies" are intentionally absent
+})
+
+
+class TestLegacyCharacterDeserialization:
+    """Pydantic v2 fills defaults for missing fields in old JSON blobs."""
+
+    def test_missing_features_defaults_to_empty_list(self) -> None:
+        """Old JSON without 'features' key deserializes with features=[]."""
+        from engine.character import Character
+
+        char = Character.model_validate_json(_LEGACY_CHARACTER_JSON)
+        assert char.features == []
+
+    def test_missing_skill_proficiencies_defaults_to_empty_list(self) -> None:
+        """Old JSON without 'skill_proficiencies' key deserializes with skill_proficiencies=[]."""
+        from engine.character import Character
+
+        char = Character.model_validate_json(_LEGACY_CHARACTER_JSON)
+        assert char.skill_proficiencies == []
+
+    def test_other_fields_preserved(self) -> None:
+        """Legacy deserialization preserves all other fields correctly."""
+        from engine.character import Character
+
+        char = Character.model_validate_json(_LEGACY_CHARACTER_JSON)
+        assert char.name == "Thorin"
+        assert char.race == Race.DWARF
+        assert char.char_class == CharacterClass.FIGHTER
+        assert char.level == 1
+
+
+class TestBackfillCharacterFeatures:
+    """backfill_character_features() populates features for pre-refactor characters."""
+
+    def test_backfill_dwarf_fighter(self) -> None:
+        """Dwarf Fighter without features gets racial + class features after backfill."""
+        from engine.character import Character
+
+        char = Character.model_validate_json(_LEGACY_CHARACTER_JSON)
+        assert char.features == [], "precondition: no features before backfill"
+
+        result = backfill_character_features(char)
+
+        expected_racial = RACIAL_FEATURES[Race.DWARF]
+        expected_class = [
+            f for f in CLASS_FEATURES[CharacterClass.FIGHTER]
+            if f.level_requirement <= 1
+        ]
+        expected = list(expected_racial) + list(expected_class)
+        assert result.features == expected
+
+    def test_backfill_is_noop_when_features_already_present(self) -> None:
+        """Characters that already have features are not modified by backfill."""
+        scores = AbilityScores(STR=16, DEX=14, CON=13, INT=10, WIS=12, CHA=8)
+        char = create_character("Thorin", Race.DWARF, CharacterClass.FIGHTER, scores)
+        original_features = list(char.features)
+        assert original_features, "precondition: create_character populates features"
+
+        result = backfill_character_features(char)
+        assert result.features == original_features
+
+    def test_player_character_from_db_applies_backfill(self) -> None:
+        """player_character_from_db() automatically backfills legacy rows."""
+        from engine.inventory import create_inventory
+
+        inv = create_inventory()
+        row = PlayerCharacterRow(
+            discord_user_id=42,
+            campaign_id="camp-legacy",
+            character_json=_LEGACY_CHARACTER_JSON,
+            inventory_json=inv.model_dump_json(),
+            spellcaster_json=None,
+        )
+        uid, char, _inv, _spell = player_character_from_db(row)
+        assert uid == 42
+        assert len(char.features) > 0, "backfill should have populated features"
+        # Verify at least the Darkvision racial feature is present for Dwarf
+        feature_names = {f.name for f in char.features}
+        assert "Darkvision" in feature_names
+        assert "Second Wind" in feature_names
+
+
+class TestPlayerCharacterRepositoryIsolation:
+    """Repository methods always require both user_id AND campaign_id (PK isolation)."""
+
+    def test_save_requires_both_pk_parts(self) -> None:
+        """save() signature enforces user_id and campaign_id as separate positional args."""
+        import inspect
+        from db.repositories.player_character_repo import PlayerCharacterRepository
+
+        sig = inspect.signature(PlayerCharacterRepository.save)
+        params = list(sig.parameters.keys())
+        assert "user_id" in params
+        assert "campaign_id" in params
+
+    def test_get_requires_both_pk_parts(self) -> None:
+        """get() signature enforces both PK parts."""
+        import inspect
+        from db.repositories.player_character_repo import PlayerCharacterRepository
+
+        sig = inspect.signature(PlayerCharacterRepository.get)
+        params = list(sig.parameters.keys())
+        assert "user_id" in params
+        assert "campaign_id" in params
+
+    def test_update_requires_both_pk_parts(self) -> None:
+        """update() signature enforces both PK parts."""
+        import inspect
+        from db.repositories.player_character_repo import PlayerCharacterRepository
+
+        sig = inspect.signature(PlayerCharacterRepository.update)
+        params = list(sig.parameters.keys())
+        assert "user_id" in params
+        assert "campaign_id" in params
+
+    def test_delete_requires_both_pk_parts(self) -> None:
+        """delete() signature enforces both PK parts."""
+        import inspect
+        from db.repositories.player_character_repo import PlayerCharacterRepository
+
+        sig = inspect.signature(PlayerCharacterRepository.delete)
+        params = list(sig.parameters.keys())
+        assert "user_id" in params
+        assert "campaign_id" in params
+
+    def test_cannot_access_another_users_character(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        """A user_id lookup only returns rows matching that specific user_id."""
+        from db.repositories.campaign_repo import CampaignRepository
+        from db.repositories.player_character_repo import PlayerCharacterRepository
+
+        # Persist campaign for FK integrity
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.flush()
+
+        scores = AbilityScores(STR=16, DEX=14, CON=13, INT=10, WIS=12, CHA=8)
+        char = create_character("Alice", Race.HUMAN, CharacterClass.FIGHTER, scores)
+        inv = create_inventory()
+
+        repo = PlayerCharacterRepository(db_session)
+        user_alice = 111111
+        user_bob = 222222
+        repo.save(user_alice, sample_campaign.id, char, inv, None)
+        db_session.flush()
+
+        # Bob cannot see Alice's character
+        assert repo.get(user_bob, sample_campaign.id) is None
+        # Alice can see her own character
+        result = repo.get(user_alice, sample_campaign.id)
+        assert result is not None
+        assert result[0].name == "Alice"

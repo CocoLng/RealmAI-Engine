@@ -1,9 +1,30 @@
-# Character Creation
+# RealmAI-Engine — Task Board
+
+## Character System Refactor (Agents 01–05) — DONE ✅
+
+- [x] Agent 01 — Package split: `engine/character.py` → `engine/character/` package
+- [x] Agent 02 — Features & skill proficiencies (`Feature`, `Skill`, `RACIAL_FEATURES`, `CLASS_FEATURES`)
+- [x] Agent 03 — Standard Array + `create_character()` flow (stat assignment, starter gear, race/class defaults)
+- [x] Agent 04 — Discord wizard: `/create_character` multi-step modal flow with skill selection
+- [x] Agent 05 — DB compatibility: backfill function, isolation audit, documentation update
+
+## Character Creation (UX backlog)
+
 - [ ] Permettre de remodifier son perso apres création (pendant l'attente de la génération). Si la personne re clique sur "Create Character"
-- [ ] Refaire l'initialisation des perso (race & classe & arme définis) très inspiré de Dondgeon World . Cela défini leur stats de base, leur HP max, leur AC de base, et leur équipement de départ. Permet aussi d'avoir des stats plus variées que 10 partout.
 - [ ] Clear le channel discord des messages pour l'immersion
 - [ ] Ajouter un compteur de démarrage pour avertir les joueurs que le jeu va commencer
-- [ ] Ajouter un bouton sur le premier message pour forcer le lancement du jeu si la génération est fini mais que certains joueurs n'ont pas cliqué sur "Create Character" alors ils sont exclus du jeu (mais peuvent toujours voir le channel et les messages, juste pas participer, le bot les ignorera car non joueur)
-- [ ] Ajouter un message inital de contexte pour l'immersion lorsque le jeu commence, un joli embed qui dit les characters qui sont dans le groupe et vous commentez le début de l'aventure
-- [ ] Faire des stats de perso avec un level ou le joueur peut comme sur un DnD classique faire des choix pour augmenter certaines stats, ou faire du min-maxing, ou faire du roleplay avec des stats faibles. Par exemple, un guerrier avec une force de 16 mais une intelligence de 8, ou un mage avec une intelligence de 16 mais une constitution de 8. Cela rend les personnages plus uniques et intéressants à jouer.
-- [ ] Ajouter des backgrounds pour les personnages qui donnent des bonus ou des compétences spéciales, comme dans DnD. Par exemple certaines races ou classes pourraient avoir des traits raciaux ou des compétences de classe qui les rendent plus adaptés à certains rôles, comme un elfe avec une vision nocturne ou un voleur avec une compétence de crochetage.
+- [ ] Ajouter un bouton sur le premier message pour forcer le lancement du jeu si la génération est fini mais que certains joueurs n'ont pas cliqué sur "Create Character" alors ils sont exclus du jeu
+- [ ] Ajouter un message initial de contexte pour l'immersion lorsque le jeu commence
+- [ ] Faire des stats de perso avec un level ou le joueur peut comme sur un DnD classique faire des choix pour augmenter certaines stats
+
+## Deferred (future phases)
+
+- [ ] Backgrounds (Acolyte, Criminal, Noble, etc.) — 2 skill proficiencies + equipment + RP trait
+- [ ] Feats (ASI-or-feat at levels 4/8/12/16/19)
+- [ ] Multiclassing
+- [ ] Language system
+- [ ] Tool proficiencies
+- [ ] Class features level 2+ (full progression)
+- [ ] Point Buy and 4d6-drop-lowest as alternative stat methods
+- [ ] Shop / buy-sell system
+- [ ] Extended spell catalog (>20 current spells)

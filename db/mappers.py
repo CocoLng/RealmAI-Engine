@@ -293,6 +293,27 @@ def player_character_to_db(
     )
 
 
+def backfill_character_features(character: Character) -> Character:
+    """Add racial and class features if absent (for pre-refactor characters).
+
+    Characters saved before the feature system was introduced have an empty
+    ``features`` list.  This function fills it in from the canonical race and
+    class tables so the rest of the engine can rely on features being present.
+    """
+    if not character.features:
+        from engine.character.races import RACIAL_FEATURES
+        from engine.character.classes import CLASS_FEATURES
+
+        racial = RACIAL_FEATURES.get(character.race, [])
+        class_feats = [
+            f
+            for f in CLASS_FEATURES.get(character.char_class, [])
+            if f.level_requirement <= character.level
+        ]
+        character.features = list(racial) + list(class_feats)
+    return character
+
+
 def player_character_from_db(
     row: PlayerCharacterRow,
 ) -> tuple[int, Character, Inventory, SpellcasterState | None]:
@@ -302,6 +323,7 @@ def player_character_from_db(
         Tuple of (discord_user_id, Character, Inventory, SpellcasterState | None).
     """
     character = Character.model_validate_json(row.character_json)
+    character = backfill_character_features(character)
     inventory = Inventory.model_validate_json(row.inventory_json)
     spellcaster = (
         SpellcasterState.model_validate_json(row.spellcaster_json)
