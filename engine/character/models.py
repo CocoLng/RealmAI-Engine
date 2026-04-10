@@ -2,7 +2,8 @@
 
 from pydantic import BaseModel, Field
 
-from .enums import Ability, Alignment, CharacterClass, Race, Size
+from .enums import Ability, Alignment, CharacterClass, Race, Size, Skill
+from .features import Feature
 
 
 class AbilityScores(BaseModel):
@@ -39,3 +40,5 @@ class Character(BaseModel):
     saving_throw_proficiencies: tuple[Ability, Ability]
     hit_die: str
     size: Size
+    features: list[Feature] = Field(default_factory=list)
+    skill_proficiencies: list[Skill] = Field(default_factory=list)

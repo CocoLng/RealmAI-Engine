@@ -56,3 +56,48 @@ class Alignment(StrEnum):
     LAWFUL_EVIL = "Lawful Evil"
     NEUTRAL_EVIL = "Neutral Evil"
     CHAOTIC_EVIL = "Chaotic Evil"
+
+
+class Skill(StrEnum):
+    """The 18 D&D 5e skills."""
+
+    ATHLETICS = "Athletics"
+    ACROBATICS = "Acrobatics"
+    SLEIGHT_OF_HAND = "Sleight of Hand"
+    STEALTH = "Stealth"
+    ARCANA = "Arcana"
+    HISTORY = "History"
+    INVESTIGATION = "Investigation"
+    NATURE = "Nature"
+    RELIGION = "Religion"
+    ANIMAL_HANDLING = "Animal Handling"
+    INSIGHT = "Insight"
+    MEDICINE = "Medicine"
+    PERCEPTION = "Perception"
+    SURVIVAL = "Survival"
+    DECEPTION = "Deception"
+    INTIMIDATION = "Intimidation"
+    PERFORMANCE = "Performance"
+    PERSUASION = "Persuasion"
+
+
+SKILL_ABILITY: dict[Skill, Ability] = {
+    Skill.ATHLETICS: Ability.STR,
+    Skill.ACROBATICS: Ability.DEX,
+    Skill.SLEIGHT_OF_HAND: Ability.DEX,
+    Skill.STEALTH: Ability.DEX,
+    Skill.ARCANA: Ability.INT,
+    Skill.HISTORY: Ability.INT,
+    Skill.INVESTIGATION: Ability.INT,
+    Skill.NATURE: Ability.INT,
+    Skill.RELIGION: Ability.INT,
+    Skill.ANIMAL_HANDLING: Ability.WIS,
+    Skill.INSIGHT: Ability.WIS,
+    Skill.MEDICINE: Ability.WIS,
+    Skill.PERCEPTION: Ability.WIS,
+    Skill.SURVIVAL: Ability.WIS,
+    Skill.DECEPTION: Ability.CHA,
+    Skill.INTIMIDATION: Ability.CHA,
+    Skill.PERFORMANCE: Ability.CHA,
+    Skill.PERSUASION: Ability.CHA,
+}

@@ -1,10 +1,17 @@
 """Ability score functions for the character system."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from engine.dice import roll
 
-from .enums import Race
+from .enums import Race, Skill, SKILL_ABILITY
 from .models import AbilityScores
 from .races import RACIAL_ABILITY_BONUSES
+
+if TYPE_CHECKING:
+    from .models import Character
 
 
 def compute_modifier(score: int) -> int:
@@ -42,3 +49,12 @@ def roll_ability_scores() -> AbilityScores:
         WIS=values[4],
         CHA=values[5],
     )
+
+
+def compute_skill_modifier(character: Character, skill: Skill) -> int:
+    """Compute skill check modifier: ability mod + proficiency bonus if proficient."""
+    ability = SKILL_ABILITY[skill]
+    mod = compute_modifier(character.ability_scores.get(ability))
+    if skill in character.skill_proficiencies:
+        mod += character.proficiency_bonus
+    return mod
