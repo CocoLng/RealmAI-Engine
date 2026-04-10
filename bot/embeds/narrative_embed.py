@@ -6,9 +6,17 @@ optional discreet footer listing *public* player-facing effects only
 rolls, DCs, secrets — NEVER surface here.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import discord
 
 from ai.models import PublicEffects
+
+if TYPE_CHECKING:
+    from world.location import Location
+    from world.story_arc import StoryArc
 
 _TONE_COLORS: dict[str, int] = {
     "dramatic": 0xDAA520,
@@ -56,5 +64,41 @@ def build_narrative_embed(
 
     if footer_text:
         embed.set_footer(text=footer_text)
+
+    return embed
+
+
+def build_opening_crawl_embed(
+    campaign_name: str,
+    story_arc: StoryArc | None,
+    location: Location | None,
+    language: str = "fr",
+) -> discord.Embed:
+    """Build an immersive opening embed from arc and location data."""
+    premise = "Votre aventure commence..."
+    if story_arc and story_arc.premise:
+        premise = story_arc.premise
+
+    embed = discord.Embed(
+        title=f"\U0001f4dc {campaign_name}",
+        description=premise,
+        color=_DEFAULT_COLOR,
+    )
+
+    if location:
+        loc_desc = location.description or location.name
+        embed.add_field(
+            name="Lieu de départ" if language == "fr" else "Starting Location",
+            value=f"**{location.name}**\n{loc_desc}",
+            inline=False,
+        )
+
+    if story_arc and story_arc.beats:
+        first_beat = story_arc.beats[0]
+        embed.add_field(
+            name="Premier chapitre" if language == "fr" else "First Chapter",
+            value=f"*{first_beat.description}*",
+            inline=False,
+        )
 
     return embed

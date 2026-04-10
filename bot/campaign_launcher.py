@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot.embeds.narrative_embed import build_narrative_embed
+from bot.embeds.narrative_embed import build_opening_crawl_embed
 from bot.embeds.scene_embed import build_scene_embed
 from bot.game_session import GameSession, create_ai_services
 from bot.i18n import CLASS_LABELS, RACE_LABELS, get_kit_label, get_label
@@ -618,7 +618,19 @@ class CampaignLauncher:
                     self.campaign.id, exc_info=True,
                 )
 
-        # Surface AI initialization warnings to the campaign channel.
+        # Move from launchers to sessions
+        self.bot.sessions[self.channel.id] = session
+        self.bot.launchers.pop(self.channel.id, None)
+
+        # --- Purge onboarding messages for immersion ---
+        try:
+            await self.channel.purge(limit=200)
+        except (discord.Forbidden, discord.HTTPException):
+            logger.warning(
+                "LAUNCH purge failed campaign=%s", self.campaign.id, exc_info=True,
+            )
+
+        # Surface AI initialization warnings (after purge so they survive).
         for warning in session.ai_warnings:
             try:
                 await self.channel.send(warning)
@@ -627,20 +639,27 @@ class CampaignLauncher:
                     "Failed to send AI warning campaign=%s", self.campaign.id,
                 )
 
-        # Move from launchers to sessions
-        self.bot.sessions[self.channel.id] = session
-        self.bot.launchers.pop(self.channel.id, None)
+        # --- Countdown ---
+        try:
+            countdown_msg = await self.channel.send("**La partie commence dans 3...**")
+            for i in (2, 1):
+                await asyncio.sleep(1)
+                await countdown_msg.edit(content=f"**La partie commence dans {i}...**")
+            await asyncio.sleep(1)
+            await countdown_msg.delete()
+        except Exception:
+            logger.warning(
+                "LAUNCH countdown failed campaign=%s", self.campaign.id, exc_info=True,
+            )
 
-        # Build opening narrative
-        desc = "Votre aventure commence..."
-        if self.current_location:
-            desc = self.current_location.description or desc
-        if self.story_arc and self.story_arc.beats:
-            first_beat = self.story_arc.beats[0]
-            desc = f"{desc}\n\n*{first_beat.description}*"
-
-        embed = build_narrative_embed(desc, tone="dramatic", footer_override=f"Campagne : {self.campaign.name}")
-        await self.channel.send(embed=embed)
+        # Opening crawl embed
+        crawl_embed = build_opening_crawl_embed(
+            campaign_name=self.campaign.name,
+            story_arc=self.story_arc,
+            location=self.current_location,
+            language=self.language,
+        )
+        await self.channel.send(embed=crawl_embed)
 
         # Lot G — hydrate Location.npcs_present into real NPC rows so the
         # entity resolver can match TALK targets. Must run before the scene
