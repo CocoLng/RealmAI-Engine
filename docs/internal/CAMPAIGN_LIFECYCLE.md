@@ -46,16 +46,16 @@ Séquentielle :
 
 Statut émis au salon : *« Univers en cours de génération… »* → *« Univers prêt ! »*.
 
-### 2.b Création des personnages (par joueur)
+### 2.b Création des personnages (par joueur, re-créable)
 
 Chaque joueur clique sur « Créer Personnage » :
 
 1. **`CharacterCreateView`** (cascade de `ui.Select` + `ui.Modal`)
    - Sélection de race → classe → alignement.
    - `CharacterNameModal` → nom libre.
+   - **Le bouton « Créer Personnage » reste cliquable.** Un nouveau clic redémarre la création (reset `player_progress` → `PENDING`, suppression du Character en DB via `PlayerCharacterRepository.delete`). Permet au joueur de changer d'avis avant le launch. Bloqué une fois la partie lancée.
 2. À la soumission :
-   - `roll_ability_scores()` (4d6 drop lowest × 6).
-   - `apply_racial_bonuses()`.
+   - `assign_standard_array()` avec bonuses raciaux.
    - `create_character(…)` → `Character` Pydantic.
    - `create_inventory()` + `create_spellcaster_state(char_class, level)` (None si non-caster).
 3. **`StarterGearView`** : 2-3 kits proposés pour la classe ([engine/starter_gear.py](../../engine/starter_gear.py)).
@@ -63,23 +63,31 @@ Chaque joueur clique sur « Créer Personnage » :
 4. Persistance via `PlayerCharacterRepository.save((user_id, character, inventory, spellcaster_state))`.
 5. État `player_progress[user_id]` : `PENDING → CHARACTER_DONE → GEAR_DONE`.
 
-### 2.c Launch check
+### 2.c Launch check et force-launch
 
-`_maybe_launch()` est appelé à chaque transition. Le launch effectif requiert :
+`_check_ready()` est appelé à chaque transition. Le launch automatique requiert :
 - Tous les joueurs en `GEAR_DONE`.
 - Arc et location générés.
 
-Quand les 2 conditions sont vraies → `_launch_campaign()` :
+Quand les 2 conditions sont vraies → `_launch_campaign()`.
+
+**Force-launch** : le créateur de campagne (`creator_id`) peut forcer le launch via `ForceLaunchView` quand la génération est terminée mais pas tous les joueurs prêts. Les joueurs non-ready sont exclus de la session. Au moins 1 joueur doit être prêt.
+
+### 2.d Launch immersion
+
+`_launch_campaign()` exécute dans l'ordre :
 
 1. Construit `GameSession(campaign, characters, inventories, spellcasters, story_arc, current_location, language)`.
-2. `create_ai_services(session)` — instancie `OllamaClient` + `Narrator`, `Interpreter`, `NPCAgent`, `NPCGenerator`, `StoryDirector`, `SemanticMemory`. Chaque instanciation est tolérante : si Ollama est down, le service correspondant est `None` mais la session démarre quand même.
+2. `create_ai_services(session)` — instancie `OllamaClient` + `Narrator`, `Interpreter`, `NPCAgent`, `NPCGenerator`, `StoryDirector`, `SemanticMemory`. Chaque instanciation est tolérante.
 3. Persiste `StoryArc` via `StoryArcRepository` et `Location` via `LocationRepository`.
-4. `story_bible.write_header(...)` — écrit un en-tête Markdown statique dans `logs/campaigns/<id>.md` (arc complet, joueurs, location de départ). Voir [NARRATIVE_COHERENCE.md](NARRATIVE_COHERENCE.md).
-5. `hydrate_scene(session)` ([bot/scene_hydration.py](../../bot/scene_hydration.py)) — crée des `NPCRow` minimaux (HP=4, AC=10, stats=10) pour chaque nom dans `location.npcs_present` si absent en DB. Indispensable pour que le résolveur d'entités les trouve.
-6. Poste :
-   - Embed narratif d'introduction (Narrator narre l'arrivée du groupe).
-   - `scene_embed` (nom + description + PNJs + sorties + items de la location).
-7. Promotion finale : `bot.sessions[channel.id] = session` ; `bot.launchers.pop(channel_id)`.
+4. `story_bible.write_header(...)` — écrit un en-tête Markdown statique. Voir [NARRATIVE_COHERENCE.md](NARRATIVE_COHERENCE.md).
+5. Promotion : `bot.sessions[channel.id] = session` ; `bot.launchers.pop(channel_id)`.
+6. **Purge du channel** — supprime les messages d'onboarding (`channel.purge(limit=200)`). Non-bloquant.
+7. AI warnings re-postés après la purge (survivent au nettoyage).
+8. **Countdown immersif** — affiche `3…`, `2…`, `1…` avec pause d'1s, puis supprime le message. Non-bloquant.
+9. **Opening crawl embed** — `build_opening_crawl_embed()` poste un embed riche : titre avec 📜, premise de l'arc, lieu de départ, premier chapitre. Remplace l'ancien embed narratif générique.
+10. `hydrate_scene(session)` ([bot/scene_hydration.py](../../bot/scene_hydration.py)) — crée des `NPCRow` minimaux pour chaque nom dans `location.npcs_present`.
+11. `scene_embed` (nom + description + PNJs + sorties + items de la location).
 
 À partir de ce moment, toute `@mention` dans ce salon est interceptée par `ActionHandlerCog`.
 

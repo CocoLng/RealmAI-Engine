@@ -74,8 +74,11 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ `@mention` → ActionPipeline (cœur de l'UX)
 - ✅ Pipeline 6 phases avec progress embed live
 - ✅ `CampaignLauncher` avec onboarding multijoueur parallèle
-- ✅ 7 views Discord (character create, starter gear, combat, target select, spell select, clarification, start onboarding)
-- ✅ 7 embeds (narrative, progress, scene, beat, character, combat, inventory)
+  - ✅ Character re-creation — re-clic « Créer Personnage » pour recommencer avant le launch
+  - ✅ Force-launch — créateur peut forcer le lancement, excluant joueurs non-ready
+  - ✅ Launch immersion — purge channel, countdown 3-2-1, opening crawl embed
+- ✅ 8 views Discord (character create, starter gear, combat, target select, spell select, clarification, start onboarding, force launch)
+- ✅ 7 embeds (narrative + opening crawl, progress, scene, beat, character, combat, inventory)
 - ✅ Channel manager avec permissions + archives
 - ✅ i18n statique FR/EN (labels)
 - ✅ Scene hydration (promotion PNJ string → rows DB)

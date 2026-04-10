@@ -102,9 +102,11 @@ Toutes héritent de `LoggedView(ui.View)` pour un logging uniforme des erreurs.
 | `TargetSelectView` | Dropdown des cibles (combat) | — |
 | `SpellSelectView` | Dropdown des sorts disponibles (filtrés par slots) | — |
 | `ClarificationView` | Jusqu'à 4 candidats + Annuler (Lot B) | 2 min |
-| `StartOnboardingView` | Bouton « Créer Personnage » | — |
+| `StartOnboardingView` | Bouton « Créer Personnage » (re-cliquable pour recommencer) | — |
+| `ForceLaunchView` | Bouton « Lancer la partie » réservé au créateur (exclut joueurs non-ready) | 10 min |
 
 `ClarificationView` vérifie via `interaction_check` que seul l'acteur original peut cliquer.
+`ForceLaunchView` vérifie que seul le créateur de la campagne (`creator_id`) peut cliquer.
 
 ## Embeds (`bot/embeds/`)
 
@@ -112,7 +114,7 @@ Toutes les couleurs sont pilotées par le `tone` renvoyé par le Narrator.
 
 | Embed | Rôle |
 |---|---|
-| `narrative_embed.py` | Post le narratif + footer des `PublicEffects` |
+| `narrative_embed.py` | Post le narratif + footer des `PublicEffects` ; `build_opening_crawl_embed()` pour l'intro au launch |
 | `action_progress_embed.py` | Statut live des 6 phases du pipeline (⚪ / 🔄 / ✅ / ❌) |
 | `scene_embed.py` | Scène : location, PNJs, exits, items (post au launch et après MOVE) |
 | `beat_embed.py` | Annonce d'avancée de beat (Lot D) |

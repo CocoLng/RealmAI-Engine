@@ -1,12 +1,10 @@
 # RealmAI-Engine — Task Board
 
-## UX Immersion (Agents 01–03)
+## UX Immersion (Agents 01–03) — DONE ✅
 
-Voir `tasks/README.md` pour l'orchestration et `tasks/agents/` pour les fiches détaillées.
-
-- [ ] Agent 01 — Character re-creation (re-clic "Créer mon personnage")
-- [ ] Agent 02 — Force launch (bouton lancer sans joueurs manquants)
-- [ ] Agent 03 — Launch immersion (purge + countdown + opening crawl)
+- [x] Agent 01 — Character re-creation (re-clic "Créer mon personnage")
+- [x] Agent 02 — Force launch (bouton lancer sans joueurs manquants)
+- [x] Agent 03 — Launch immersion (purge + countdown + opening crawl)
 
 ## Character System Refactor (Agents 01–05) — DONE ✅
 
@@ -18,11 +16,11 @@ Voir `tasks/README.md` pour l'orchestration et `tasks/agents/` pour les fiches d
 
 ## Character Creation (UX backlog)
 
-- [ ] Permettre de remodifier son perso apres création (pendant l'attente de la génération). Si la personne re clique sur "Create Character"
-- [ ] Clear le channel discord des messages pour l'immersion
-- [ ] Ajouter un compteur de démarrage pour avertir les joueurs que le jeu va commencer
-- [ ] Ajouter un bouton sur le premier message pour forcer le lancement du jeu si la génération est fini mais que certains joueurs n'ont pas cliqué sur "Create Character" alors ils sont exclus du jeu
-- [ ] Ajouter un message initial de contexte pour l'immersion lorsque le jeu commence
+- [x] Permettre de remodifier son perso apres création (pendant l'attente de la génération). Si la personne re clique sur "Create Character"
+- [x] Clear le channel discord des messages pour l'immersion
+- [x] Ajouter un compteur de démarrage pour avertir les joueurs que le jeu va commencer
+- [x] Ajouter un bouton sur le premier message pour forcer le lancement du jeu si la génération est fini mais que certains joueurs n'ont pas cliqué sur "Create Character" alors ils sont exclus du jeu
+- [x] Ajouter un message initial de contexte pour l'immersion lorsque le jeu commence
 - [ ] Faire des stats de perso avec un level ou le joueur peut comme sur un DnD classique faire des choix pour augmenter certaines stats
 
 ## Deferred (future phases)

@@ -17,9 +17,9 @@ Exécution séquentielle — tous modifient `bot/campaign_launcher.py`.
 
 | # | Agent | Scope | Complexité | Status |
 |---|-------|-------|------------|--------|
-| 01 | [character-recreation](agents/01-character-recreation.md) | Re-clic "Créer mon personnage" pour recommencer | Moyenne | ⬜ À faire |
-| 02 | [force-launch](agents/02-force-launch.md) | Bouton pour lancer sans les joueurs manquants | Moyenne | ⬜ À faire |
-| 03 | [launch-immersion](agents/03-launch-immersion.md) | Purge channel + countdown + opening crawl | Moyenne | ⬜ À faire |
+| 01 | [character-recreation](agents/01-character-recreation.md) | Re-clic "Créer mon personnage" pour recommencer | Moyenne | ✅ Terminé |
+| 02 | [force-launch](agents/02-force-launch.md) | Bouton pour lancer sans les joueurs manquants | Moyenne | ✅ Terminé |
+| 03 | [launch-immersion](agents/03-launch-immersion.md) | Purge channel + countdown + opening crawl | Moyenne | ✅ Terminé |
 
 ### Légende status
 
