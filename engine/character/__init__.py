@@ -6,7 +6,9 @@ This package re-exports all public names from the monolith for backward compatib
 """
 
 from .abilities import (
+    STANDARD_ARRAY,
     apply_racial_bonuses,
+    assign_standard_array,
     compute_modifier,
     compute_skill_modifier,
     roll_ability_scores,
@@ -71,6 +73,9 @@ __all__ = [
     # Progression tables
     "XP_THRESHOLDS",
     "PROFICIENCY_BONUS_BY_LEVEL",
+    # Standard Array
+    "STANDARD_ARRAY",
+    "assign_standard_array",
     # Functions
     "compute_modifier",
     "apply_racial_bonuses",

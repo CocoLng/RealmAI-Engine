@@ -1,11 +1,11 @@
 """Character creation for the character system."""
 
 from .abilities import compute_modifier
-from .classes import CLASS_HIT_DIE, CLASS_SAVING_THROWS
-from .enums import Ability, Alignment, CharacterClass, Race
+from .classes import CLASS_FEATURES, CLASS_HIT_DIE, CLASS_SAVING_THROWS
+from .enums import Ability, Alignment, CharacterClass, Race, Skill
 from .models import AbilityScores, Character
 from .progression import compute_max_hp, compute_proficiency_bonus
-from .races import RACIAL_SIZE, RACIAL_SPEED
+from .races import RACIAL_FEATURES, RACIAL_SIZE, RACIAL_SPEED
 
 
 def create_character(
@@ -14,14 +14,21 @@ def create_character(
     char_class: CharacterClass,
     ability_scores: AbilityScores,
     alignment: Alignment = Alignment.TRUE_NEUTRAL,
+    skill_proficiencies: list[Skill] | None = None,
 ) -> Character:
-    """Create a new level-1 character with computed derived stats.
+    """Create a new level-1 character with derived stats, features, and skills.
 
-    The provided ability_scores should already include racial bonuses.
+    - ability_scores: already with racial bonuses applied
+    - skill_proficiencies: if None, empty list (Discord wizard will provide)
+    - Features: automatically populated from RACIAL_FEATURES and CLASS_FEATURES
     """
     con_mod = compute_modifier(ability_scores.get(Ability.CON))
     dex_mod = compute_modifier(ability_scores.get(Ability.DEX))
     max_hp = compute_max_hp(char_class, 1, con_mod)
+
+    racial_features = RACIAL_FEATURES[race]
+    class_features = CLASS_FEATURES[char_class]
+    features = list(racial_features) + list(class_features)
 
     return Character(
         name=name,
@@ -39,4 +46,6 @@ def create_character(
         saving_throw_proficiencies=CLASS_SAVING_THROWS[char_class],
         hit_die=CLASS_HIT_DIE[char_class],
         size=RACIAL_SIZE[race],
+        features=features,
+        skill_proficiencies=skill_proficiencies if skill_proficiencies is not None else [],
     )
