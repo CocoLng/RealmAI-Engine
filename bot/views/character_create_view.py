@@ -10,7 +10,7 @@ from discord import ui
 
 from bot.i18n import ALIGNMENT_LABELS, CLASS_LABELS, RACE_LABELS, get_label
 from bot.views.base import LoggedView
-from engine.character import Alignment, CharacterClass, Race
+from engine.character import Ability, Alignment, CharacterClass, Race, Skill
 
 # Callback type: async fn(interaction, view) -> None
 OnCompleteCallback = Callable[
@@ -20,11 +20,11 @@ OnCompleteCallback = Callable[
 
 
 class CharacterCreateView(LoggedView):
-    """Three select menus (race, class, alignment) that unlock progressively.
+    """Progressive character creation: race → class → alignment → stats → skills → name.
 
-    Once all three are chosen the :class:`CharacterNameModal` is presented
-    to collect the character name. ``self.completed`` is ``True`` when the
-    entire flow finishes.
+    After race/class/alignment selects, transitions to StatAssignmentView,
+    then SkillSelectionView, then CharacterNameModal. ``self.completed``
+    is ``True`` when the entire flow finishes.
 
     Parameters
     ----------
@@ -37,7 +37,7 @@ class CharacterCreateView(LoggedView):
         creation without subclassing. Used by the onboarding launcher.
     """
 
-    timeout = 120.0
+    timeout = 300.0  # 5 minutes to complete the full flow
 
     def __init__(
         self,
@@ -50,6 +50,8 @@ class CharacterCreateView(LoggedView):
         self.char_class: CharacterClass | None = None
         self.alignment: Alignment | None = None
         self.character_name: str | None = None
+        self.ability_assignments: dict[Ability, int] | None = None
+        self.skill_proficiencies: list[Skill] | None = None
         self.completed: bool = False
         self._on_complete = on_complete
 
@@ -143,8 +145,53 @@ class CharacterCreateView(LoggedView):
         interaction: discord.Interaction,
         select: ui.Select["CharacterCreateView"],
     ) -> None:
-        """Handle alignment selection and open the name modal."""
+        """Handle alignment selection and launch stat assignment."""
         self.alignment = Alignment(select.values[0])
+
+        from bot.views.stat_assignment_view import StatAssignmentView
+
+        assert self.char_class is not None
+        stat_view = StatAssignmentView(
+            char_class=self.char_class,
+            on_confirmed=self._on_stats_confirmed,
+        )
+        await interaction.response.edit_message(
+            content=stat_view.get_status_text(),
+            view=stat_view,
+        )
+
+    async def _on_stats_confirmed(
+        self,
+        interaction: discord.Interaction,
+        assignments: dict[Ability, int],
+    ) -> None:
+        """Called when stat assignment is complete. Launch skill selection."""
+        self.ability_assignments = assignments
+
+        from bot.views.skill_selection_view import SkillSelectionView
+
+        assert self.char_class is not None
+        skill_view = SkillSelectionView(
+            char_class=self.char_class,
+            on_confirmed=self._on_skills_confirmed,
+        )
+        config = skill_view.required_count
+        await interaction.response.edit_message(
+            content=(
+                f"**Selection des competences**\n\n"
+                f"Choisis {config} competence{'s' if config > 1 else ''} "
+                f"pour ta classe :"
+            ),
+            view=skill_view,
+        )
+
+    async def _on_skills_confirmed(
+        self,
+        interaction: discord.Interaction,
+        skills: list[Skill],
+    ) -> None:
+        """Called when skill selection is complete. Open the name modal."""
+        self.skill_proficiencies = skills
         modal = CharacterNameModal(self)
         await interaction.response.send_modal(modal)
 

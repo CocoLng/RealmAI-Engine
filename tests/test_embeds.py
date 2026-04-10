@@ -199,9 +199,9 @@ class TestCharacterEmbed:
         assert "1d10" in embed.footer.text
 
     def test_field_count(self, fighter):
-        """6 abilities + HP + AC + Proficiency + Saving Throws = 10 fields."""
+        """6 abilities + HP + AC + Proficiency + Saving Throws + Features = 11 fields."""
         embed = build_character_embed(fighter)
-        assert len(embed.fields) == 10
+        assert len(embed.fields) == 11
 
 
 # ---------------------------------------------------------------------------

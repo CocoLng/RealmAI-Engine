@@ -13,11 +13,10 @@ from bot.embeds.character_embed import build_character_embed
 from bot.views.character_create_view import CharacterCreateView
 from db.repositories import PlayerCharacterRepository
 from engine.character import (
-    apply_racial_bonuses,
+    assign_standard_array,
     check_level_up,
     create_character,
     level_up,
-    roll_ability_scores,
 )
 from engine.inventory import create_inventory
 from engine.spells import create_spellcaster_state
@@ -71,15 +70,17 @@ class CharacterCog(commands.Cog):
         assert view.char_class is not None
         assert view.alignment is not None
         assert view.character_name is not None
+        assert view.ability_assignments is not None
+        assert view.skill_proficiencies is not None
 
-        scores = roll_ability_scores()
-        scores = apply_racial_bonuses(scores, view.race)
+        scores = assign_standard_array(view.ability_assignments, view.race)
         character = create_character(
             name=view.character_name,
             race=view.race,
             char_class=view.char_class,
             ability_scores=scores,
             alignment=view.alignment,
+            skill_proficiencies=view.skill_proficiencies,
         )
         inventory = create_inventory()
         spellcaster = create_spellcaster_state(view.char_class, 1)

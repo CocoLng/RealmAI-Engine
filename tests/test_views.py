@@ -144,6 +144,8 @@ class TestCharacterCreateView:
         assert view.char_class is None
         assert view.alignment is None
         assert view.character_name is None
+        assert view.ability_assignments is None
+        assert view.skill_proficiencies is None
         assert view.completed is False
 
     def test_class_select_disabled_initially(self) -> None:
@@ -158,9 +160,9 @@ class TestCharacterCreateView:
         view = CharacterCreateView()
         assert view.select_race.disabled is False
 
-    def test_timeout_is_two_minutes(self) -> None:
+    def test_timeout_is_five_minutes(self) -> None:
         view = CharacterCreateView()
-        assert view.timeout == 120.0
+        assert view.timeout == 300.0
 
     def test_race_option_values_match_enum(self) -> None:
         view = CharacterCreateView()

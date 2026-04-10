@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from bot.views.stat_assignment_view import (
     CLASS_PRIMARY_STATS,

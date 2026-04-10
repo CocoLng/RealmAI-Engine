@@ -27,9 +27,8 @@ from bot.views.start_onboarding_view import StartOnboardingView
 from bot.views.starter_gear_view import StarterGearView
 from engine.character import (
     Character,
-    apply_racial_bonuses,
+    assign_standard_array,
     create_character,
-    roll_ability_scores,
 )
 from engine.inventory import Inventory, create_inventory
 from engine.spells import SpellcasterState, create_spellcaster_state
@@ -196,15 +195,17 @@ class CampaignLauncher:
         assert view.char_class is not None
         assert view.alignment is not None
         assert view.character_name is not None
+        assert view.ability_assignments is not None
+        assert view.skill_proficiencies is not None
 
-        scores = roll_ability_scores()
-        scores = apply_racial_bonuses(scores, view.race)
+        scores = assign_standard_array(view.ability_assignments, view.race)
         character = create_character(
             name=view.character_name,
             race=view.race,
             char_class=view.char_class,
             ability_scores=scores,
             alignment=view.alignment,
+            skill_proficiencies=view.skill_proficiencies,
         )
 
         inventory = create_inventory()

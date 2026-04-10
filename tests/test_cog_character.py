@@ -10,11 +10,13 @@ import pytest
 from bot.cogs.character import CharacterCog
 from bot.game_session import GameSession
 from engine.character import (
+    Ability,
     AbilityScores,
     Alignment,
     Character,
     CharacterClass,
     Race,
+    Skill,
     XP_THRESHOLDS,
     add_xp,
     create_character,
@@ -142,6 +144,11 @@ class TestCreateCharacter:
             view_instance.char_class = CharacterClass.WIZARD
             view_instance.alignment = Alignment.CHAOTIC_GOOD
             view_instance.character_name = "Gandalf"
+            view_instance.ability_assignments = {
+                Ability.STR: 8, Ability.DEX: 12, Ability.CON: 13,
+                Ability.INT: 15, Ability.WIS: 14, Ability.CHA: 10,
+            }
+            view_instance.skill_proficiencies = [Skill.ARCANA, Skill.HISTORY]
             MockView.return_value = view_instance
 
             await cog.create_character_cmd.callback(cog, interaction)
@@ -209,6 +216,11 @@ class TestCreateCharacter:
             view_instance.char_class = CharacterClass.FIGHTER
             view_instance.alignment = Alignment.TRUE_NEUTRAL
             view_instance.character_name = "Conan"
+            view_instance.ability_assignments = {
+                Ability.STR: 15, Ability.DEX: 13, Ability.CON: 14,
+                Ability.INT: 10, Ability.WIS: 12, Ability.CHA: 8,
+            }
+            view_instance.skill_proficiencies = [Skill.ATHLETICS, Skill.PERCEPTION]
             MockView.return_value = view_instance
 
             await cog.create_character_cmd.callback(cog, interaction)

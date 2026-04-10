@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from bot.views.skill_selection_view import (
     SkillSelectionView,

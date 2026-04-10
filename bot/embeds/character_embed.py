@@ -3,10 +3,12 @@
 import discord
 
 from engine.character import (
+    SKILL_ABILITY,
     Ability,
     Character,
     CharacterClass,
     compute_modifier,
+    compute_skill_modifier,
 )
 
 # Class-based embed colors
@@ -73,6 +75,19 @@ def build_character_embed(character: Character) -> discord.Embed:
         value=saves,
         inline=False,
     )
+
+    # Features (racial + class traits)
+    if character.features:
+        features_text = "\n".join(f"• {f.name}" for f in character.features)
+        embed.add_field(name="Traits & Features", value=features_text, inline=False)
+
+    # Skill proficiencies with computed modifiers
+    if character.skill_proficiencies:
+        skills_text = ", ".join(
+            f"{s.value} ({SKILL_ABILITY[s].value}) +{compute_skill_modifier(character, s)}"
+            for s in character.skill_proficiencies
+        )
+        embed.add_field(name="Competences", value=skills_text, inline=False)
 
     # Footer with XP and hit die
     embed.set_footer(

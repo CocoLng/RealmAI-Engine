@@ -79,9 +79,8 @@ class SkillSelectionView(LoggedView):
         self.skill_select.options = options  # type: ignore[assignment]
         self.skill_select.max_values = config.choose  # type: ignore[assignment]
         self.skill_select.min_values = config.choose  # type: ignore[assignment]
-        self.skill_select.placeholder = (  # type: ignore[assignment]
-            f"Choisis {config.choose} competence{'s' if config.choose > 1 else ''}..."
-        )
+        placeholder = f"Choisis {config.choose} competence{'s' if config.choose > 1 else ''}..."
+        self.skill_select.placeholder = placeholder  # type: ignore[assignment]
 
         self.confirm_button.disabled = True  # type: ignore[assignment]
 
@@ -100,14 +99,6 @@ class SkillSelectionView(LoggedView):
     ) -> None:
         """Handle skill selection."""
         selected = [Skill(v) for v in select.values]
-
-        if len(selected) != self.required_count:
-            await interaction.response.send_message(
-                f"Tu dois choisir exactement {self.required_count} competences.",
-                ephemeral=True,
-            )
-            return
-
         self.selected_skills = selected
         self.confirm_button.disabled = False  # type: ignore[assignment]
 
