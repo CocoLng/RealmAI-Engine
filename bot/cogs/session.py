@@ -136,6 +136,7 @@ class SessionCog(commands.Cog):
             channel=channel,
             player_ids=player_ids,
             language=language,
+            creator_id=interaction.user.id,
         )
         self.bot.launchers[channel.id] = launcher
 

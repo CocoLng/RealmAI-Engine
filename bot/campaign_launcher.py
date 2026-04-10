@@ -23,6 +23,7 @@ from bot.game_session import GameSession, create_ai_services
 from bot.i18n import CLASS_LABELS, RACE_LABELS, get_kit_label, get_label
 from bot.llm_retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS, retry_llm_call
 from bot.views.character_create_view import CharacterCreateView
+from bot.views.force_launch_view import ForceLaunchView
 from bot.views.start_onboarding_view import StartOnboardingView
 from bot.views.starter_gear_view import StarterGearView
 from engine.character import (
@@ -85,6 +86,7 @@ class CampaignLauncher:
     channel: discord.TextChannel
     player_ids: list[int]
     language: str = "fr"
+    creator_id: int = 0
     player_progress: dict[int, PlayerProgress] = field(default_factory=dict)
     characters: dict[int, Character] = field(default_factory=dict)
     inventories: dict[int, Inventory] = field(default_factory=dict)
@@ -102,6 +104,7 @@ class CampaignLauncher:
     _notified_ollama_waiting: bool = field(default=False, repr=False)
     _notified_generation_ready: bool = field(default=False, repr=False)
     _notified_players_ready: bool = field(default=False, repr=False)
+    _force_launch_offered: bool = field(default=False, repr=False)
     _gen_start: float = field(default=0.0, repr=False)
 
     def __post_init__(self) -> None:
@@ -499,9 +502,63 @@ class CampaignLauncher:
                 "✅ Univers généré ! En attente des joueurs...",
             )
 
+        at_least_one_ready = any(
+            p == PlayerProgress.GEAR_DONE for p in self.player_progress.values()
+        )
+        if (
+            generation_done
+            and not all_ready
+            and at_least_one_ready
+            and not self._force_launch_offered
+        ):
+            self._force_launch_offered = True
+            not_ready = [
+                uid for uid, p in self.player_progress.items()
+                if p != PlayerProgress.GEAR_DONE
+            ]
+            mentions = " ".join(f"<@{uid}>" for uid in not_ready)
+            view = ForceLaunchView(
+                creator_id=self.creator_id,
+                on_click=self._on_force_launch,
+            )
+            await self.channel.send(
+                f"Joueurs en attente : {mentions}\n"
+                f"Le createur peut lancer la partie sans eux.",
+                view=view,
+            )
+
         if not all_ready or not generation_done:
             return
 
+        await self._launch_campaign()
+
+    async def _on_force_launch(self, interaction: discord.Interaction) -> None:
+        """Force-launch the campaign, excluding non-ready players."""
+        if self._launched:
+            await interaction.response.send_message(
+                "La partie a deja ete lancee.", ephemeral=True,
+            )
+            return
+
+        not_ready = [
+            uid for uid, p in self.player_progress.items()
+            if p != PlayerProgress.GEAR_DONE
+        ]
+        for uid in not_ready:
+            self.player_ids.remove(uid)
+            del self.player_progress[uid]
+            self.characters.pop(uid, None)
+            self.inventories.pop(uid, None)
+            self.spellcasters.pop(uid, None)
+
+        mentions = " ".join(f"<@{uid}>" for uid in not_ready)
+        await interaction.response.send_message(
+            f"Lancement force ! Joueurs exclus : {mentions}",
+        )
+        logger.info(
+            "LAUNCH force creator=%s excluded=%s campaign=%s",
+            interaction.user, not_ready, self.campaign.id,
+        )
         await self._launch_campaign()
 
     async def _launch_campaign(self) -> None:
