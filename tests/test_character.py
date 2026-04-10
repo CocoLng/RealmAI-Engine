@@ -318,7 +318,7 @@ class TestRollAbilityScores:
             call_count += 1
             return fake_result
 
-        monkeypatch.setattr("engine.character.roll", fake_roll)
+        monkeypatch.setattr("engine.character.abilities.roll", fake_roll)
         scores = roll_ability_scores()
         assert call_count == 6
         # All scores should be 14 (3+5+6, dropping 2)
