@@ -4,24 +4,22 @@ Ce dossier organise le travail d'implémentation du projet RealmAI-Engine. Chaqu
 
 ## État actuel
 
-**Chantier en cours** : Refonte du système de personnage
-**Spec de référence** : `docs/superpowers/specs/2026-04-10-character-system-refactor-design.md`
+**Chantier en cours** : UX Immersion — amélioration de l'expérience onboarding → lancement
+**Chantier précédent** : Refonte du système de personnage ✅ (archivé dans `tasks/archive/2026-04-10-character-system-refactor/`)
 
 ## Agents — Ordre d'exécution
 
-Les agents doivent être exécutés **dans l'ordre**. Chaque agent dépend du précédent.
+Exécution séquentielle — tous modifient `bot/campaign_launcher.py`.
 
 ```
-01-package-split ──→ 02-features-and-skills ──→ 03-standard-array-and-creation ──→ 04-discord-wizard ──→ 05-db-migration-and-cleanup
+01-character-recreation ──→ 02-force-launch ──→ 03-launch-immersion
 ```
 
 | # | Agent | Scope | Complexité | Status |
 |---|-------|-------|------------|--------|
-| 01 | [package-split](agents/01-package-split.md) | Découper `character.py` → package `character/` | Moyenne | ✅ Terminé |
-| 02 | [features-and-skills](agents/02-features-and-skills.md) | Feature system + 18 Skills D&D 5e | Élevée | ✅ Terminé |
-| 03 | [standard-array-and-creation](agents/03-standard-array-and-creation.md) | Standard Array + refonte `create_character()` | Moyenne | ✅ Terminé |
-| 04 | [discord-wizard](agents/04-discord-wizard.md) | Wizard Discord : stats + skills + flow complet | Élevée | ✅ Terminé |
-| 05 | [db-migration-and-cleanup](agents/05-db-migration-and-cleanup.md) | Backfill DB, isolation, documentation | Faible | ✅ Terminé |
+| 01 | [character-recreation](agents/01-character-recreation.md) | Re-clic "Créer mon personnage" pour recommencer | Moyenne | ⬜ À faire |
+| 02 | [force-launch](agents/02-force-launch.md) | Bouton pour lancer sans les joueurs manquants | Moyenne | ⬜ À faire |
+| 03 | [launch-immersion](agents/03-launch-immersion.md) | Purge channel + countdown + opening crawl | Moyenne | ⬜ À faire |
 
 ### Légende status
 
@@ -34,12 +32,11 @@ Les agents doivent être exécutés **dans l'ordre**. Chaque agent dépend du pr
 
 1. **Lire le fichier agent** en entier avant de commencer
 2. **Vérifier les dépendances** : l'agent précédent doit être terminé
-3. **Lire le spec** (`docs/superpowers/specs/2026-04-10-character-system-refactor-design.md`) pour le contexte complet
-4. **Valider à la fin** : `uv run pytest` + `uv run ruff check .` + `uv run mypy .` — tout vert
-5. **Commiter** avec un message conventionnel (ex: `refactor: split character.py into character/ package`)
-6. **Ask User** poser des questions en cas de doute, ne pas deviner — mieux vaut demander que faire une mauvaise implémentation
-7. **Documenter** toute décision importante ou changement de design relevante dans la doc du code docs/internal/
-8. **Discrétion** Ne pas se mettre en co-auteur de commit, mode undercover agent
+3. **Valider à la fin** : `uv run pytest` + `uv run ruff check .` + `uv run mypy .` — tout vert
+4. **Commiter** avec un message conventionnel (ex: `feat(bot): allow character re-creation before launch`)
+5. **Ask User** poser des questions en cas de doute, ne pas deviner
+6. **Documenter** toute décision importante dans docs/internal/
+7. **Discrétion** Ne pas se mettre en co-auteur de commit, mode undercover agent
 
 ## Fichiers associés
 
@@ -47,18 +44,14 @@ Les agents doivent être exécutés **dans l'ordre**. Chaque agent dépend du pr
 |---------|------|
 | `tasks/todo.md` | TODO générale du projet (au-delà de ce chantier) |
 | `tasks/agents/*.md` | Fiches agent détaillées |
-| `docs/superpowers/specs/2026-04-10-character-system-refactor-design.md` | Spec de design approuvée |
+| `tasks/archive/` | Chantiers précédents archivés |
 
 ## Items différés (hors scope actuel)
 
-Ces items sont notés pour des phases ultérieures :
-
+- Item 6 du backlog UX : système de level-up avec choix de stats (nécessite spec dédiée)
 - Backgrounds D&D 5e (Acolyte, Criminal, Noble, etc.)
 - Feats (ASI-ou-feat aux niveaux 4/8/12/16/19)
 - Multiclassing
-- Langues
-- Tool proficiencies
-- Class features niveau 2+
+- Langues, Tool proficiencies, Class features niveau 2+
 - Point Buy / 4d6-drop-lowest
-- Boutique achat-vente
-- Catalogue de sorts étendu
+- Boutique achat-vente, Catalogue de sorts étendu

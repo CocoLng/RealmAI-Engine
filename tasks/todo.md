@@ -1,5 +1,13 @@
 # RealmAI-Engine — Task Board
 
+## UX Immersion (Agents 01–03)
+
+Voir `tasks/README.md` pour l'orchestration et `tasks/agents/` pour les fiches détaillées.
+
+- [ ] Agent 01 — Character re-creation (re-clic "Créer mon personnage")
+- [ ] Agent 02 — Force launch (bouton lancer sans joueurs manquants)
+- [ ] Agent 03 — Launch immersion (purge + countdown + opening crawl)
+
 ## Character System Refactor (Agents 01–05) — DONE ✅
 
 - [x] Agent 01 — Package split: `engine/character.py` → `engine/character/` package
