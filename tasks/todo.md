@@ -36,7 +36,7 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 
 ### Phase 5 — IA tactique (NPC brains)
 - [x] Task 50 — IA scripted pour minions
-- [ ] Task 51 — IA elite : behavior profiles + signatures
+- [x] Task 51 — IA elite : behavior profiles + signatures
 - [ ] Task 52 — Boss : LLM tactician
 - [ ] Task 53 — Legendary actions off-turn
 - [ ] Task 54 — Phase transitions

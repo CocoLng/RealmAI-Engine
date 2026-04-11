@@ -27,7 +27,7 @@ from engine.combat import (
     move_combatant_to_zone,
     resolve_npc_attack,
 )
-from engine.npc_stat_block import NPCAttack
+from engine.npc_stat_block import NPCAttack, NPCTier, SignatureAbility
 from engine.validators import ActionType
 
 if TYPE_CHECKING:
@@ -113,6 +113,34 @@ def decide_minion_action(
 # ---------------------------------------------------------------------------
 
 
+def decide_action_for(
+    combatant: Combatant,
+    state: CombatState,
+    location: "Location | None",
+) -> NPCActionPlan:
+    """Tier dispatcher — route an NPC to the brain matching its stat block.
+
+    Minion tier uses :func:`decide_minion_action`. Elite tier is routed to
+    :func:`engine.npc_ai.elite.decide_elite_action`. Boss tier will route
+    through ``engine.npc_ai.boss_brain`` when task 52 lands. Combatants
+    without a stat block fall back on the minion heuristic.
+    """
+    if combatant.stat_block is None:
+        return decide_minion_action(combatant, state, location)
+
+    tier = combatant.stat_block.tier
+    if tier == NPCTier.MINION:
+        return decide_minion_action(combatant, state, location)
+    if tier == NPCTier.ELITE:
+        from engine.npc_ai.elite import decide_elite_action
+
+        return decide_elite_action(combatant, state, location)
+    # Boss tier — pending task 52. For now, fall back on elite logic.
+    from engine.npc_ai.elite import decide_elite_action
+
+    return decide_elite_action(combatant, state, location)
+
+
 def execute_action_plan(
     combatant: Combatant,
     plan: NPCActionPlan,
@@ -124,10 +152,12 @@ def execute_action_plan(
     Mutates ``state`` (and ``combatant``) in place. ATTACK plans consume
     the combatant's Action slot and delegate to
     :func:`engine.combat.resolve_npc_attack` using the named
-    :class:`~engine.npc_stat_block.NPCAttack` from the stat block. MOVE
-    plans are routed through :func:`engine.combat.move_combatant_to_zone`
-    which enforces adjacency, spends movement, and triggers opportunity
-    attacks. DEFEND plans just consume the Action slot.
+    :class:`~engine.npc_stat_block.NPCAttack` from the stat block, or
+    routes to :func:`engine.npc_ai.elite.execute_signature_ability` when
+    ``plan.signature_name`` is set. MOVE plans are routed through
+    :func:`engine.combat.move_combatant_to_zone` which enforces adjacency,
+    spends movement, and triggers opportunity attacks. DEFEND plans just
+    consume the Action slot.
 
     The function never raises on a badly pointed plan — if the target or
     the weapon is not found, it returns a descriptive summary without
@@ -135,6 +165,8 @@ def execute_action_plan(
     movement, non-adjacent zone, etc.) do propagate.
     """
     if plan.action_type == ActionType.ATTACK:
+        if plan.signature_name is not None:
+            return _execute_signature(combatant, plan, state)
         return _execute_attack(combatant, plan, state)
     if plan.action_type == ActionType.MOVE:
         return _execute_move(combatant, plan, state, location)
@@ -142,6 +174,43 @@ def execute_action_plan(
         consume_action(combatant)
         return f"{combatant.name} dodges"
     return f"{combatant.name} does nothing ({plan.action_type.value})"
+
+
+def _execute_signature(
+    combatant: Combatant,
+    plan: NPCActionPlan,
+    state: CombatState,
+) -> str:
+    """Resolve a signature-ability plan via the elite executor.
+
+    Consumes the combatant's Action slot, looks up the signature by name
+    on the stat block, locates the primary target from ``plan.target_name``
+    (falling back on the caster itself for ``target_scope=self`` style
+    effects), and delegates to
+    :func:`engine.npc_ai.elite.execute_signature_ability`.
+    """
+    if combatant.stat_block is None:
+        return f"{combatant.name} has no stat block to resolve {plan.signature_name!r}"
+
+    signature: SignatureAbility | None = None
+    for sig in combatant.stat_block.signature_abilities:
+        if sig.name == plan.signature_name:
+            signature = sig
+            break
+    if signature is None:
+        return (
+            f"{combatant.name} has no signature named {plan.signature_name!r}"
+        )
+
+    target = _find_by_name(plan.target_name, state)
+    targets: list[Combatant] = [target] if target is not None else [combatant]
+
+    from engine.npc_ai.elite import execute_signature_ability
+
+    consume_action(combatant)
+    summaries = execute_signature_ability(combatant, signature, targets, state)
+    joined = "; ".join(summaries) if summaries else "no effect"
+    return f"{combatant.name} uses {signature.name}: {joined}"
 
 
 # ---------------------------------------------------------------------------
