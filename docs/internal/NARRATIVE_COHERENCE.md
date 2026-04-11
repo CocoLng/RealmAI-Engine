@@ -76,6 +76,7 @@ StoryArc(
     current_beat_index: int,
     villain_name: str,
     villain_motivation: str,
+    villain_stat_block: NPCStatBlock | None,  # Task 42 : stat block complet custom
 )
 
 StoryBeat(
@@ -92,7 +93,7 @@ StoryBeat(
 )
 ```
 
-L'arc est généré **une fois** à la création de la campagne, avec `think=True` (mode raisonnement étendu de Qwen 3.5) pour la cohérence narrative.
+L'arc est généré **une fois** à la création de la campagne, avec `think=True` (mode raisonnement étendu de Qwen 3.5) pour la cohérence narrative. Depuis Task 42, le même appel LLM produit aussi le `villain_stat_block` complet du villain (tier boss, 2-3 signatures thématiques, 3 legendary_actions costs 1/2/3, 1-2 phases) — permettant au climax final de jouer des capacités uniques au villain plutôt qu'un generic_boss. Fallback automatique sur `engine.npc_library.get_archetype('generic_boss')` (tagué `generic_boss:<villain_name>`) si l'output LLM casse la validation Pydantic.
 
 ### Avancement
 

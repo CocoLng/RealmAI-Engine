@@ -264,3 +264,204 @@ class TestBeatCompletionModels:
         for beat in arc.beats:
             assert beat.completion_trigger is not None
             assert beat.on_complete.unlock_exits == ["Next Area"]
+
+
+# ---------------------------------------------------------------------------
+# Villain stat block (Task 42)
+# ---------------------------------------------------------------------------
+
+
+def _make_valid_villain_stat_block() -> dict:
+    """Return a minimal valid villain stat block payload."""
+    return {
+        "tier": "boss",
+        "archetype": "mentisseur",
+        "multiattack_count": 3,
+        "attacks": [
+            {
+                "name": "Lame d'obsidienne",
+                "damage_dice": "1d8+4",
+                "damage_type": "Slashing",
+                "to_hit_bonus": 7,
+                "range_type": "melee",
+                "range_value": None,
+            }
+        ],
+        "signature_abilities": [
+            {
+                "name": "Chant du Silence Éternel",
+                "description": "Impose Frightened to all enemies in range.",
+                "usage": "per_combat",
+                "uses_remaining": 1,
+                "is_reaction": False,
+                "action_cost": "action",
+                "effects": [
+                    {
+                        "kind": "condition",
+                        "condition_name": "Frightened",
+                        "condition_duration_rounds": 2,
+                        "save_ability": "WIS",
+                        "save_dc": 15,
+                        "target_scope": "all_enemies",
+                    }
+                ],
+            }
+        ],
+        "legendary_actions": [
+            {
+                "name": "Morsure du Sable",
+                "cost": 1,
+                "description": "Quick melee strike as a legendary action.",
+                "effects": [
+                    {
+                        "kind": "damage",
+                        "dice": "1d8+4",
+                        "damage_type": "Slashing",
+                        "target_scope": "single",
+                    }
+                ],
+            },
+            {
+                "name": "Voile de Poussière",
+                "cost": 2,
+                "description": "Clouds a zone with obscuring dust.",
+                "effects": [],
+            },
+            {
+                "name": "Fracas Éternel",
+                "cost": 3,
+                "description": "A devastating AoE strike.",
+                "effects": [
+                    {
+                        "kind": "aoe_damage",
+                        "dice": "3d10",
+                        "damage_type": "Thunder",
+                        "target_scope": "zone",
+                    }
+                ],
+            },
+        ],
+        "legendary_points_per_round": 3,
+        "phases": [
+            {
+                "trigger_hp_percent": 50,
+                "narrative_cue": "Ses yeux se teignent d'or liquide.",
+                "unlock_signatures": ["Chant du Silence Éternel"],
+                "attack_bonus": 2,
+                "save_bonus": 1,
+            }
+        ],
+        "behavior_profile": "tactical",
+        "aggression_threshold": 20,
+    }
+
+
+def test_parses_villain_stat_block_with_signatures(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """A valid villain_stat_block with signatures is parsed into StoryArc."""
+    arc_data = _make_arc_data(10)
+    arc_data["villain_stat_block"] = _make_valid_villain_stat_block()
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    arc = generator.generate(theme="dark fantasy", player_count=4)
+
+    assert arc.villain_stat_block is not None
+    assert arc.villain_stat_block.tier == "boss"
+    assert arc.villain_stat_block.archetype == "mentisseur"
+    assert len(arc.villain_stat_block.signature_abilities) == 1
+    assert (
+        arc.villain_stat_block.signature_abilities[0].name
+        == "Chant du Silence Éternel"
+    )
+
+
+def test_parses_villain_stat_block_with_legendary_actions(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """Legendary actions with costs 1/2/3 are preserved."""
+    arc_data = _make_arc_data(10)
+    arc_data["villain_stat_block"] = _make_valid_villain_stat_block()
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    arc = generator.generate(theme="dark fantasy", player_count=4)
+
+    assert arc.villain_stat_block is not None
+    actions = arc.villain_stat_block.legendary_actions
+    assert len(actions) == 3
+    assert {a.cost for a in actions} == {1, 2, 3}
+    assert arc.villain_stat_block.legendary_points_per_round == 3
+
+
+def test_parses_villain_stat_block_with_phases(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """Phase transitions are parsed with their HP trigger and bonuses."""
+    arc_data = _make_arc_data(10)
+    arc_data["villain_stat_block"] = _make_valid_villain_stat_block()
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    arc = generator.generate(theme="dark fantasy", player_count=4)
+
+    assert arc.villain_stat_block is not None
+    phases = arc.villain_stat_block.phases
+    assert len(phases) == 1
+    assert phases[0].trigger_hp_percent == 50
+    assert phases[0].attack_bonus == 2
+    assert phases[0].triggered is False
+
+
+def test_invalid_stat_block_falls_back_to_generic_boss(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """An invalid stat block (missing tier) falls back to generic_boss."""
+    arc_data = _make_arc_data(10)
+    bad = _make_valid_villain_stat_block()
+    bad.pop("tier")  # invalid — tier is required
+    arc_data["villain_stat_block"] = bad
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    arc = generator.generate(theme="dark fantasy", player_count=4)
+
+    assert arc.villain_stat_block is not None
+    # Fallback keeps tier boss and tags archetype with the villain name.
+    assert arc.villain_stat_block.tier == "boss"
+    assert arc.villain_stat_block.archetype.startswith("generic_boss:")
+    assert arc.villain_name in arc.villain_stat_block.archetype
+
+
+def test_missing_stat_block_falls_back_to_generic_boss(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """If villain_stat_block is absent, fallback kicks in."""
+    arc_data = _make_arc_data(10)
+    # Do NOT add villain_stat_block at all.
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    arc = generator.generate(theme="dark fantasy", player_count=4)
+
+    assert arc.villain_stat_block is not None
+    assert arc.villain_stat_block.tier == "boss"
+    assert arc.villain_stat_block.archetype.startswith("generic_boss:")
+
+
+def test_fallback_archetype_name_includes_villain_name(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """The fallback archetype string contains the villain's name for tracing."""
+    arc_data = _make_arc_data(10)
+    arc_data["villain_name"] = "Nyxa Voix-des-Cendres"
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    arc = generator.generate(theme="dark fantasy", player_count=4)
+
+    assert arc.villain_stat_block is not None
+    assert "Nyxa Voix-des-Cendres" in arc.villain_stat_block.archetype
+
+
+def test_villain_stat_block_backward_compat_legacy_arc() -> None:
+    """Direct model_validate on a legacy arc dict (no stat block) defaults to None."""
+    legacy = _make_arc_data(10)
+    # Legacy JSON: no villain_stat_block key at all.
+    arc = StoryArc.model_validate(legacy)
+    assert arc.villain_stat_block is None

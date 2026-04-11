@@ -11,6 +11,7 @@ from engine.inventory import Inventory
 from engine.npc_stat_block import NPCStatBlock
 from engine.spells import SpellcasterState
 from world.campaign import Campaign
+from world.combat_trigger_def import CombatTriggerDef
 from world.combat_zone import Zone
 from world.location import Location
 from world.npc import NPC, DialogueExchange, NPCDisposition
@@ -148,6 +149,11 @@ def location_to_db(location: Location, campaign_id: str) -> LocationRow:
         unlocked_exits=location.unlocked_exits,
         generated=location.generated,
         combat_zones=[z.model_dump() for z in location.combat_zones],
+        combat_triggers={
+            key: trigger.model_dump()
+            for key, trigger in location.combat_triggers.items()
+        },
+        npc_roles=dict(location.npc_roles),
     )
 
 
@@ -170,6 +176,14 @@ def location_from_db(row: LocationRow) -> Location:
         combat_zones=[Zone.model_validate(z) for z in row.combat_zones]
         if row.combat_zones
         else [],
+        combat_triggers={
+            str(key): CombatTriggerDef.model_validate(value)
+            for key, value in (row.combat_triggers or {}).items()
+        },
+        npc_roles={
+            str(key): str(value)
+            for key, value in (row.npc_roles or {}).items()
+        },
     )
 
 

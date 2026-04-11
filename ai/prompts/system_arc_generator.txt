@@ -70,7 +70,101 @@ Return JSON only with this exact schema:
     }
   ],
   "villain_name": "<villain name>",
-  "villain_motivation": "<villain motivation — nuanced, not generic>"
+  "villain_motivation": "<villain motivation — nuanced, not generic>",
+  "villain_stat_block": {
+    "tier": "boss",
+    "archetype": "<thematic category: mage, warrior, priest, lord, etc.>",
+    "multiattack_count": 3,
+    "attacks": [
+      {
+        "name": "<attack name with flavor>",
+        "damage_dice": "<e.g. 1d8+4>",
+        "damage_type": "Slashing|Piercing|Bludgeoning|Fire|Cold|Lightning|Thunder|Poison|Radiant|Necrotic|Force",
+        "to_hit_bonus": 7,
+        "range_type": "melee|ranged|reach",
+        "range_value": null
+      }
+    ],
+    "signature_abilities": [
+      {
+        "name": "<unique thematic name>",
+        "description": "<1-2 sentence effect>",
+        "usage": "per_combat|at_will|recharge_5_6",
+        "uses_remaining": 1,
+        "is_reaction": false,
+        "action_cost": "action|bonus|reaction",
+        "effects": [
+          {
+            "kind": "damage|heal|condition|aoe_damage|buff|debuff|move",
+            "dice": "<e.g. 3d10>",
+            "damage_type": "Fire|Cold|...",
+            "condition_name": "Frightened|Poisoned|Stunned|...",
+            "condition_duration_rounds": 3,
+            "save_ability": "STR|DEX|CON|INT|WIS|CHA",
+            "save_dc": 15,
+            "target_scope": "single|zone|all_enemies|all_allies_in_zone|self"
+          }
+        ]
+      }
+    ],
+    "legendary_actions": [
+      {
+        "name": "<e.g. Shadow Strike>",
+        "cost": 1,
+        "description": "<one sentence>",
+        "effects": [ /* same shape as signature effects */ ]
+      },
+      {
+        "name": "<e.g. Veil of Ash>",
+        "cost": 2,
+        "description": "<one sentence>",
+        "effects": []
+      },
+      {
+        "name": "<e.g. Eternal Crash>",
+        "cost": 3,
+        "description": "<one sentence>",
+        "effects": [ /* heavier effect */ ]
+      }
+    ],
+    "legendary_points_per_round": 3,
+    "phases": [
+      {
+        "trigger_hp_percent": 50,
+        "narrative_cue": "<description of the phase change moment>",
+        "unlock_signatures": ["<name of a signature that only unlocks in phase 2>"],
+        "attack_bonus": 2,
+        "save_bonus": 2
+      }
+    ],
+    "behavior_profile": "aggressive|defensive|support|tactical",
+    "aggression_threshold": 20
+  }
 }
+
+## Villain stat block — strict rules (mandatory field)
+
+The villain MUST carry a full `villain_stat_block` in the JSON output so the
+engine can run a proper boss fight at the climax. Respect these rules:
+
+- `tier` is exactly `"boss"`.
+- `multiattack_count` between 2 and 4.
+- **2 to 3 `signature_abilities`** with unique, thematic names that reflect
+  the villain's identity — never generic strings like "Attack" or
+  "Heavy Strike". Example for "Vellus the Liar" (desert, deceit):
+  "Chant of the Eternal Silence", "Sandbite", "Veil of Dust".
+- **Exactly 3 `legendary_actions`** with costs `1`, `2`, and `3`.
+- **1 to 2 `phases`**, typically with `trigger_hp_percent=50`.
+- All `damage_type`, `condition_name`, `save_ability`, `target_scope`, and
+  `kind` values MUST use the engine's exact enum casing:
+  * `damage_type` is **TitleCase** (`"Slashing"`, not `"slashing"`).
+  * `save_ability` is **UPPERCASE** three-letter code (`"WIS"`, `"DEX"`).
+  * `target_scope` and `kind` are **lowercase** (`"single"`, `"damage"`).
+  * `condition_name` is **TitleCase** (`"Frightened"`, `"Poisoned"`).
+- The stat block MUST be playable as a level 5-7 boss: damage 1d8+4 to 3d10
+  for attacks, signature dice up to 5d8, save DCs in the 13-16 range.
+- If you cannot produce a fully custom stat block, still emit a minimal
+  structure with `multiattack_count=2`, one signature ability, and 3
+  legendary actions. Missing the whole field at all is an error.
 
 Return valid JSON only. No markdown, no commentary.

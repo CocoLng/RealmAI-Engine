@@ -26,12 +26,27 @@ Return JSON only:
   "npc_details": [
     {
       "name": "<exact NPC name from npcs_present>",
-      "aliases": ["<archetype>", "<variante de genre/nombre>", "..."]
+      "aliases": ["<archetype>", "<variante de genre/nombre>", "..."],
+      "role": "<optional — one of: commoner, guard, bandit, cultist, soldier, captain, brute, mage, assassin, shaman>"
     }
   ],
   "items_available": ["<item name 1>"],
   "item_descriptions": {
     "<exact item name from items_available>": "<one short sentence describing what the item canonically IS — material, era, condition, purpose>"
+  },
+  "combat_zones": [
+    {
+      "name": "<nom court en français, 2-5 mots>",
+      "description": "<une ligne décrivant la zone>",
+      "adjacent_zone_names": ["<autres zones accessibles en 1 mouvement>"],
+      "tags": ["cover" | "difficult_terrain" | "elevated" | "hazard" | "obscured"]
+    }
+  ],
+  "combat_triggers": {
+    "<nom exact d'un item ou mechanism>": {
+      "spawn_npcs": ["<nom NPC 1>", "<nom NPC 2>"],
+      "reveal_narration": "<une phrase décrivant ce qui se passe quand activé>"
+    }
   }
 }
 
@@ -66,4 +81,46 @@ Rules:
   archetype, nicknames). Include masculine/feminine and singular/plural variants
   when relevant. Example for "Jeanne, la Villageoise Terrifiée":
   ["villageoise", "villageois", "villageur", "femme", "paysanne", "habitante"]
+- Each npc_details entry MAY include an optional `role` field picking ONE of the
+  combat archetypes supported by the engine (task 43): `commoner`, `guard`,
+  `bandit`, `cultist`, `soldier`, `captain`, `brute`, `mage`, `assassin`,
+  `shaman`. Use it only when the character is clearly martial or cult-aligned
+  (e.g. "Le Capitaine Vorn" → `"role": "captain"`). Omit `role` or leave it
+  empty for peaceful NPCs — the hydration layer will default to `commoner`.
+  Never invent role names outside this list; unknown roles are ignored.
+
+## Combat zones
+
+Pour les locations où un combat est plausible (dungeon, temple, arène, forêt
+hostile, rue, place publique, camp ennemi, etc.), tu DOIS produire une liste
+`combat_zones` avec 2 à 4 zones nommées. Chaque zone est un point de référence
+tactique dans la scène.
+
+Règles :
+- 2 à 4 zones par location-combat. Moins = pas d'intérêt tactique. Plus = confusion.
+- Les zones sont nommées en français (ex : "Autel central", "Promontoire rocheux",
+  "Alcôve sud") — pas de coordonnées, pas de numérotation.
+- L'adjacence est SYMÉTRIQUE : si A liste B dans `adjacent_zone_names`, alors B
+  DOIT lister A. Toute violation fait rejeter silencieusement les zones côté parseur.
+- Les tags influencent les rolls : `cover` = +2 AC ranged, `difficult_terrain` =
+  mouvement doublé, `elevated` = advantage ranged, `hazard` = dégâts à l'entrée,
+  `obscured` = disadvantage on attacks.
+- Pour les locations paisibles (taverne alliée, campement sûr, chapelle neutre),
+  `combat_zones` peut être une liste vide `[]`.
+
+## Combat triggers (ambushes)
+
+Si la description contient un mécanisme plausible (levier, piège, porte mystérieuse,
+statue scellée, urne, coffre piégé, sceau antique), tu PEUX produire des
+`combat_triggers` qui déclenchent des ambushes quand interagis.
+
+Règles :
+- 0 à 2 triggers par location, jamais plus.
+- La clé DOIT matcher soit un item existant dans `items_available`, soit un
+  mechanism explicitement décrit dans la description de la location.
+- `spawn_npcs` liste les PNJs qui apparaissent au déclenchement. Noms courts,
+  thématiques. Le runtime les créera à la volée via l'hydration.
+- `reveal_narration` décrit en une phrase le moment précis où le piège se révèle.
+- Si rien ne justifie un piège dans la location, retourne un dict vide `{}`.
+
 - Return valid JSON only

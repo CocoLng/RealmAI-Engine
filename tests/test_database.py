@@ -42,7 +42,7 @@ class TestMigrateSchema:
         with engine.connect() as conn:
             raw = conn.connection.dbapi_connection
             version = raw.execute("PRAGMA user_version").fetchone()[0]  # type: ignore[union-attr]
-        assert version == 3  # v0→v1 + v1→v2 + v2→v3
+        assert version == 4  # v0→v1 + v1→v2 + v2→v3 + v3→v4 (combat triggers + npc_roles)
 
     def test_v2_adds_current_beat_index_column(self) -> None:
         """V1→V2 migration adds current_beat_index to story_arcs."""

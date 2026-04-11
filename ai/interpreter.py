@@ -86,6 +86,7 @@ class Interpreter:
                 improvise_description=data.get("improvise_description"),
                 raw_input=player_text,
                 confidence=float(data.get("confidence", 1.0)),
+                is_lethal_intent=bool(data.get("is_lethal_intent", False)),
             )
         except (ValueError, KeyError) as exc:
             logger.warning("Interpreter: failed to build InterpretedAction: %s", exc)

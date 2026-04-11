@@ -33,7 +33,7 @@ Wrapper `httpx` autour d'`/api/chat`. Une méthode principale : `chat_json(model
 
 | Modèle | Producteur | Champs clés |
 |---|---|---|
-| `InterpretedAction` | Interpreter | `action_type`, `actor_name`, `target_name`, `weapon_name`, `spell_name`, `item_name`, `talk_topic`, `search_detail`, `confidence` |
+| `InterpretedAction` | Interpreter | `action_type`, `actor_name`, `target_name`, `weapon_name`, `spell_name`, `item_name`, `talk_topic`, `search_detail`, `improvise_description`, `is_lethal_intent`, `confidence` |
 | `NarrativeResult` | Narrator | `narrative`, `tone` (dramatic/tense/humorous/somber) |
 | `DirectorNote` | Story Director | `coherence_issues`, `suggested_hooks`, `priority` (low/medium/high) |
 | `NPCResponse` | NPC Agent | `dialogue`, `disposition_change` (-2 à +2), `revealed_info` |
@@ -56,6 +56,8 @@ Wrapper `httpx` autour d'`/api/chat`. Une méthode principale : `chat_json(model
 **Sortie** : `InterpretedAction` validé. Fallback déterministe si parse fail :
 - En combat → `DEFEND`
 - Hors combat → `IMPROVISE` (echo raw text)
+
+**Détection d'intention létale** (Task 40) : le prompt contient une section "Détection d'intention létale" qui demande au LLM de flaguer `is_lethal_intent=True` quand le joueur exprime explicitement une volonté de blesser une créature nommée/visible ("je poignarde Vellus", "boule de feu sur les bandits"). Les intimidations ("je menace le garde") et attaques d'objets ("j'attaque la porte") restent `False`. Consommé par l'action pipeline pour bootstrap automatique d'un combat même quand `action_type ≠ ATTACK`. Rétro-compatible : legacy JSON sans le champ → default `False`.
 
 **Autre méthode** : `disambiguate_entity(candidates, context)` — fallback LLM utilisé par `EntityResolver` uniquement quand Python a renvoyé 0 candidat (Lot B). `temperature 0.1, num_predict 64`. Ne raise jamais.
 
@@ -116,6 +118,10 @@ Construit un user message incluant : context + fiche NPC (perso, race, dispositi
 **Prompt** : `system_world_generator.txt` — force :
 - Chaque item DOIT avoir une description explicite (matériau, époque, condition).
 - NPC aliases : variants de genre/nombre/profession/archétype (2-6 par PNJ).
+- **Combat zones** (Task 41) : 2-4 zones nommées par location-combat avec adjacence symétrique, tags tactiques (`cover`, `difficult_terrain`, `elevated`, `hazard`, `obscured`), vide pour locations paisibles.
+- **Combat triggers** (Task 41) : 0-2 ambushes par location, clé = nom d'item/mechanism, payload = `spawn_npcs` + `reveal_narration`, idempotence via `consumed=False`.
+
+**Parser résilient** : le parseur construit d'abord les `Zone` individuellement (drop silencieux des entrées invalides), puis tente la construction du `Location` ; si l'adjacence globale casse (`ValidationError` du `_validate_zones_graph`), fallback sur `combat_zones=[]` sans perdre le reste de l'output.
 
 ### `quest_generator.py` — `QuestGenerator`
 
@@ -136,9 +142,12 @@ Contraintes enforced par prompt uniquement (pas code) :
 
 **Prompt** : `system_arc_generator.txt` — Structure dramatique (introduction → montée → twist → climax boss → résolution). Règles :
 - 10-15 beats, dernier = `encounter_type=boss`
-- **Pas de mentions mécaniques** (HP, dés, dégâts)
+- **Pas de mentions mécaniques** (HP, dés, dégâts) dans le narratif
 - Contenu narratif en français (ou langue demandée)
 - Chaque beat inclut un `completion_trigger` (type + target) et un `on_complete` (BeatEffects : unlock_exits, state_flags, narrative_hint)
+- **Villain stat block mandatory** (Task 42) : le prompt exige un `villain_stat_block` complet (NPCStatBlock : tier=boss, 2-3 signatures thématiques, 3 legendary_actions costs 1/2/3, 1-2 phases). Casing enums strict : `damage_type` TitleCase (`"Slashing"`), `save_ability` UPPERCASE (`"WIS"`), `target_scope`/`kind` lowercase, `condition_name` TitleCase.
+
+**Parser villain_stat_block** : `_resolve_villain_stat_block` valide séparément avant `StoryArc.model_validate`. En cas de `ValidationError` (casing cassé, champs manquants) ou payload absent, fallback sur `get_archetype('generic_boss')` tagué `archetype="generic_boss:<villain_name>"` pour traçabilité. Un arc généré a donc TOUJOURS un `villain_stat_block != None`.
 
 ⚠ `StoryArc.campaign_id` initialisé à `""` — le caller doit le remplir.
 

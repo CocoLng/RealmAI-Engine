@@ -98,8 +98,25 @@ def _migrate_v2_to_v3(raw: sqlite3.Connection) -> None:
     _add_column_if_missing(raw, "locations", "unlocked_exits", "JSON DEFAULT '[]'")
 
 
+def _migrate_v3_to_v4(raw: sqlite3.Connection) -> None:
+    """V3 → V4: combat system persistence columns.
+
+    - ``combat_zones`` (Task 22 — never migrated, guarded here for safety).
+    - ``combat_triggers`` (Task 41).
+    - ``npc_roles`` (Task 43).
+    """
+    _add_column_if_missing(raw, "locations", "combat_zones", "JSON DEFAULT '[]'")
+    _add_column_if_missing(raw, "locations", "combat_triggers", "JSON DEFAULT '{}'")
+    _add_column_if_missing(raw, "locations", "npc_roles", "JSON DEFAULT '{}'")
+
+
 # Ordered list of migration functions. Index 0 = v0→v1, index 1 = v1→v2, etc.
-_MIGRATIONS = [_migrate_v0_to_v1, _migrate_v1_to_v2, _migrate_v2_to_v3]
+_MIGRATIONS = [
+    _migrate_v0_to_v1,
+    _migrate_v1_to_v2,
+    _migrate_v2_to_v3,
+    _migrate_v3_to_v4,
+]
 
 
 def _migrate_schema(engine: Engine) -> None:

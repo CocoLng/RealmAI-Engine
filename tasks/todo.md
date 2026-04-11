@@ -29,10 +29,10 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 32 — Résolution de FLEE (check DEX)
 
 ### Phase 4 — Interprète & générateurs LLM (parallèle)
-- [ ] Task 40 — Interprète : détection d'intention létale
-- [ ] Task 41 — World generator : zones + triggers
-- [ ] Task 42 — Arc generator : villain stat block complet
-- [ ] Task 43 — Hydration : dispatch par tier d'archétype
+- [x] Task 40 — Interprète : détection d'intention létale
+- [x] Task 41 — World generator : zones + triggers
+- [x] Task 42 — Arc generator : villain stat block complet
+- [x] Task 43 — Hydration : dispatch par tier d'archétype
 
 ### Phase 5 — IA tactique (NPC brains)
 - [ ] Task 50 — IA scripted pour minions

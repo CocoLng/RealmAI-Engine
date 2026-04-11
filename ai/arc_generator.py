@@ -2,10 +2,15 @@
 
 import logging
 from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
 
 from ai.client import OllamaClient
 from ai.language import language_instruction
 from engine.arc_recipes import ArcRecipe
+from engine.npc_library import get_archetype
+from engine.npc_stat_block import NPCStatBlock
 from world.story_arc import StoryArc
 
 logger = logging.getLogger(__name__)
@@ -64,12 +69,48 @@ class ArcGenerator:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.9, think=False)
+
+        # --- Villain stat block parsing with generic_boss fallback (task 42) ---
+        # Validate the stat block separately so we can fallback cleanly when the
+        # LLM emits an invalid or missing payload, without losing the rest of
+        # the arc.
+        data["villain_stat_block"] = self._resolve_villain_stat_block(data).model_dump()
+
         arc = StoryArc.model_validate(data)
         logger.info(
-            "ARC theme=%r beats=%d villain=%r",
+            "ARC theme=%r beats=%d villain=%r stat_block=%s",
             arc.theme, len(arc.beats), arc.villain_name,
+            arc.villain_stat_block.archetype if arc.villain_stat_block else "none",
         )
         return arc
+
+    @staticmethod
+    def _resolve_villain_stat_block(data: dict[str, Any]) -> NPCStatBlock:
+        """Validate ``data['villain_stat_block']`` or fallback on generic_boss.
+
+        Strategy:
+          1. Try ``NPCStatBlock.model_validate`` on the raw payload.
+          2. On any :class:`ValidationError` (or missing payload), log and
+             return a fresh ``get_archetype('generic_boss')`` instance whose
+             ``archetype`` field is tagged with the villain name so the
+             hydration layer can trace the fallback.
+        """
+        raw_stat_block = data.get("villain_stat_block")
+        villain_name = str(data.get("villain_name") or "unknown")
+
+        if raw_stat_block is not None:
+            try:
+                return NPCStatBlock.model_validate(raw_stat_block)
+            except ValidationError as exc:
+                logger.warning(
+                    "Invalid villain_stat_block from arc generator for %r, "
+                    "falling back to generic_boss. Error: %s",
+                    villain_name, exc,
+                )
+
+        fallback = get_archetype("generic_boss")
+        fallback.archetype = f"generic_boss:{villain_name}"
+        return fallback
 
     def _build_user_message(self, theme: str, player_count: int) -> str:
         """Build the user message for the LLM prompt (legacy, no recipe).

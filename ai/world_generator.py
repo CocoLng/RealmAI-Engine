@@ -3,8 +3,12 @@
 import logging
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from ai.client import OllamaClient
 from ai.language import language_instruction
+from world.combat_trigger_def import CombatTriggerDef
+from world.combat_zone import Zone
 from world.location import Location
 
 logger = logging.getLogger(__name__)
@@ -122,19 +126,93 @@ class WorldGenerator:
                 orphan_keys,
             )
 
-        location = Location(
-            name=str(data["name"]),
-            description=str(data["description"]),
-            connections=connections,
-            exit_aliases=exit_aliases,
-            npcs_present=list(data.get("npcs_present", [])),
-            items_available=items_available,
-            item_descriptions=item_descriptions,
-        )
+        # --- npc_details.role extraction for hydration dispatch (task 43) ---
+        raw_npc_details = data.get("npc_details") or []
+        npc_roles: dict[str, str] = {}
+        if isinstance(raw_npc_details, list):
+            for entry in raw_npc_details:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("name")
+                role = entry.get("role")
+                if (
+                    isinstance(name, str)
+                    and name.strip()
+                    and isinstance(role, str)
+                    and role.strip()
+                ):
+                    npc_roles[name.strip()] = role.strip()
+
+        # --- Combat zones parsing (task 41) ---
+        raw_zones = data.get("combat_zones") or []
+        combat_zones_parsed: list[Zone] = []
+        if isinstance(raw_zones, list):
+            for raw in raw_zones:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    combat_zones_parsed.append(Zone.model_validate(raw))
+                except ValidationError as exc:
+                    logger.warning(
+                        "Dropping invalid combat zone: %s (error: %s)", raw, exc,
+                    )
+
+        # --- Combat triggers parsing (task 41) ---
+        raw_triggers = data.get("combat_triggers") or {}
+        triggers_parsed: dict[str, CombatTriggerDef] = {}
+        if isinstance(raw_triggers, dict):
+            for key, raw in raw_triggers.items():
+                if not isinstance(raw, dict):
+                    continue
+                payload = {k: v for k, v in raw.items() if k != "item_name"}
+                try:
+                    triggers_parsed[str(key)] = CombatTriggerDef(
+                        item_name=str(key), **payload,
+                    )
+                except ValidationError as exc:
+                    logger.warning(
+                        "Dropping invalid combat trigger %s: %s", key, exc,
+                    )
+
+        try:
+            location = Location(
+                name=str(data["name"]),
+                description=str(data["description"]),
+                connections=connections,
+                exit_aliases=exit_aliases,
+                npcs_present=list(data.get("npcs_present", [])),
+                items_available=items_available,
+                item_descriptions=item_descriptions,
+                combat_zones=combat_zones_parsed,
+                combat_triggers=triggers_parsed,
+                npc_roles=npc_roles,
+            )
+        except ValidationError as exc:
+            # The zone adjacency graph is validated globally by Location.
+            # If the LLM hallucinates a broken graph, fall back to building
+            # the location without combat_zones so we don't lose the rest
+            # of the generation.
+            logger.warning(
+                "Zone graph invalid, falling back to empty combat_zones: %s",
+                exc,
+            )
+            location = Location(
+                name=str(data["name"]),
+                description=str(data["description"]),
+                connections=connections,
+                exit_aliases=exit_aliases,
+                npcs_present=list(data.get("npcs_present", [])),
+                items_available=items_available,
+                item_descriptions=item_descriptions,
+                combat_zones=[],
+                combat_triggers=triggers_parsed,
+                npc_roles=npc_roles,
+            )
         logger.info(
-            "WORLD name=%r type=%s connections=%d aliases=%d",
+            "WORLD name=%r type=%s connections=%d aliases=%d zones=%d triggers=%d",
             location.name, location_type,
             len(location.connections), len(location.exit_aliases),
+            len(location.combat_zones), len(location.combat_triggers),
         )
         return location
 

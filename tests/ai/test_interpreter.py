@@ -444,3 +444,68 @@ def test_combat_scene_summary_serialized(
     user_message = body["messages"][-1]["content"]
     assert "Round 3" in user_message
     assert "Goblin" in user_message
+
+
+# ---------------------------------------------------------------------------
+# Lethal intent detection (Task 40)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_json_with_lethal_intent_flag(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """An LLM response that includes is_lethal_intent=True propagates."""
+    response_data = {
+        "action_type": "Improvise",
+        "actor_name": "Aldric",
+        "target_name": "Père Aldric",
+        "improvise_description": "charge the priest with sword",
+        "is_lethal_intent": True,
+        "confidence": 0.9,
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = interpreter.interpret(
+        player_text="je sors mon épée et je charge Père Aldric",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+
+    assert result.is_lethal_intent is True
+    assert result.target_name == "Père Aldric"
+
+
+def test_parse_legacy_json_defaults_lethal_intent_false(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """An LLM response without the is_lethal_intent field defaults to False."""
+    response_data = {
+        "action_type": "Look",
+        "actor_name": "Aldric",
+        "confidence": 0.95,
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = interpreter.interpret(
+        player_text="je regarde",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+
+    assert result.is_lethal_intent is False
+
+
+def test_lethal_intent_section_present_in_prompt() -> None:
+    """The interpreter prompt contains the lethal intent detection section."""
+    from ai.interpreter import _SYSTEM_PROMPT
+
+    assert "Détection d'intention létale" in _SYSTEM_PROMPT
+    assert "is_lethal_intent" in _SYSTEM_PROMPT
+    # Positive example
+    assert "poignarde" in _SYSTEM_PROMPT
+    # Negative example / rule
+    assert "menace" in _SYSTEM_PROMPT

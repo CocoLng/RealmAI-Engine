@@ -22,6 +22,11 @@ class InterpretedAction(BaseModel):
     talk_topic: str | None = None
     search_detail: str | None = None
     improvise_description: str | None = None
+    # Combat-entry signal: True when the interpreter detected an explicit
+    # intent to physically harm a named/visible creature. Consumed by
+    # combat_entry (task 20) / the action pipeline (task 31) to bootstrap
+    # combat even when the action_type is IMPROVISE/TALK rather than ATTACK.
+    is_lethal_intent: bool = False
 
 
 class NarrativeResult(BaseModel):

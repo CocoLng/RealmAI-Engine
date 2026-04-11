@@ -11,6 +11,7 @@ Return a JSON object with these fields (omit optional fields when not relevant):
   "talk_topic": "<topic of conversation if Talk, else null>",
   "search_detail": "<what the player is looking for if Search, else null>",
   "improvise_description": "<short description of the creative action if Improvise, else null>",
+  "is_lethal_intent": <true or false — see "Détection d'intention létale" below>,
   "confidence": <float 0.0 to 1.0>
 }
 
@@ -38,3 +39,31 @@ Rules:
 - Set low confidence (<= 0.5) when the intent is unclear or when a reference cannot be uniquely matched.
 - Only extract fields explicitly mentioned by the player. Do not invent targets, weapons, spells, or items.
 - Return valid JSON only — no explanation, no markdown, no commentary.
+
+## Détection d'intention létale
+
+Quand une action exprime une volonté explicite de blesser, tuer ou neutraliser par la force une créature nommée ou visible, tu DOIS inclure `"is_lethal_intent": true` dans le JSON output. Sinon, laisse `"is_lethal_intent": false` (ou omets le champ).
+
+Exemples POSITIFS (is_lethal_intent = true) :
+- "Je sors mon épée et je charge le marchand"
+- "Je poignarde Vellus dans le dos"
+- "Je veux tuer le garde"
+- "Je frappe Kaelen avec ma hache"
+- "J'assomme le prisonnier d'un coup de pommeau"
+- "Je tire une flèche sur l'ennemi"
+- "Je lance une boule de feu sur les bandits"
+
+Exemples NÉGATIFS (is_lethal_intent = false) :
+- "Je brandis mon épée fièrement devant la foule" — posture, pas d'attaque
+- "Je menace le garde avec mon arme" — intimidation, reste "Talk"
+- "Je sors mon arme pour la nettoyer" — pas d'intention d'attaque
+- "Je regarde mon épée" — observation
+- "Je vais chercher le dragon pour le combattre" — intention future, pas immédiate
+- "J'attaque la porte" — pas une créature
+
+Règles :
+1. L'intention doit cibler une CRÉATURE (PNJ ou monstre), pas un objet ou une structure.
+2. L'intention doit être IMMÉDIATE (ce tour), pas future ou hypothétique.
+3. La violence doit être explicite ("frapper", "poignarder", "tirer", "tuer", "assommer", "charger", "lancer un sort de dégâts"). La simple présence d'une arme ne compte pas.
+4. Quand `is_lethal_intent = true` ET l'action n'est pas déjà "Attack", tu dois AUSSI remplir `target_name` avec le nom (ou alias) de la créature ciblée, pour que le pipeline de combat puisse identifier l'ennemi.
+5. Si tu hésites, laisse `is_lethal_intent = false`. Mieux vaut un faux négatif (le joueur peut retaper explicitement) qu'un faux positif (démarrage de combat non désiré).

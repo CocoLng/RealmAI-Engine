@@ -5,6 +5,7 @@ Represents places in the game world that players can visit.
 
 from pydantic import BaseModel, Field, model_validator
 
+from world.combat_trigger_def import CombatTriggerDef
 from world.combat_zone import Zone
 
 
@@ -28,6 +29,24 @@ class Location(BaseModel):
     Empty for locations that do not (yet) support combat encounters. When
     non-empty, the adjacency graph is validated to be consistent and
     symmetric on instantiation.
+    """
+    combat_triggers: dict[str, CombatTriggerDef] = Field(default_factory=dict)
+    """Ambush triggers keyed by item/mechanism name.
+
+    Empty for locations with no scripted ambush. The
+    :mod:`bot.combat_entry` module consumes a matching entry when the
+    player interacts with the keyed item, spawning the associated NPCs
+    into combat. Consumed triggers remain in place with ``consumed=True``
+    to keep the mechanism idempotent.
+    """
+    npc_roles: dict[str, str] = Field(default_factory=dict)
+    """World-generator-provided archetype hints keyed by NPC name.
+
+    Populated from ``npc_details[*].role`` when the world generator
+    tags an NPC with a role from :mod:`engine.npc_library`. Consumed by
+    :mod:`bot.scene_hydration` to dispatch the NPC to the right stat block
+    (``captain``, ``soldier``, ``mage``, ...) instead of the default
+    ``commoner``. Unknown roles are simply ignored by the hydration layer.
     """
 
     # ------------------------------------------------------------------

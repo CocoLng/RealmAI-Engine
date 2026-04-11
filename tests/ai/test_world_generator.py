@@ -389,3 +389,202 @@ def test_build_user_message_includes_required_connections(
     assert "Required connections to preserve" in msg
     assert "Parent Village" in msg
     assert "Old Well" in msg
+
+
+# ---------------------------------------------------------------------------
+# Combat zones & triggers (Task 41)
+# ---------------------------------------------------------------------------
+
+
+def test_parses_combat_zones_from_json(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """combat_zones in the LLM output are parsed onto the Location."""
+    response_data = {
+        "name": "Temple oublié",
+        "description": "Un sanctuaire abandonné.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+        "combat_zones": [
+            {
+                "name": "Autel central",
+                "description": "Une estrade de pierre.",
+                "adjacent_zone_names": ["Alcôve sud"],
+                "tags": ["elevated"],
+            },
+            {
+                "name": "Alcôve sud",
+                "description": "Un renfoncement poussiéreux.",
+                "adjacent_zone_names": ["Autel central"],
+                "tags": ["obscured"],
+            },
+        ],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Ancien ordre disparu.",
+        location_type="temple",
+    )
+
+    assert len(result.combat_zones) == 2
+    assert result.has_combat_zones()
+    assert result.get_zone("Autel central") is not None
+    assert result.are_adjacent("Autel central", "Alcôve sud")
+
+
+def test_drops_invalid_zones_with_asymmetric_adjacency(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """Asymmetric zone graphs trigger a fallback to empty combat_zones."""
+    response_data = {
+        "name": "Grotte brisée",
+        "description": "Une grotte humide.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+        "combat_zones": [
+            {
+                "name": "Entrée",
+                "adjacent_zone_names": ["Fond"],
+                "tags": [],
+            },
+            {
+                # Asymmetric: does NOT list "Entrée" back
+                "name": "Fond",
+                "adjacent_zone_names": [],
+                "tags": [],
+            },
+        ],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Donjon.",
+        location_type="cave",
+    )
+
+    # Parser catches the Location ValidationError and drops combat_zones.
+    assert result.combat_zones == []
+    assert not result.has_combat_zones()
+
+
+def test_parses_combat_triggers_from_json(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """combat_triggers in the LLM output are parsed onto the Location."""
+    response_data = {
+        "name": "Salle des urnes",
+        "description": "Une salle rituelle.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": ["Urne scellée"],
+        "combat_triggers": {
+            "Urne scellée": {
+                "spawn_npcs": ["Spectre affamé"],
+                "reveal_narration": "L'urne se brise et un spectre en jaillit.",
+            }
+        },
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Crypte maudite.",
+        location_type="crypt",
+    )
+
+    assert "Urne scellée" in result.combat_triggers
+    trigger = result.combat_triggers["Urne scellée"]
+    assert trigger.item_name == "Urne scellée"
+    assert "Spectre affamé" in trigger.spawn_npcs
+    assert "spectre" in trigger.reveal_narration.lower()
+    assert trigger.consumed is False
+
+
+def test_empty_zones_and_triggers_accepted(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """A peaceful tavern can emit combat_zones=[] and combat_triggers={}."""
+    response_data = {
+        "name": "Taverne paisible",
+        "description": "Un feu crépite dans l'âtre.",
+        "connections": ["Rue principale"],
+        "npcs_present": ["Aubergiste"],
+        "items_available": [],
+        "combat_zones": [],
+        "combat_triggers": {},
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Village tranquille.",
+        location_type="tavern",
+    )
+
+    assert result.combat_zones == []
+    assert result.combat_triggers == {}
+    assert not result.has_combat_zones()
+
+
+def test_zone_validation_error_does_not_crash_generation(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """A zone with an unknown adjacent neighbor is dropped silently."""
+    response_data = {
+        "name": "Chambre",
+        "description": "Une chambre.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+        "combat_zones": [
+            {
+                "name": "Centre",
+                # References a zone that does not exist → Location validator
+                # will reject the whole graph; parser falls back to empty.
+                "adjacent_zone_names": ["Inexistante"],
+                "tags": [],
+            },
+        ],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    # Should not raise; instead drops combat_zones and returns a usable
+    # Location with the rest of the fields.
+    result = generator.generate(
+        campaign_context="Manoir.",
+        location_type="room",
+    )
+
+    assert isinstance(result, Location)
+    assert result.name == "Chambre"
+    assert result.combat_zones == []
+
+
+def test_invalid_trigger_entry_dropped_silently(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """A trigger whose payload is not a dict is dropped with a warning."""
+    response_data = {
+        "name": "Place",
+        "description": "Une place.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+        "combat_triggers": {
+            "Urne": "not a dict",
+            "Sceau": {
+                "spawn_npcs": ["Ombre"],
+                "reveal_narration": "Le sceau se brise.",
+            },
+        },
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Donjon.",
+        location_type="room",
+    )
+
+    assert "Urne" not in result.combat_triggers
+    assert "Sceau" in result.combat_triggers

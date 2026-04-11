@@ -73,6 +73,8 @@ class LocationRow(Base):
     unlocked_exits: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     generated: Mapped[bool] = mapped_column(default=True, nullable=False)
     combat_zones: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    combat_triggers: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
+    npc_roles: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
 
 
 class QuestRow(Base):

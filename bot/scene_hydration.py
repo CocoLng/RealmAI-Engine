@@ -10,10 +10,16 @@ This module is the bridge: at campaign launch and after every MOVE, we walk
 ``npcs`` table for the campaign. Already-persisted NPCs are left untouched
 (idempotent).
 
-Hydrated NPCs use the lightest possible commoner stats — they exist primarily
-so the player can talk to them. They are deliberately fragile (``max_hp=4``)
-so :func:`bot.action_pipeline.ActionPipeline._should_trivial_resolve` treats
-them as one-shot kills if attacked.
+**Tier dispatch (Task 43)** — Hydrated NPCs are no longer always commoners:
+  1. Villain (``arc.villain_name == name``) → custom ``arc.villain_stat_block``
+     (or ``generic_boss`` fallback if the arc did not produce one).
+  2. Explicit ``role`` hint on ``Location.npc_roles`` matching an archetype
+     in :mod:`engine.npc_library` → ``get_archetype(role)``.
+  3. NPC appears in a combat/boss beat → ``get_archetype("guard")``.
+  4. Everyone else → ``get_archetype("commoner")``.
+HP/AC/ability scores are derived from the stat block's tier; narrative fields
+(``description``, ``personality``, ``secrets``, ``dialogue_history``) are
+preserved across idempotent upgrades.
 """
 
 from __future__ import annotations
@@ -26,31 +32,184 @@ from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
 from engine.character import AbilityScores, Race
 from engine.inventory import Item, ItemType
+from engine.npc_library import ARCHETYPE_BUILDERS, get_archetype
+from engine.npc_stat_block import NPCStatBlock, NPCTier
+from world.location import Location
 from world.npc import NPC, NPCDisposition
 
 if TYPE_CHECKING:
     from bot.game_session import GameSession
+    from world.story_arc import StoryArc
 
 logger = logging.getLogger(__name__)
 
 
-def _build_default_npc(name: str, location_name: str) -> NPC:
-    """Create a minimal commoner NPC for a name with no prior backstory."""
+def _stats_from_stat_block(
+    sb: NPCStatBlock,
+) -> tuple[int, int, int, AbilityScores]:
+    """Derive ``(hp, max_hp, ac, ability_scores)`` from a tier.
+
+    The legacy ``NPC`` model carries per-tier fields the engine uses for
+    trivial resolve, health bars, and damage calc. We snapshot them from a
+    fixed per-tier table so combat-capable NPCs are no longer one-shot.
+    """
+    if sb.tier == NPCTier.MINION:
+        return (
+            8,
+            8,
+            12,
+            AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+        )
+    if sb.tier == NPCTier.ELITE:
+        return (
+            25,
+            25,
+            14,
+            AbilityScores(STR=14, DEX=12, CON=13, INT=10, WIS=12, CHA=12),
+        )
+    # BOSS
+    return (
+        55,
+        55,
+        16,
+        AbilityScores(STR=16, DEX=14, CON=14, INT=12, WIS=14, CHA=14),
+    )
+
+
+def _level_from_tier(tier: NPCTier) -> int:
+    return {NPCTier.MINION: 1, NPCTier.ELITE: 3, NPCTier.BOSS: 6}[tier]
+
+
+def _get_world_role_hint(
+    location: Location, npc_name: str,
+) -> str | None:
+    """Return the world generator's ``role`` hint for ``npc_name``, if any.
+
+    World generator emits a ``role`` key inside each ``npc_details`` entry.
+    The parser persists those roles on :attr:`Location.npc_roles`. This
+    helper looks them up without crashing when the field is absent or
+    empty (back-compat with legacy locations).
+    """
+    roles = getattr(location, "npc_roles", None) or {}
+    if not isinstance(roles, dict):
+        return None
+    value = roles.get(npc_name)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _resolve_archetype(
+    name: str,
+    arc: "StoryArc | None",
+    world_role_hint: str | None,
+) -> tuple[str, NPCStatBlock | None]:
+    """Pick the right archetype for an NPC and optionally a custom stat block.
+
+    Priority:
+      1. Villain by name → the custom ``arc.villain_stat_block``. Falls
+         back to ``generic_boss`` (without a custom stat block) when the
+         arc has no villain stat block attached.
+      2. ``world_role_hint`` matches a library archetype → use it.
+      3. Name appears in a beat with ``encounter_type in {'combat','boss'}``
+         → fall back to ``"guard"``.
+      4. Default → ``"commoner"``.
+
+    Returns ``(archetype_name, custom_stat_block_or_None)``.
+    """
+    if arc is not None and name == arc.villain_name:
+        if arc.villain_stat_block is not None:
+            return (arc.villain_stat_block.archetype, arc.villain_stat_block)
+        return ("generic_boss", None)
+
+    if world_role_hint is not None and world_role_hint in ARCHETYPE_BUILDERS:
+        return (world_role_hint, None)
+
+    if arc is not None:
+        for beat in arc.beats:
+            if beat.encounter_type in ("combat", "boss") and name in beat.npc_names:
+                return ("guard", None)
+
+    return ("commoner", None)
+
+
+def _build_npc_by_context(
+    name: str,
+    location_name: str,
+    arc: "StoryArc | None",
+    world_role_hint: str | None = None,
+) -> NPC:
+    """Create an NPC with the right stat block for its narrative role."""
+    archetype_name, custom_stat_block = _resolve_archetype(
+        name, arc, world_role_hint,
+    )
+    stat_block = (
+        custom_stat_block
+        if custom_stat_block is not None
+        else get_archetype(archetype_name)
+    )
+    hp, max_hp, ac, ability_scores = _stats_from_stat_block(stat_block)
+    disposition = (
+        NPCDisposition.HOSTILE
+        if stat_block.tier != NPCTier.MINION
+        else NPCDisposition.NEUTRAL
+    )
     return NPC(
         name=name,
         race=Race.HUMAN,
         char_class=None,
-        level=1,
-        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
-        hp=4,
-        max_hp=4,
-        ac=10,
-        disposition=NPCDisposition.NEUTRAL,
+        level=_level_from_tier(stat_block.tier),
+        ability_scores=ability_scores,
+        hp=hp,
+        max_hp=max_hp,
+        ac=ac,
+        disposition=disposition,
         is_alive=True,
         description="",
         personality="",
         location_name=location_name,
         aliases=[],
+        stat_block=stat_block,
+    )
+
+
+# Kept under the old name for backward compatibility with tests that only
+# need a minimal commoner NPC without arc/role dispatch. New callers must
+# prefer :func:`_build_npc_by_context`.
+def _build_default_npc(name: str, location_name: str) -> NPC:
+    """Create a minimal commoner NPC for a name with no prior backstory."""
+    return _build_npc_by_context(
+        name=name,
+        location_name=location_name,
+        arc=None,
+        world_role_hint=None,
+    )
+
+
+def _should_upgrade_npc(
+    existing: NPC,
+    *,
+    arc: "StoryArc | None",
+) -> bool:
+    """Return ``True`` when an existing NPC row is under-statted and needs
+    to be upgraded to a real stat block.
+
+    Upgrade triggers when the existing NPC has no stat block AND either
+    matches the villain name or appears in a combat/boss beat. This keeps
+    hydration idempotent: re-running it on an NPC that was created by the
+    legacy code path (pre-task 43) will correct the stats without
+    destroying the conversation history.
+    """
+    if existing.stat_block is not None:
+        return False
+    if arc is None:
+        return False
+    if existing.name == arc.villain_name:
+        return True
+    return any(
+        beat.encounter_type in ("combat", "boss")
+        and existing.name in beat.npc_names
+        for beat in arc.beats
     )
 
 
@@ -75,6 +234,7 @@ def hydrate_scene(
     if location is None:
         return
     campaign_id = session.campaign.id
+    arc = getattr(session, "story_arc", None)
 
     db_session = db_factory()
     try:
@@ -83,13 +243,34 @@ def hydrate_scene(
 
         # 1. Hydrate any missing NPC.
         created = 0
+        upgraded = 0
         for name in location.npcs_present:
             if not name or not name.strip():
                 continue
             existing = npc_repo.get_by_name(name, campaign_id)
+            world_role = _get_world_role_hint(location, name)
             if existing is None:
-                npc_repo.save(_build_default_npc(name, location.name), campaign_id)
+                npc_repo.save(
+                    _build_npc_by_context(name, location.name, arc, world_role),
+                    campaign_id,
+                )
                 created += 1
+            elif _should_upgrade_npc(existing, arc=arc):
+                # Idempotent upgrade: an NPC created by the legacy code path
+                # matches the villain name or a combat beat but has no stat
+                # block. Rebuild with the right archetype/stat_block and
+                # preserve narrative state.
+                replacement = _build_npc_by_context(
+                    name, location.name, arc, world_role,
+                )
+                replacement.description = existing.description
+                replacement.personality = existing.personality
+                replacement.secrets = list(existing.secrets)
+                replacement.knowledge = list(existing.knowledge)
+                replacement.dialogue_history = list(existing.dialogue_history)
+                replacement.aliases = list(existing.aliases)
+                npc_repo.update(replacement, campaign_id)
+                upgraded += 1
             elif existing.location_name != location.name:
                 # NPC exists in DB but isn't tagged to this location yet —
                 # rebind so the resolver picks them up.
@@ -110,10 +291,10 @@ def hydrate_scene(
         npcs = npc_repo.list_by_location(location.name, campaign_id)
         session.npcs = {n.name: n for n in npcs}
 
-        if created:
+        if created or upgraded:
             logger.info(
-                "SCENE hydrated campaign=%s location=%s npcs_created=%d total=%d",
-                campaign_id, location.name, created, len(session.npcs),
+                "SCENE hydrated campaign=%s location=%s created=%d upgraded=%d total=%d",
+                campaign_id, location.name, created, upgraded, len(session.npcs),
             )
     except Exception:
         logger.warning(
@@ -265,8 +446,8 @@ def describe_scene_for_narrator(
             if active:
                 lines.append("## Environment state\n" + ", ".join(active))
 
-    if getattr(session, "story_arc", None) is not None:
-        arc = session.story_arc
+    arc = getattr(session, "story_arc", None)
+    if arc is not None:
         beat = arc.beats[arc.current_beat_index]
         lines.append(f"## Current story beat\n{beat.title} — {beat.description}")
 
