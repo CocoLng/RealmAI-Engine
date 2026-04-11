@@ -315,6 +315,12 @@ Les bosses ont `legendary_points_per_round` points de legendary action (3 par d�
 
 `advance_turn` hooke cette logique à deux endroits : (1) après chaque fin de tour PC, itère sur les bosses ennemis vivants et déclenche `maybe_spend_legendary_action` — les summaries retournés sont accumulés sur `CombatState.pending_legendary_summaries` pour consommation par le TurnManager (task 64) ; (2) quand le nouveau combattant actif est un boss, reset `legendary_points_remaining = stat_block.legendary_points_per_round` (5e RAW : reset au début du tour du boss, pas au round).
 
+### Phase transitions (task 54)
+
+Les bosses peuvent avoir plusieurs `PhaseTransition` sur leur stat block (typiquement 50% / 25% HP). `engine/combat_phases.py::check_phase_transition(combatant)` est une fonction pure : elle calcule `hp_percent` et, pour chaque phase non-triggered dont le seuil est franchi, flippe `triggered=True`, applique `attack_bonus` à **toutes** les `NPCAttack` du stat block, ajoute `save_bonus` à `Combatant.phase_save_bonus` (cumulatif), et unlock les signatures listées dans `unlock_signatures` (bump leur `uses_remaining` de 0 à 1). Retourne la liste des phases qui viennent de se déclencher — peut en contenir plusieurs sur un gros coup qui traverse plusieurs seuils en une passe.
+
+`engine.combat.apply_damage(combatant, damage, state=None)` hook le check après la gestion de concentration et avant la transition vers 0 HP. **Toujours** exécute la mutation du stat block (effet mécanique immédiat). **Optionnellement**, si le caller fournit un `CombatState`, append un `PhaseTransitionEvent(combatant_name, phase_index, narrative_cue)` à `state.pending_phase_narrations` pour que le narrateur (task 71) puisse tisser la `narrative_cue` dans la narration du prochain tour. Les callers qui passent déjà `state` : `execute_signature_ability` (task 51). Les callers legacy (resolve_attack, resolve_npc_attack, cast_spell) laissent `state=None` et les mutations s'appliquent quand même — seule la narration est différée. Un heal qui remonte au-dessus du seuil après déclenchement ne re-déclenche pas la phase (5e RAW : phase triggered is permanent).
+
 ## Dépendances inter-modules
 
 ```

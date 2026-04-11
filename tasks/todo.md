@@ -39,7 +39,7 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 51 — IA elite : behavior profiles + signatures
 - [x] Task 52 — Boss : LLM tactician
 - [x] Task 53 — Legendary actions off-turn
-- [ ] Task 54 — Phase transitions
+- [x] Task 54 — Phase transitions
 
 ### Phase 6 — Discord UI
 - [ ] Task 60 — Module d'embeds de jets de dés

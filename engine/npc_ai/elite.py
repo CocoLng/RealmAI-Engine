@@ -306,7 +306,7 @@ def execute_signature_ability(
             continue
 
         if effect.kind == "damage":
-            summaries.extend(_apply_damage_effect(effect, targets))
+            summaries.extend(_apply_damage_effect(effect, targets, state))
         elif effect.kind == "heal":
             summaries.extend(_apply_heal_effect(effect, targets))
         elif effect.kind == "condition":
@@ -318,6 +318,7 @@ def execute_signature_ability(
 def _apply_damage_effect(
     effect: SignatureAbilityEffect,
     targets: list[Combatant],
+    state: CombatState,
 ) -> list[str]:
     dice_expr = effect.dice or "1d6"
     summaries: list[str] = []
@@ -326,7 +327,7 @@ def _apply_damage_effect(
             continue
         rolled = roll(dice_expr).total
         damage = max(0, rolled)
-        apply_damage(target, damage)
+        apply_damage(target, damage, state=state)
         summaries.append(f"{target.name} takes {damage} damage")
     return summaries
 

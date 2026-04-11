@@ -844,16 +844,28 @@ def resolve_death_save(combatant: Combatant) -> DeathSaveResult:
 # ---------------------------------------------------------------------------
 
 
-def apply_damage(combatant: Combatant, damage: int) -> Combatant:
+def apply_damage(
+    combatant: Combatant,
+    damage: int,
+    state: "CombatState | None" = None,
+) -> Combatant:
     """Subtract damage from HP, clamped at 0.
 
     If HP reaches 0:
     - PLAYER: set unconscious, reset death saves.
     - ENEMY: is_alive=False (instant death).
 
-    Additionally, if the combatant was concentrating on a spell, a CON
-    save is rolled via :func:`_on_damage_taken` and the concentration
-    condition is dropped on failure (task 22 hook).
+    Additional hooks:
+
+    - **Concentration (task 22)** — if the combatant was concentrating
+      on a spell, a CON save is rolled via :func:`_on_damage_taken` and
+      the concentration condition is dropped on failure.
+    - **Phase transitions (task 54)** — if the combatant has a stat
+      block with phases, :func:`engine.combat_phases.check_phase_transition`
+      runs and applies any crossed-threshold bonuses in place. When a
+      ``state`` is supplied, the newly-triggered phases also emit a
+      :class:`PhaseTransitionEvent` on ``state.pending_phase_narrations``
+      so task 71 (narrator) can weave in the ``narrative_cue``.
 
     Mutates in place.
     """
@@ -866,6 +878,24 @@ def apply_damage(combatant: Combatant, damage: int) -> Combatant:
     # caster who drops to 0 HP still loses concentration the same way a
     # still-standing caster would.
     _on_damage_taken(combatant, damage)
+
+    # Phase transition hook (task 54). Always mutates the stat block so
+    # the mechanical bonuses take effect immediately; only appends to
+    # ``state.pending_phase_narrations`` when the caller supplies state.
+    from engine.combat_phases import check_phase_transition
+
+    triggered = check_phase_transition(combatant)
+    if triggered and state is not None:
+        for idx, phase in enumerate(triggered):
+            # ``phase_index`` is the position within the just-triggered
+            # batch; upstream narrator task 71 only needs the cue.
+            state.pending_phase_narrations.append(
+                PhaseTransitionEvent(
+                    combatant_name=combatant.name,
+                    phase_index=idx,
+                    narrative_cue=phase.narrative_cue,
+                )
+            )
 
     if combatant.character.hp == 0 and combatant.is_alive:
         if combatant.side == CombatSide.PLAYER:
