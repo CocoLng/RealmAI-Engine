@@ -409,7 +409,8 @@ def _resolve_exit(
             reason="MOVE action missing target_name",
         )
 
-    matches = _match_candidates(raw, list(location.connections))
+    all_exits = list(location.connections) + list(location.unlocked_exits)
+    matches = _match_candidates(raw, all_exits)
     if not matches:
         return ResolutionResult(
             status="unknown",

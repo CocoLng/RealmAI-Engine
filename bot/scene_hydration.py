@@ -227,8 +227,9 @@ def describe_scene_for_narrator(
     if location is not None:
         lines.append(f"## Location\n{location.name}\n{location.description}")
 
-        if location.connections:
-            lines.append("## Exits\n" + ", ".join(location.connections))
+        all_exits = location.connections + location.unlocked_exits
+        if all_exits:
+            lines.append("## Exits\n" + ", ".join(all_exits))
 
         if location.items_available:
             item_lines = []
@@ -258,6 +259,16 @@ def describe_scene_for_narrator(
                     bits.append(f"— personality: {npc.personality}")
                 npc_lines.append(" ".join(bits))
             lines.append("## NPCs present\n" + "\n".join(npc_lines))
+
+        if location.state_flags:
+            active = [k.replace("_", " ") for k, v in location.state_flags.items() if v]
+            if active:
+                lines.append("## Environment state\n" + ", ".join(active))
+
+    if session.story_arc is not None:
+        arc = session.story_arc
+        beat = arc.beats[arc.current_beat_index]
+        lines.append(f"## Current story beat\n{beat.title} — {beat.description}")
 
     lines.append(f"## Acting character\n{actor_name}")
     return "\n\n".join(lines)
