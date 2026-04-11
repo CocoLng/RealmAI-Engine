@@ -42,6 +42,7 @@ Wrapper `httpx` autour d'`/api/chat`. Une méthode principale : `chat_json(model
 | `PublicEffects` | engine/bot | `hp_delta`, `items_gained/lost`, `gold_delta`, `location_change`, `xp_gained`, `level_up` |
 | `CompletionTrigger` | ArcGenerator (dans StoryBeat) | `type` (interact/defeat/talk/arrive/search/pickup), `target` |
 | `BeatEffects` | ArcGenerator (dans StoryBeat) | `unlock_exits`, `add_npcs`, `remove_items`, `add_items`, `state_flags`, `narrative_hint` |
+| `TacticalDecision` | NPCTactician | `action_type` (attack/signature/move/dodge/disengage), `target_name`, `weapon_name`, `signature_name`, `move_to_zone`, `reasoning`, `legendary_action_name` |
 
 `PublicEffects.to_footer_text()` rend un one-liner pour embed footer. **Aucune donnée sensible** (pas de disposition, pas de rolls cachés).
 
@@ -163,6 +164,20 @@ Contraintes enforced par prompt uniquement (pas code) :
 
 **Prompt** : `system_story_director.txt` — identifie issues de cohérence (contradictions, threads abandonnés) et suggère hooks. Priorité high/medium/low.
 
+### `npc_tactician.py` — `NPCTactician`
+
+**Modèle** : `qwen3.5:4b`, temperature 0.7, `think=False` (même cadence que l'Interpreter — le boss doit jouer vite).
+
+**Entrée** : `decide(boss, state, party_context, recent_events, language)`.
+
+**Prompt** : `system_npc_tactician.txt` — schéma JSON strict, règles « pas de dés, jamais », rappel que `target_name` / `signature_name` / `weapon_name` / `move_to_zone` doivent référencer des entités existantes.
+
+**Sortie** : `TacticalDecision` (Pydantic) — `action_type ∈ {attack, signature, move, dodge, disengage}`, `target_name`, `weapon_name`, `signature_name`, `move_to_zone`, `reasoning` (min 5 chars), `legendary_action_name` (réservé task 53, ignoré en MVP).
+
+**Post-validation** : `NPCTactician._validate_references` vérifie que chaque référence (target, signature, weapon) existe réellement dans le `state` / `stat_block` du boss et raise `ValueError` sinon. C'est ce signal que `engine/npc_ai/boss_brain.py::decide_boss_action` utilise pour retry x2 puis fallback sur `decide_elite_action` (profil AGGRESSIVE) — le boss joue toujours, quitte à jouer bête.
+
+**Règle d'or préservée** : le tactician ne roule aucun dé, n'applique aucun dégât, ne mute pas l'état. Il produit une intention ; l'engine exécute.
+
 ### `entity_resolver.py` — `EntityResolver`
 
 **100% Python + fallback LLM optionnel**. Voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md#phase-2--resolving_entities) pour la stratégie complète.
@@ -194,6 +209,7 @@ SceneContext(
 | `system_quest_generator.txt` | Design de quêtes contextuelles |
 | `system_arc_generator.txt` | Arc de campagne, structure dramatique, completion triggers, beat effects, contenu FR |
 | `system_story_director.txt` | Analyse de cohérence, hooks, priorité |
+| `system_npc_tactician.txt` | Brain tactique boss : schéma JSON strict, règles pas-de-dés, style FR/EN, no narration |
 
 ## Retry et résilience (`bot/llm_retry.py`)
 

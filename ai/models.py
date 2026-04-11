@@ -152,3 +152,25 @@ class NPCSheet(BaseModel):
     description: str = Field(..., min_length=1)
     secrets: list[str] = Field(default_factory=list, min_length=1)
     knowledge: list[str] = Field(default_factory=list, min_length=1)
+
+
+class TacticalDecision(BaseModel):
+    """Output of the NPCTactician LLM for a boss NPC's turn (task 52).
+
+    The LLM picks the action and target (or signature, or destination
+    zone) and explains itself with one or two sentences of reasoning.
+    The engine validates the reference fields against the actual combat
+    state and rolls all the dice — the LLM never touches randomness.
+
+    ``legendary_action_name`` is reserved for a future version where the
+    LLM also drives off-turn legendary action spending; task 53 MVP
+    ignores it (legendary actions stay scripted).
+    """
+
+    action_type: Literal["attack", "signature", "move", "dodge", "disengage"]
+    target_name: str | None = None
+    weapon_name: str | None = None
+    signature_name: str | None = None
+    move_to_zone: str | None = None
+    reasoning: str = Field(min_length=5)
+    legendary_action_name: str | None = None
