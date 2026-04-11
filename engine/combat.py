@@ -131,6 +131,12 @@ class PhaseTransitionEvent(BaseModel):
     combatant_name: str = Field(min_length=1)
     phase_index: int = Field(default=0, ge=0)
     narrative_cue: str = ""
+    consumed: bool = False
+    """True once the dedicated phase-transition narrator path (task 71) has
+    produced a narration for this event. Orthogonal to the mechanical effect,
+    which is applied in :func:`check_phase_transition` as soon as the HP
+    threshold is crossed. Setting ``consumed=True`` prevents double narration
+    on action retries."""
 
 
 class Combatant(BaseModel):
@@ -178,6 +184,12 @@ class CombatState(BaseModel):
     Populated by task 53's ``maybe_spend_legendary_action`` hook and consumed
     by the TurnManager (task 64) so the player sees what the boss did in
     between everyone else's turns."""
+    recent_events: list[str] = Field(default_factory=list)
+    """Short narration-hint strings for the last few mechanical happenings
+    (task 70). The bot appends entries via :func:`record_combat_event` after
+    each combat resolution; the narrator reads the tail of the list to ground
+    its prose. Capped at :data:`RECENT_EVENTS_CAP` to bound serialization size.
+    The engine never reads this list — it is purely for downstream narration."""
 
 
 class AttackResult(BaseModel):
@@ -223,6 +235,33 @@ class DeathSaveResult(BaseModel):
     stabilized: bool
     died: bool
     revived: bool
+
+
+# ---------------------------------------------------------------------------
+# Narration event log (task 70)
+# ---------------------------------------------------------------------------
+
+
+RECENT_EVENTS_CAP: int = 12
+"""Maximum number of narration hints retained on :attr:`CombatState.recent_events`.
+
+The narrator only reads the tail of the list (last 3 entries), so any size
+above that is just headroom. The cap keeps ``combat_state_json`` bounded so a
+long fight does not grow the persisted blob unboundedly."""
+
+
+def record_combat_event(state: CombatState, event_text: str) -> None:
+    """Append a short narration hint to ``state.recent_events`` with a ring cap.
+
+    Bot layer helper — the engine never calls this itself. The wording is
+    the bot's responsibility; the engine only owns the field shape. The
+    list is trimmed to the last :data:`RECENT_EVENTS_CAP` entries on every
+    append so that ``CombatState`` serialization stays bounded during long
+    encounters.
+    """
+    state.recent_events.append(event_text)
+    if len(state.recent_events) > RECENT_EVENTS_CAP:
+        state.recent_events = state.recent_events[-RECENT_EVENTS_CAP:]
 
 
 # ---------------------------------------------------------------------------

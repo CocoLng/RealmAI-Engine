@@ -864,3 +864,67 @@ class TestDisengage:
         disengage(fighter)
         with pytest.raises(ValueError):
             disengage(fighter)
+
+
+# ---------------------------------------------------------------------------
+# Task 70 / 71 — narration plumbing on CombatState + PhaseTransitionEvent
+# ---------------------------------------------------------------------------
+
+
+class TestRecentEventsField:
+    def test_default_is_empty(self) -> None:
+        state = CombatState()
+        assert state.recent_events == []
+
+    def test_record_combat_event_appends(self) -> None:
+        from engine.combat import record_combat_event
+
+        state = CombatState()
+        record_combat_event(state, "Thorin attaque Gob 1 : HIT 8 dégâts.")
+        assert state.recent_events == [
+            "Thorin attaque Gob 1 : HIT 8 dégâts.",
+        ]
+
+    def test_record_combat_event_caps_at_12(self) -> None:
+        from engine.combat import RECENT_EVENTS_CAP, record_combat_event
+
+        state = CombatState()
+        for i in range(15):
+            record_combat_event(state, f"event {i}")
+        assert len(state.recent_events) == RECENT_EVENTS_CAP
+        # Only the latest 12 entries survive.
+        assert state.recent_events[0] == "event 3"
+        assert state.recent_events[-1] == "event 14"
+
+    def test_serialization_round_trip_preserves_recent_events(self) -> None:
+        state = CombatState(
+            recent_events=["a", "b", "c"],
+        )
+        dumped = state.model_dump_json()
+        loaded = CombatState.model_validate_json(dumped)
+        assert loaded.recent_events == ["a", "b", "c"]
+
+
+class TestPhaseTransitionEventConsumed:
+    def test_consumed_defaults_false(self) -> None:
+        event = PhaseTransitionEvent(combatant_name="Vellus")
+        assert event.consumed is False
+
+    def test_consumed_round_trips_through_json(self) -> None:
+        event = PhaseTransitionEvent(
+            combatant_name="Vellus",
+            phase_index=1,
+            narrative_cue="Ses yeux virent au blanc.",
+            consumed=True,
+        )
+        dumped = event.model_dump_json()
+        loaded = PhaseTransitionEvent.model_validate_json(dumped)
+        assert loaded.consumed is True
+        assert loaded.narrative_cue == "Ses yeux virent au blanc."
+
+    def test_legacy_payload_without_consumed_field_deserializes(self) -> None:
+        # A pre-task-71 serialized event does not carry ``consumed``.
+        # The default must kick in so old combat states round-trip cleanly.
+        legacy = '{"combatant_name": "Vellus", "phase_index": 0, "narrative_cue": ""}'
+        loaded = PhaseTransitionEvent.model_validate_json(legacy)
+        assert loaded.consumed is False

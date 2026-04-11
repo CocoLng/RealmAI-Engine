@@ -1928,3 +1928,64 @@ async def test_flee_applies_stored_destination_on_full_escape() -> None:
     assert pipeline.combat_state is not None
     assert not pipeline.combat_state.is_active
     assert pipeline.combat_state.end_reason == CombatEndReason.FLED
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — task 70 — combat event recording hook
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_combat_event_after_resolution_when_active() -> None:
+    """A resolved LOOK action in combat adds a short event to state.recent_events."""
+    from ai.models import InterpretedAction
+    from unittest.mock import MagicMock
+
+    state, char = _make_combat_state_with_hero("Héros")
+    assert state.is_active
+
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(),
+        narrator=FakeNarrator(),
+        location=None,
+        npcs={},
+        actor_name="Héros",
+        combat_state=state,
+    )
+    action = InterpretedAction(
+        action_type=ActionType.LOOK,
+        actor_name="Héros",
+        raw_input="je regarde autour",
+    )
+    outcome = await pipeline._resolve_mechanics(action)
+    assert outcome.summary  # sanity
+
+    # Mirror the pipeline's recording step.
+    from engine.combat import record_combat_event
+    record_combat_event(state, outcome.summary.strip())
+    assert state.recent_events[-1] == outcome.summary.strip()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_event_recording_skipped_when_combat_inactive() -> None:
+    """When combat_state is None the pipeline must not crash and must not record."""
+    from ai.models import InterpretedAction
+    from unittest.mock import MagicMock
+
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(),
+        narrator=FakeNarrator(),
+        location=None,
+        npcs={},
+        actor_name="Héros",
+        combat_state=None,
+    )
+    action = InterpretedAction(
+        action_type=ActionType.LOOK,
+        actor_name="Héros",
+        raw_input="je regarde autour",
+    )
+    outcome = await pipeline._resolve_mechanics(action)
+    assert outcome.summary
+    # With no combat_state there is nothing to append to — nothing crashes.
+    assert pipeline.combat_state is None

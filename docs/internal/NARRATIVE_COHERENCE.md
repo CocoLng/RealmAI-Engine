@@ -32,6 +32,12 @@ Le principe : **le code est seul propriétaire de la vérité mécanique et fact
 - `WorldGenerator.generate()` filtre silencieusement les `item_descriptions` dont la clé ne correspond à aucun item de `items_available`. Empêche une hallucination du LLM de polluer le canon. ⚠ Silencieux — idéalement logger, voir [ISSUES.md](ISSUES.md).
 - `Narrator` attend un JSON strict `{narrative, tone}`. Sur échec de parse, retry + dump sur disque.
 
+### Contexte narrateur en combat (task 70 / 71)
+
+Quand un combat est actif, [bot/scene_hydration.py::describe_scene_for_narrator](../../bot/scene_hydration.py) injecte une section `## COMBAT ACTIVE` dans le contexte passé au narrateur. Elle liste le round courant, le combattant de tour, chaque participant (HP exact pour les PCs, tier vague `indemne / légèrement blessé / gravement blessé / à l'article de la mort` pour les NPCs), la zone, les conditions actives, et l'archétype + tier du stat block ennemi. Les trois derniers événements mécaniques sont exposés via `CombatState.recent_events` — une liste cap-12 alimentée par le bot après chaque résolution (`engine.combat.record_combat_event`). Le bloc `## Acting character` est aussi enrichi en toutes circonstances avec race/classe/niveau/arme équipée pour que le narrateur puisse dire « le clerc nain abat sa masse » plutôt que « le joueur attaque ». [ai/prompts/system_narrator.txt](../../ai/prompts/system_narrator.txt) déclare les règles de narration spéciales (miss=miss, tour par tour, ton tendu, HP NPC vagues, invitation au tour suivant).
+
+Les transitions de phase boss sont narrées via un chemin dédié [ai/narrator_phase.py::narrate_phase_transition](../../ai/narrator_phase.py) qui utilise le prompt [ai/prompts/system_narrator_phase.txt](../../ai/prompts/system_narrator_phase.txt) et retourne une prose cinématique 3-5 phrases. Le hook vit dans [bot/combat_turn_manager.py::_flush_pending_cues](../../bot/combat_turn_manager.py) : après chaque tour, les `PhaseTransitionEvent` non-consommés sont narrés et postés comme embeds dorés (`0xF1C40F`, titre « ✨ Phase transition — {boss} »). `event.consumed = True` est marqué **avant** l'appel LLM pour éviter toute double-narration sur retry ; sur échec narrateur ou client Ollama absent, on retombe gracieusement sur le `narrative_cue` brut du stat block.
+
 ## 2. PNJs — disposition et dialogue
 
 Défini dans [ai/npc_agent.py](../../ai/npc_agent.py) + `ai/prompts/system_npc_agent.txt`.

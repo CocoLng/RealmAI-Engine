@@ -57,6 +57,7 @@ from engine.combat import (
     CombatState,
     TrivialResolveResult,
     check_combat_end,
+    record_combat_event,
     start_combat,
     trivial_resolve,
 )
@@ -366,6 +367,15 @@ class ActionPipeline:
 
         await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)
         outcome = await self._resolve_mechanics(interpreted)
+
+        # Task 70 — record a short narration hint for the narrator context.
+        # Only in active combat: the narrator reads the tail of this list from
+        # the COMBAT ACTIVE section of the scene prompt. The engine never touches
+        # the list; the cap is enforced by ``record_combat_event`` itself.
+        if self.combat_state is not None and self.combat_state.is_active:
+            event_text = outcome.summary.strip()
+            if event_text:
+                record_combat_event(self.combat_state, event_text)
 
         # Beat completion check — deterministic trigger.
         beat_completed = False

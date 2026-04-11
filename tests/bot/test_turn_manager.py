@@ -313,3 +313,204 @@ class TestSessionHelpers:
         session.current_location = None
         tm = _turn_manager(session, _fake_channel())
         assert tm._get_adjacent_zones(pc) == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — task 71 — _flush_pending_cues narrates phase transitions
+# ---------------------------------------------------------------------------
+
+
+class TestFlushPendingPhaseTransitions:
+    @pytest.mark.asyncio
+    async def test_phase_event_consumed_and_gold_embed_posted(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from engine.combat import PhaseTransitionEvent
+
+        pc = _pc()
+        boss = _enemy("Vellus", hp=20, tier=NPCTier.BOSS)
+        session = _fake_session([pc, boss])
+        # Feed a fake ollama client so the narrator path runs.
+        session.ollama_client = MagicMock()
+
+        # Patch the narrator to avoid hitting the LLM.
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.narrate_phase_transition",
+            MagicMock(return_value="L'air devient noir."),
+        )
+
+        session.combat_state.pending_phase_narrations.append(
+            PhaseTransitionEvent(
+                combatant_name="Vellus",
+                phase_index=0,
+                narrative_cue="Ses yeux virent au blanc.",
+            )
+        )
+
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+
+        await tm._flush_pending_cues(session.combat_state)
+
+        # The event must be consumed so subsequent flushes skip it.
+        event = session.combat_state.pending_phase_narrations[0]
+        assert event.consumed is True
+
+        # A phase transition embed must have been posted (gold color, dedicated title).
+        sends_with_embed = [
+            call
+            for call in channel.send.await_args_list
+            if call.kwargs.get("embed") is not None
+        ]
+        phase_embeds = [
+            c.kwargs["embed"]
+            for c in sends_with_embed
+            if c.kwargs["embed"].title and "Phase transition" in c.kwargs["embed"].title
+        ]
+        assert phase_embeds, "no phase transition embed posted"
+        embed = phase_embeds[0]
+        # Gold color 0xF1C40F — discord wraps this in a Colour object.
+        assert embed.color is not None
+        color_value = (
+            embed.color.value if hasattr(embed.color, "value") else int(embed.color)
+        )
+        assert color_value == 0xF1C40F
+        # The narrator output must be the embed body.
+        assert "L'air devient noir." in (embed.description or "")
+
+    @pytest.mark.asyncio
+    async def test_phase_event_already_consumed_is_skipped(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from engine.combat import PhaseTransitionEvent
+
+        pc = _pc()
+        boss = _enemy("Vellus", hp=20, tier=NPCTier.BOSS)
+        session = _fake_session([pc, boss])
+        session.ollama_client = MagicMock()
+
+        narrator_mock = MagicMock(return_value="…")
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.narrate_phase_transition", narrator_mock,
+        )
+
+        session.combat_state.pending_phase_narrations.append(
+            PhaseTransitionEvent(
+                combatant_name="Vellus",
+                phase_index=0,
+                narrative_cue="Old cue.",
+                consumed=True,
+            )
+        )
+
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        await tm._flush_pending_cues(session.combat_state)
+
+        narrator_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_phase_event_marks_consumed_before_llm_call(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If the narrator raises, the event must still be flagged consumed
+        so that subsequent flushes don't retry forever.
+        """
+        from engine.combat import PhaseTransitionEvent
+
+        pc = _pc()
+        boss = _enemy("Vellus", hp=20, tier=NPCTier.BOSS)
+        session = _fake_session([pc, boss])
+        session.ollama_client = MagicMock()
+
+        def _raise(*args: object, **kwargs: object) -> str:
+            raise RuntimeError("LLM down")
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.narrate_phase_transition", _raise,
+        )
+
+        event = PhaseTransitionEvent(
+            combatant_name="Vellus",
+            phase_index=0,
+            narrative_cue="A cue.",
+        )
+        session.combat_state.pending_phase_narrations.append(event)
+
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+
+        # Must not propagate the RuntimeError.
+        await tm._flush_pending_cues(session.combat_state)
+
+        assert event.consumed is True
+        # The raw cue must still have been surfaced as the embed body.
+        sends_with_embed = [
+            call
+            for call in channel.send.await_args_list
+            if call.kwargs.get("embed") is not None
+        ]
+        assert any(
+            "A cue." in (c.kwargs["embed"].description or "")
+            for c in sends_with_embed
+        )
+
+    @pytest.mark.asyncio
+    async def test_phase_event_without_ollama_client_uses_raw_cue(self) -> None:
+        from engine.combat import PhaseTransitionEvent
+
+        pc = _pc()
+        boss = _enemy("Vellus", hp=20, tier=NPCTier.BOSS)
+        session = _fake_session([pc, boss])
+        session.ollama_client = None  # no client → fallback to raw cue
+
+        event = PhaseTransitionEvent(
+            combatant_name="Vellus",
+            phase_index=0,
+            narrative_cue="Ses yeux virent au blanc.",
+        )
+        session.combat_state.pending_phase_narrations.append(event)
+
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        await tm._flush_pending_cues(session.combat_state)
+
+        assert event.consumed is True
+        sends_with_embed = [
+            call
+            for call in channel.send.await_args_list
+            if call.kwargs.get("embed") is not None
+        ]
+        assert any(
+            "Ses yeux virent au blanc." in (c.kwargs["embed"].description or "")
+            for c in sends_with_embed
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_boss_in_state_skips_without_crash(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from engine.combat import PhaseTransitionEvent
+
+        pc = _pc()
+        session = _fake_session([pc])
+        session.ollama_client = MagicMock()
+
+        narrator_mock = MagicMock(return_value="X")
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.narrate_phase_transition", narrator_mock,
+        )
+
+        # Event points at a combatant that was never in the state.
+        event = PhaseTransitionEvent(
+            combatant_name="Nobody",
+            narrative_cue="…",
+        )
+        session.combat_state.pending_phase_narrations.append(event)
+
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        await tm._flush_pending_cues(session.combat_state)
+
+        assert event.consumed is True
+        narrator_mock.assert_not_called()

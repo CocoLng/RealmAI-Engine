@@ -54,11 +54,14 @@ from engine.combat import (
     CombatSide,
     Combatant,
     CombatState,
+    PhaseTransitionEvent,
     advance_turn,
     check_combat_end,
     get_current_combatant,
+    record_combat_event,
     resolve_npc_attack,
 )
+from ai.narrator_phase import narrate_phase_transition
 from engine.combat_trigger import CombatTrigger
 from engine.npc_ai.scripted import (
     NPCActionPlan,
@@ -273,6 +276,10 @@ class TurnManager:
         await self._safe_send(content=f"📜 {summary}")
         if dice_embed is not None:
             await self._safe_send(embed=dice_embed)
+
+        # Task 70 — expose the NPC's action to the narrator via recent_events.
+        if summary:
+            record_combat_event(state, summary)
 
         await record_turn_and_maybe_check(
             self.session,
@@ -501,17 +508,75 @@ class TurnManager:
             logger.warning("TurnManager hub edit failed: %s", exc)
 
     async def _flush_pending_cues(self, state: CombatState) -> None:
-        """Post compact messages for legendary + phase cues queued on state."""
+        """Post compact messages for legendary + phase cues queued on state.
+
+        Legendary summaries stay as plain text (they are short recaps of
+        off-turn actions). Phase transitions now go through the dedicated
+        narrator path (task 71) and are posted as gold embeds. If the
+        narrator call fails we fall back to the raw ``narrative_cue`` so
+        the moment still shows up in chat, and we always mark the event
+        ``consumed=True`` — even on failure — to avoid infinite retries on
+        subsequent flushes.
+        """
         for cue in state.pending_legendary_summaries:
             await self._safe_send(f"⚡ {cue}")
         state.pending_legendary_summaries.clear()
 
         for event in state.pending_phase_narrations:
-            cue = event.narrative_cue or (
-                f"⚡ {event.combatant_name} entre dans une nouvelle phase."
+            if event.consumed:
+                continue
+            event.consumed = True  # mark BEFORE the LLM call — no retries
+            boss = next(
+                (
+                    c for c in state.combatants
+                    if c.name == event.combatant_name
+                ),
+                None,
             )
-            await self._safe_send(f"🔥 {cue}")
-        state.pending_phase_narrations.clear()
+            if boss is None:
+                continue
+            await self._post_phase_transition_embed(event, boss, state)
+
+        # Events are kept on ``pending_phase_narrations`` (flagged consumed)
+        # so a serialized state round-trip after a mid-flush crash does not
+        # re-narrate them. Clearing here would defeat that safety; the list
+        # is small (one or two entries per round at most) and naturally dies
+        # with the combat state.
+
+    async def _post_phase_transition_embed(
+        self,
+        event: PhaseTransitionEvent,
+        boss: Combatant,
+        state: CombatState,
+    ) -> None:
+        """Narrate one phase-transition event and post it as a gold embed."""
+        client = getattr(self.session, "ollama_client", None)
+        narration = ""
+        if client is not None:
+            try:
+                narration = await asyncio.to_thread(
+                    narrate_phase_transition,
+                    client=client,
+                    event=event,
+                    boss=boss,
+                    state=state,
+                    language=self.session.language,
+                )
+            except Exception as exc:  # noqa: BLE001 — fallback on any LLM error
+                logger.warning(
+                    "Phase narration failed for %s phase %d: %s",
+                    event.combatant_name, event.phase_index, exc,
+                )
+        if not narration:
+            narration = event.narrative_cue or (
+                f"{event.combatant_name} entre dans une nouvelle phase."
+            )
+        embed = discord.Embed(
+            title=f"✨ Phase transition — {boss.name}",
+            description=narration,
+            color=0xF1C40F,  # gold
+        )
+        await self._safe_send(embed=embed)
 
     # ------------------------------------------------------------------
     # Timeout watcher

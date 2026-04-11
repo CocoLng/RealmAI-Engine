@@ -94,8 +94,8 @@ Phase 0 ──────► Phase 1 ──► Phase 2 ──► Phase 3 ──
 ### Phase 7 — Narrateur & cohérence narrative
 | # | Tâche | Dépendances | Status |
 |---|-------|-------------|--------|
-| 70 | [narrator_combat_context](70_narrator_combat_context.md) | 22 | ⬜ |
-| 71 | [narrator_phase_transition_prompt](71_narrator_phase_transition_prompt.md) | 54, 70 | ⬜ |
+| 70 | [narrator_combat_context](70_narrator_combat_context.md) | 22 | ✅ |
+| 71 | [narrator_phase_transition_prompt](71_narrator_phase_transition_prompt.md) | 54, 70 | ✅ |
 
 ### Phase 8 — Fin de combat & intégration
 | # | Tâche | Dépendances | Status |

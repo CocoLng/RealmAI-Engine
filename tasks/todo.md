@@ -49,8 +49,8 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 64 — Ping de tour + timeout
 
 ### Phase 7 — Narrateur & cohérence narrative
-- [ ] Task 70 — Narrateur : contexte combat
-- [ ] Task 71 — Prompt narrateur pour transitions de phase
+- [x] Task 70 — Narrateur : contexte combat
+- [x] Task 71 — Prompt narrateur pour transitions de phase
 
 ### Phase 8 — Fin de combat & intégration
 - [ ] Task 80 — Conditions de fin de combat

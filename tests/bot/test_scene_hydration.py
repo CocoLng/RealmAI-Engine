@@ -626,3 +626,301 @@ def test_describe_scene_no_location():
     out = describe_scene_for_narrator(session, actor_name="Xavier")
     assert "Acting character" in out
     assert "Xavier" in out
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — tasks 70 / 71 — narrator combat context additions
+# ---------------------------------------------------------------------------
+
+
+def _build_pc_combatant(
+    name: str = "Thorin",
+    *,
+    hp: int = 20,
+    max_hp: int = 25,
+    race: Race = Race.DWARF,
+    char_class: CharacterClass = CharacterClass.CLERIC,
+    equipped_weapon: str | None = "Warhammer",
+):
+    from engine.combat import Combatant, CombatSide
+    from engine.inventory import EquipmentSlot, Inventory, Weapon, WeaponCategory
+    from engine.inventory import DamageType, WeaponProperty
+
+    char = create_character(
+        name=name,
+        race=race,
+        char_class=char_class,
+        ability_scores=AbilityScores(STR=15, DEX=10, CON=14, INT=10, WIS=13, CHA=8),
+    )
+    char.hp = hp
+    char.max_hp = max_hp
+    inv = Inventory()
+    if equipped_weapon is not None:
+        weapon = Weapon(
+            name=equipped_weapon,
+            weight=2.0,
+            value_gp=15,
+            damage_dice="1d8",
+            damage_type=DamageType.BLUDGEONING,
+            weapon_category=WeaponCategory.SIMPLE_MELEE,
+            properties=[WeaponProperty.VERSATILE],
+        )
+        inv.equipped[EquipmentSlot.MAIN_HAND] = weapon
+    return Combatant(
+        name=name,
+        side=CombatSide.PLAYER,
+        character=char,
+        inventory=inv,
+    )
+
+
+def _build_npc_combatant(
+    name: str = "Gob 1",
+    *,
+    hp: int = 8,
+    max_hp: int = 10,
+    archetype: str = "",
+    tier=None,
+):
+    from engine.combat import Combatant, CombatSide
+    from engine.inventory import Inventory
+    from engine.npc_stat_block import NPCStatBlock, NPCTier
+
+    char = create_character(
+        name=name,
+        race=Race.HUMAN,
+        char_class=CharacterClass.FIGHTER,
+        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+    )
+    char.hp = hp
+    char.max_hp = max_hp
+    stat_block: NPCStatBlock | None = None
+    if archetype or tier is not None:
+        stat_block = NPCStatBlock(
+            archetype=archetype or "placeholder",
+            tier=tier or NPCTier.MINION,
+        )
+    return Combatant(
+        name=name,
+        side=CombatSide.ENEMY,
+        character=char,
+        inventory=Inventory(),
+        stat_block=stat_block,
+    )
+
+
+def _build_active_combat_state(
+    *,
+    combatants=None,
+    round_number: int = 1,
+    current_turn_index: int = 0,
+    recent_events=None,
+):
+    from engine.combat import CombatState
+
+    return CombatState(
+        combatants=combatants or [],
+        round_number=round_number,
+        current_turn_index=current_turn_index,
+        is_active=True,
+        recent_events=list(recent_events or []),
+    )
+
+
+def test_describe_scene_includes_beat_encounter_type():
+    from world.story_arc import StoryArc, StoryBeat
+
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = None
+    session.characters = {}
+    beats = [
+        StoryBeat(
+            beat_number=i,
+            title=f"B{i}",
+            description="…",
+            location_hint="somewhere",
+            encounter_type="combat" if i == 1 else "exploration",
+        )
+        for i in range(1, 9)
+    ]
+    session.story_arc = StoryArc(
+        campaign_id="c",
+        theme="dark",
+        premise="Something must be done about the shadow cult.",
+        beats=beats,
+        current_beat_index=0,
+        villain_name="Shadow",
+        villain_motivation="Chaos.",
+    )
+    out = describe_scene_for_narrator(session, actor_name="Xavier")
+    assert "Current story beat" in out
+    assert "Type: combat" in out
+
+
+def test_describe_scene_no_combat_section_when_combat_state_none():
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = None
+    out = describe_scene_for_narrator(session, actor_name="Xavier")
+    assert "COMBAT ACTIVE" not in out
+
+
+def test_describe_scene_no_combat_section_when_combat_inactive():
+    pc = _build_pc_combatant("Thorin")
+    state = _build_active_combat_state(combatants=[pc])
+    state.is_active = False  # combat ended but state still present
+
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    assert "COMBAT ACTIVE" not in out
+
+
+def test_describe_scene_combat_section_round_and_current_turn():
+    pc = _build_pc_combatant("Thorin")
+    npc = _build_npc_combatant("Gob 1")
+    state = _build_active_combat_state(
+        combatants=[pc, npc], round_number=3, current_turn_index=1,
+    )
+
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    assert "## COMBAT ACTIVE" in out
+    assert "Round 3" in out
+    assert "Tour en cours : Gob 1" in out
+
+
+def test_describe_scene_pc_hp_exact_npc_hp_vague():
+    pc = _build_pc_combatant("Thorin", hp=15, max_hp=25)
+    # 7/30 = 23% ratio → "gravement blessé"
+    npc = _build_npc_combatant("Gob 1", hp=7, max_hp=30)
+    state = _build_active_combat_state(combatants=[pc, npc])
+
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    assert "15/25 HP" in out
+    assert "gravement blessé" in out
+    # The exact HP of the NPC must NEVER appear in the output.
+    assert "7/30" not in out
+
+
+def test_describe_scene_includes_last_three_recent_events_only():
+    pc = _build_pc_combatant("Thorin")
+    state = _build_active_combat_state(
+        combatants=[pc],
+        recent_events=[
+            "Thorin attaque Gob 1 : HIT 8 dégâts.",
+            "Gob 1 attaque Thorin : MISS.",
+            "Thorin attaque Gob 1 : HIT 5 dégâts.",
+            "Gob 1 attaque Thorin : HIT 3 dégâts.",
+            "Thorin attaque Gob 1 : HIT 6 dégâts (kill).",
+        ],
+    )
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    assert "Derniers événements mécaniques" in out
+    # Only the last three survive the tail filter.
+    assert "HIT 5 dégâts." in out
+    assert "HIT 3 dégâts." in out
+    assert "HIT 6 dégâts (kill)." in out
+    # The first two should NOT appear.
+    assert "HIT 8 dégâts." not in out
+    assert "MISS." not in out
+
+
+def test_describe_scene_combat_rule_reminder_present():
+    pc = _build_pc_combatant("Thorin")
+    state = _build_active_combat_state(combatants=[pc])
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    assert "tu DOIS respecter l'état mécanique" in out
+
+
+def test_describe_scene_npc_flavor_from_stat_block_archetype():
+    pc = _build_pc_combatant("Thorin")
+    npc = _build_npc_combatant("Gob 1", archetype="goblin_scout")
+    state = _build_active_combat_state(combatants=[pc, npc])
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    # The combatant line must expose archetype + tier so the narrator
+    # can picture the right silhouette.
+    assert "goblin_scout" in out
+    assert "minion" in out.lower()
+
+
+def test_describe_scene_actor_enrichment_out_of_combat():
+    # Player not in combat — resolution via session.characters.
+    pc_char = create_character(
+        name="Thorin",
+        race=Race.DWARF,
+        char_class=CharacterClass.CLERIC,
+        ability_scores=AbilityScores(
+            STR=15, DEX=10, CON=14, INT=10, WIS=13, CHA=8,
+        ),
+    )
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = None
+    session.characters = {42: pc_char}
+    session.inventories = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    # The enriched block must expose race + class + level.
+    assert "Race dwarf" in out or "race dwarf" in out.lower() or "dwarf" in out.lower()
+    assert "cleric" in out.lower()
+    assert "niveau 1" in out
+
+
+def test_describe_scene_actor_enrichment_resolves_from_combat_first():
+    pc = _build_pc_combatant("Thorin")
+    state = _build_active_combat_state(combatants=[pc])
+    # Even if session.characters is empty, combat resolution must still work.
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    session.inventories = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    assert "Acting character" in out
+    assert "Thorin" in out
+    assert "Warhammer" in out  # main weapon from combatant.inventory
+
+
+def test_describe_scene_actor_enrichment_fallback_when_unknown():
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = None
+    session.characters = {}
+    session.inventories = {}
+    out = describe_scene_for_narrator(session, actor_name="Inconnu")
+    # Must not crash, must still produce the Acting character block.
+    assert "Acting character" in out
+    assert "Inconnu" in out

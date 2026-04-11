@@ -30,8 +30,9 @@ from typing import TYPE_CHECKING, Any
 
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
-from engine.character import AbilityScores, Race
-from engine.inventory import Item, ItemType
+from engine.character import AbilityScores, Character, Race
+from engine.combat import CombatSide, Combatant, CombatState
+from engine.inventory import EquipmentSlot, Inventory, Item, ItemType
 from engine.npc_library import ARCHETYPE_BUILDERS, get_archetype
 from engine.npc_stat_block import NPCStatBlock, NPCTier
 from world.location import Location
@@ -449,7 +450,156 @@ def describe_scene_for_narrator(
     arc = getattr(session, "story_arc", None)
     if arc is not None:
         beat = arc.beats[arc.current_beat_index]
-        lines.append(f"## Current story beat\n{beat.title} — {beat.description}")
+        beat_lines = [
+            "## Current story beat",
+            f"{beat.title} — {beat.description}",
+            f"Type: {beat.encounter_type}",
+        ]
+        if beat.is_twist:
+            beat_lines.append("(Ce beat est un TWIST — reveal narratif attendu.)")
+        lines.append("\n".join(beat_lines))
 
-    lines.append(f"## Acting character\n{actor_name}")
+    combat_state = getattr(session, "combat_state", None)
+    if isinstance(combat_state, CombatState) and combat_state.is_active:
+        lines.append(_describe_combat_for_narrator(combat_state))
+
+    lines.append(_describe_actor(session, actor_name))
     return "\n\n".join(lines)
+
+
+def _describe_actor(session: "GameSession", actor_name: str) -> str:
+    """Build the ``## Acting character`` section with race/class/level/weapon.
+
+    Resolves the acting entity in two passes: first against the combat
+    roster (so NPC monsters on their own turn are enriched too), then
+    against ``session.characters`` as a fallback for out-of-combat PC
+    actions. If nothing matches, falls back to just the name — the
+    narrator still works, it just gets less texture.
+    """
+    character: Character | None = None
+    inventory: Inventory | None = None
+
+    combat_state = getattr(session, "combat_state", None)
+    if isinstance(combat_state, CombatState):
+        for combatant in combat_state.combatants:
+            if combatant.name == actor_name:
+                character = combatant.character
+                inventory = combatant.inventory
+                break
+
+    if character is None:
+        characters = getattr(session, "characters", None)
+        if isinstance(characters, dict):
+            inventories = getattr(session, "inventories", None)
+            for uid, pc in characters.items():
+                if isinstance(pc, Character) and pc.name == actor_name:
+                    character = pc
+                    if isinstance(inventories, dict):
+                        inventory = inventories.get(uid)
+                    break
+
+    if character is None:
+        return f"## Acting character\n{actor_name}"
+
+    lines = [
+        "## Acting character",
+        character.name,
+        (
+            f"Race {character.race.value}, classe {character.char_class.value}, "
+            f"niveau {character.level}."
+        ),
+    ]
+    weapon_name = _main_weapon_name(inventory)
+    if weapon_name:
+        lines.append(f"Arme équipée : {weapon_name}.")
+    return "\n".join(lines)
+
+
+def _main_weapon_name(inventory: Inventory | None) -> str | None:
+    """Return the display name of the main-hand equipped weapon, if any."""
+    if inventory is None:
+        return None
+    item = inventory.equipped.get(EquipmentSlot.MAIN_HAND)
+    if item is None:
+        return None
+    return item.name
+
+
+def _describe_combat_for_narrator(state: CombatState) -> str:
+    """Build the ``## COMBAT ACTIVE`` section for an active combat.
+
+    Lists round number, active combatant, each participant with
+    filtered HP (exact for PCs, vague tier for NPCs), zone, conditions,
+    and a short flavor line from the stat block when present. Appends
+    the last three ``state.recent_events`` as mechanical grounding and
+    closes on an explicit rule reminder for the narrator.
+    """
+    lines: list[str] = ["## COMBAT ACTIVE"]
+    lines.append(f"Round {state.round_number}")
+    if 0 <= state.current_turn_index < len(state.combatants):
+        current = state.combatants[state.current_turn_index]
+        lines.append(f"Tour en cours : {current.name}")
+
+    lines.append("")
+    lines.append("### Combattants")
+    for combatant in state.combatants:
+        lines.append(_format_combatant_line(combatant))
+
+    if state.recent_events:
+        lines.append("")
+        lines.append("### Derniers événements mécaniques")
+        for event_text in state.recent_events[-3:]:
+            lines.append(f"- {event_text}")
+
+    lines.append("")
+    lines.append(
+        "**Règle** : tu DOIS respecter l'état mécanique. Un miss est un miss, "
+        "les dégâts chiffrés sont canon, personne n'ignore le combat."
+    )
+    return "\n".join(lines)
+
+
+def _format_combatant_line(combatant: Combatant) -> str:
+    """Format one bullet line for the COMBAT ACTIVE combatants list."""
+    if not combatant.is_alive and not combatant.fled:
+        return f"- {combatant.name} : MORT"
+    if combatant.fled:
+        return f"- {combatant.name} : a fui"
+
+    if combatant.side == CombatSide.PLAYER:
+        hp_str = f"{combatant.character.hp}/{combatant.character.max_hp} HP"
+    else:
+        hp_str = _describe_npc_hp_vague(
+            combatant.character.hp, combatant.character.max_hp,
+        )
+
+    zone_str = (
+        f" (zone : {combatant.current_zone})" if combatant.current_zone else ""
+    )
+
+    conditions = [ac.condition_type.value for ac in combatant.conditions]
+    cond_str = f" [{', '.join(conditions)}]" if conditions else ""
+
+    flavor_str = ""
+    if (
+        combatant.side == CombatSide.ENEMY
+        and combatant.stat_block is not None
+    ):
+        archetype = combatant.stat_block.archetype.strip()
+        tier = combatant.stat_block.tier.value
+        if archetype:
+            flavor_str = f" — archétype {archetype} ({tier})"
+
+    return f"- {combatant.name} : {hp_str}{zone_str}{cond_str}{flavor_str}"
+
+
+def _describe_npc_hp_vague(hp: int, max_hp: int) -> str:
+    """Return a coarse, spoiler-safe HP tier label for an NPC combatant."""
+    ratio = hp / max(1, max_hp)
+    if ratio > 0.8:
+        return "indemne"
+    if ratio > 0.5:
+        return "légèrement blessé"
+    if ratio > 0.2:
+        return "gravement blessé"
+    return "à l'article de la mort"

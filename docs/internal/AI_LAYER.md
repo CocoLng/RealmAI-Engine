@@ -82,8 +82,27 @@ narrate(
 - Tiers d'outcome guidant le ton
 - **Canon faithfulness** : description de location et items = absolus
 - **Dialogue verbatim** : tout `<NPCName> says: "..."` dans State changes DOIT être reproduit verbatim
+- **Acting character awareness** : le narrateur doit utiliser race/classe/niveau/arme pour ancrer la prose (task 70).
+- **COMBAT ACTIVE — règles spéciales** (task 70) : quand le contexte contient une section `## COMBAT ACTIVE`, le narrateur doit respecter mécaniquement chaque résultat, narrer tour par tour, terminer sur une invitation au tour suivant, garder les HP NPC vagues, et refuser toute évasion passive du combat.
 
 **Sortie** : `NarrativeResult(narrative, tone)`. Tone pilote la couleur de l'embed.
+
+### `narrator_phase.py` — `narrate_phase_transition` (task 71)
+
+**Modèle** : `qwen3.5:9b`, temperature 0.85. **Prompt** : `system_narrator_phase.txt` — prompt court et dédié exigeant 3-5 phrases cinématiques, ton sombre, aucune mécanique chiffrée, fin sur menace implicite.
+
+**Entrée** :
+```python
+narrate_phase_transition(
+    client: OllamaClient,
+    event: PhaseTransitionEvent,   # combatant_name + narrative_cue + phase_index
+    boss: Combatant,
+    state: CombatState,
+    language: str = "fr",
+) -> str
+```
+
+**Sortie** : texte brut (3-5 phrases) extrait du JSON `{"narration": "..."}`. Appelé par [bot/combat_turn_manager.py::_flush_pending_cues](../../bot/combat_turn_manager.py) après chaque tour pour transformer les `PhaseTransitionEvent` non-consommés en embeds dorés. Le caller marque `event.consumed = True` avant l'appel LLM et retombe sur le `narrative_cue` brut en cas d'échec ou d'absence de `session.ollama_client`.
 
 ### `npc_agent.py` — `NPCAgent`
 
@@ -202,7 +221,8 @@ SceneContext(
 | Fichier | Contenu |
 |---|---|
 | `system_interpreter.txt` | 15 ActionType (incl. QUESTION), règles de classification, confidence scoring |
-| `system_narrator.txt` | Rôle MJ, canon faithfulness, dialogue verbatim, tiers d'outcome, beat awareness |
+| `system_narrator.txt` | Rôle MJ, canon faithfulness, dialogue verbatim, tiers d'outcome, beat awareness, **acting character awareness + COMBAT ACTIVE rules** (task 70) |
+| `system_narrator_phase.txt` | Narration cinématique courte (3-5 phrases) pour transitions de phase boss, sortie JSON `{"narration"}` (task 71) |
 | `system_npc_agent.txt` | Agency PNJ, règles knowledge/secrets, mécanique disposition |
 | `system_npc_generator.txt` | Génération de fiches PNJ, personnalité spécifique |
 | `system_world_generator.txt` | Générateur de locations, descriptions d'items explicites, aliases NPC |
