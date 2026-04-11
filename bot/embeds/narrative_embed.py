@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from ai.models import PublicEffects
+from bot.i18n import COUNTDOWN_LABELS
 
 if TYPE_CHECKING:
     from world.location import Location
@@ -34,6 +35,8 @@ def build_narrative_embed(
     public_effects: PublicEffects | None = None,
     tone: str = "dramatic",
     footer_override: str | None = None,
+    npc_name: str | None = None,
+    npc_dialogue: str | None = None,
 ) -> discord.Embed:
     """Build a Discord embed for a narrative response.
 
@@ -45,6 +48,10 @@ def build_narrative_embed(
               Valid values: dramatic, tense, humorous, somber.
         footer_override: Raw text to use as footer instead of ``public_effects``.
             Used for system messages (e.g. unknown-entity refusals).
+        npc_name: When an NPC is speaking, their name — displayed as
+            embed author and dialogue field header.
+        npc_dialogue: The NPC's spoken words, displayed in a dedicated
+            field visually separated from the narrator prose.
 
     Returns:
         A discord.Embed with narrative as description and an optional footer.
@@ -55,6 +62,15 @@ def build_narrative_embed(
         description=narrative,
         color=color,
     )
+
+    # NPC dialogue: author header + dedicated field for spoken words.
+    if npc_name and npc_dialogue:
+        embed.set_author(name=f"\U0001f5e3\ufe0f {npc_name}")
+        embed.add_field(
+            name=f"\u00ab {npc_name} \u00bb",
+            value=f"*\u00ab {npc_dialogue} \u00bb*",
+            inline=False,
+        )
 
     footer_text: str | None = None
     if footer_override is not None:
@@ -100,5 +116,42 @@ def build_opening_crawl_embed(
             value=f"*{first_beat.description}*",
             inline=False,
         )
+
+    return embed
+
+
+# Step → color progression: gold → orange → red
+_COUNTDOWN_COLORS: dict[int, int] = {
+    3: 0xDAA520,
+    2: 0xCC7000,
+    1: 0xCC0000,
+}
+
+
+def build_countdown_embed(
+    step: int,
+    campaign_name: str,
+    language: str = "fr",
+) -> discord.Embed:
+    """Build an animated countdown embed for a given step (3, 2, or 1).
+
+    Args:
+        step: The countdown number (3, 2, or 1).
+        campaign_name: Campaign name shown in the footer.
+        language: Language code for the description text.
+
+    Returns:
+        A discord.Embed with styled title, description, and color.
+    """
+    color = _COUNTDOWN_COLORS.get(step, _DEFAULT_COLOR)
+    labels = COUNTDOWN_LABELS.get(language, COUNTDOWN_LABELS["fr"])
+    description = labels.get(step, "...")
+
+    embed = discord.Embed(
+        title=f"\u300c {step} \u300d",
+        description=f"*{description}*",
+        color=color,
+    )
+    embed.set_footer(text=campaign_name)
 
     return embed

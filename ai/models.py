@@ -67,6 +67,8 @@ class MechanicsOutcome(BaseModel):
     player_intent: str = ""
     outcome_facts: str = ""
     public_effects: "PublicEffects" = Field(default_factory=lambda: PublicEffects())
+    npc_name: str | None = None
+    npc_dialogue: str | None = None
 
 
 class PublicEffects(BaseModel):

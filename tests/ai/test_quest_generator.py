@@ -9,32 +9,6 @@ from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.quest import Quest, QuestStatus
 
 
-def _make_brainstorm_response() -> dict:
-    """Build a valid brainstorm response."""
-    return {
-        "options": [
-            {
-                "concept": "A missing merchant needs to be found",
-                "key_elements": ["investigation", "Captain Aldric is concerned", "bandits"],
-                "risk": "Might be too linear",
-                "selected": True,
-            },
-            {
-                "concept": "A monster threatens the trade route",
-                "key_elements": ["combat focus", "escorting caravans", "ogre lair"],
-                "risk": "Too combat-heavy for early game",
-                "selected": False,
-            },
-            {
-                "concept": "A mysterious artifact is discovered",
-                "key_elements": ["dungeon crawl", "ancient temple", "cursed item"],
-                "risk": "Disconnected from NPCs",
-                "selected": False,
-            },
-        ]
-    }
-
-
 @pytest.fixture
 def generator(ollama_client: OllamaClient) -> QuestGenerator:
     return QuestGenerator(ollama_client)
@@ -53,7 +27,6 @@ def test_generate_returns_quest(httpx_mock: HTTPXMock, generator: QuestGenerator
         "reward_gold": 50,
         "giver_npc": "Captain Aldric",
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -84,7 +57,6 @@ def test_generate_status_always_available(
         "reward_gold": 500,
         "giver_npc": None,
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -107,7 +79,6 @@ def test_generate_with_no_npcs(httpx_mock: HTTPXMock, generator: QuestGenerator)
         "reward_gold": 0,
         "giver_npc": None,
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -120,26 +91,33 @@ def test_generate_with_no_npcs(httpx_mock: HTTPXMock, generator: QuestGenerator)
     assert result.reward_gold == 0
 
 
-def test_generate_falls_back_on_brainstorm_failure(
-    httpx_mock: HTTPXMock, generator: QuestGenerator
-) -> None:
-    """If brainstorm fails, generate() still works with a single call."""
+def test_generate_with_quest_hint(httpx_mock: HTTPXMock, generator: QuestGenerator) -> None:
+    """When quest_hint is provided, it is included in the prompt."""
     response_data = {
-        "title": "Fallback Quest",
-        "description": "A quest that works.",
-        "objectives": [{"description": "Do the thing", "is_completed": False}],
-        "reward_xp": 100,
-        "reward_gold": 10,
-        "giver_npc": None,
+        "title": "The Haunted Mine",
+        "description": "Strange noises echo from the old mine.",
+        "objectives": [{"description": "Investigate the mine", "is_completed": False}],
+        "reward_xp": 200,
+        "reward_gold": 30,
+        "giver_npc": "Old Miner",
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("not json"))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
-        campaign_context="...",
-        location_name="Anywhere",
-        available_npcs=[],
+        campaign_context="A mining village with rumors of ghosts.",
+        location_name="Ironvale",
+        available_npcs=["Old Miner"],
+        quest_hint="The mine collapse was no accident — sabotage by rival faction.",
     )
 
     assert isinstance(result, Quest)
-    assert result.title == "Fallback Quest"
+    assert result.title == "The Haunted Mine"
+
+    # Verify hint was included in the prompt
+    request = httpx_mock.get_request(url=CHAT_URL)
+    assert request is not None
+    import json
+    body = json.loads(request.content)
+    user_msg = body["messages"][-1]["content"]
+    assert "Quest context hint:" in user_msg
+    assert "sabotage by rival faction" in user_msg

@@ -22,20 +22,6 @@ async def test_roll_invalid_expression_returns_ephemeral_error(
 
 
 @pytest.mark.asyncio
-async def test_look_without_location_returns_error(
-    scenario: ScenarioRunner,
-) -> None:
-    """Looking around without a current location returns an ephemeral error."""
-    await scenario.start_campaign(theme="Empty World", players=1)
-    await scenario.add_player("Scout", race="Human", class_="Fighter", player_idx=0)
-
-    # Session has no current_location set by default in tests
-    result = await scenario.look(player_idx=0)
-    assert result.ephemeral is True
-    assert result.content is not None
-
-
-@pytest.mark.asyncio
 async def test_save_without_active_session_returns_error(
     scenario: ScenarioRunner,
 ) -> None:

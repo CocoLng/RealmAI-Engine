@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from bot.cogs.character import CharacterCog
 from bot.cogs.combat import CombatCog
-from bot.cogs.exploration import ExplorationCog
 from bot.cogs.inventory import InventoryCog
 from bot.cogs.rolls import RollsCog
 from bot.cogs.session import SessionCog
@@ -271,7 +270,6 @@ class ScenarioRunner:
         self._session_cog = SessionCog(self.bot)
         self._character_cog = CharacterCog(self.bot)
         self._combat_cog = CombatCog(self.bot)
-        self._exploration_cog = ExplorationCog(self.bot)
         self._inventory_cog = InventoryCog(self.bot)
         self._rolls_cog = RollsCog(self.bot)
 
@@ -763,33 +761,6 @@ class ScenarioRunner:
 
             advance_turn(session.combat_state)
 
-    # ------------------------------------------------------------------
-    # Exploration
-    # ------------------------------------------------------------------
-
-    async def look(self, player_idx: int = 0) -> EmbedCapture:
-        """Look around via the ExplorationCog handler."""
-        inter = self._make_interaction(player_idx)
-        await self._exploration_cog.look.callback(self._exploration_cog, inter)  # type: ignore[arg-type]
-        return self._record(inter)
-
-    async def move(self, direction: str, player_idx: int = 0) -> EmbedCapture:
-        """Move to a connected location via the ExplorationCog handler."""
-        inter = self._make_interaction(player_idx, direction=direction)
-        await self._exploration_cog.move.callback(self._exploration_cog, inter, direction)  # type: ignore[arg-type]
-        return self._record(inter)
-
-    async def search(self, target: str, player_idx: int = 0) -> EmbedCapture:
-        """Search for something via the ExplorationCog handler."""
-        inter = self._make_interaction(player_idx, target=target)
-        await self._exploration_cog.search.callback(self._exploration_cog, inter, target)  # type: ignore[arg-type]
-        return self._record(inter)
-
-    async def talk(self, npc: str, player_idx: int = 0) -> EmbedCapture:
-        """Talk to an NPC via the ExplorationCog handler."""
-        inter = self._make_interaction(player_idx, npc=npc)
-        await self._exploration_cog.talk.callback(self._exploration_cog, inter, npc)  # type: ignore[arg-type]
-        return self._record(inter)
 
     # ------------------------------------------------------------------
     # Inventory

@@ -62,7 +62,11 @@ class SessionCog(commands.Cog):
         players: str,
     ) -> None:
         """Create a new campaign with a dedicated channel."""
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.NotFound:
+            logger.warning("start_campaign: interaction expired before defer()")
+            return
 
         # Parse mentioned players
         player_ids = self._parse_mentions(players)
@@ -162,7 +166,11 @@ class SessionCog(commands.Cog):
     @app_commands.command(name="resume", description="Reprend la derniere session sauvegardee")
     async def resume(self, interaction: discord.Interaction) -> None:
         """Reload a saved campaign into memory for the current channel."""
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.NotFound:
+            logger.warning("resume: interaction expired before defer()")
+            return
 
         channel_id = interaction.channel_id
         if channel_id is None:
@@ -311,7 +319,11 @@ class SessionCog(commands.Cog):
             )
             return
 
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.NotFound:
+            logger.warning("end_campaign: interaction expired before defer()")
+            return
 
         # Persist before archiving
         self._persist_session(session)

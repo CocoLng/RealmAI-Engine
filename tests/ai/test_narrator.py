@@ -99,6 +99,41 @@ def test_narrate_includes_player_intent_and_outcome_facts():
     assert "Xavier searches" in user_msg
 
 
+def test_narrate_npc_dialogue_flag_adds_reminder():
+    client = MagicMock()
+    client.chat_json.return_value = {"narrative": "ok", "tone": "dramatic"}
+    narrator = Narrator(client)
+
+    narrator.narrate(
+        action_result_text="Xavier speaks with Elie.",
+        context_prompt="## Location\nÉglise",
+        outcome_facts="Elie responds to the player.",
+        has_npc_dialogue=True,
+    )
+
+    args, kwargs = client.chat_json.call_args
+    messages = args[1] if len(args) > 1 else kwargs["messages"]
+    user_msg = messages[-1]["content"]
+    assert "displayed separately" in user_msg
+    assert "body language" in user_msg
+
+
+def test_narrate_no_reminder_without_npc_dialogue():
+    client = MagicMock()
+    client.chat_json.return_value = {"narrative": "ok", "tone": "dramatic"}
+    narrator = Narrator(client)
+
+    narrator.narrate(
+        action_result_text="Xavier looks around.",
+        context_prompt="## Location\nForest",
+    )
+
+    args, kwargs = client.chat_json.call_args
+    messages = args[1] if len(args) > 1 else kwargs["messages"]
+    user_msg = messages[-1]["content"]
+    assert "displayed separately" not in user_msg
+
+
 def test_narrate_legacy_signature_still_works():
     client = MagicMock()
     client.chat_json.return_value = {"narrative": "ok", "tone": "dramatic"}

@@ -105,8 +105,7 @@ class ActionHandlerCog(commands.Cog):
         if session.interpreter is None or session.narrator is None:
             await message.reply(
                 "⚠️ Le Game Master est indisponible (Ollama injoignable). "
-                "Réessaie dans un instant ou utilise les commandes `/look`, "
-                "`/search`, `/talk`, `/move` en attendant.",
+                "Réessaie dans un instant.",
             )
             return
 
@@ -297,6 +296,8 @@ class ActionHandlerCog(commands.Cog):
             narrative=result.narrative,
             public_effects=result.public_effects,
             tone=result.tone,
+            npc_name=result.npc_name,
+            npc_dialogue=result.npc_dialogue,
         )
         await progress_msg.edit(embed=embed, view=None)
 

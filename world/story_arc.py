@@ -18,6 +18,7 @@ class StoryBeat(BaseModel):
     location_hint: str
     npc_names: list[str] = Field(default_factory=list)
     encounter_type: Literal["social", "combat", "exploration", "puzzle", "boss"]
+    encounter_subtype: str | None = None
     is_twist: bool = False
 
 

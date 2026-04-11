@@ -623,6 +623,70 @@ class TestResolveUseItem:
         )
         assert res.status == "unknown"
 
+    def test_use_item_falls_back_to_scene_object(
+        self, present_npcs: dict[str, NPC],
+    ) -> None:
+        """USE_ITEM with an item not in inventory but present as a scene
+        object should resolve as INTERACT with reclassified_action_type."""
+        location = Location(
+            name="Le cellier",
+            description="Un cellier sombre.",
+            connections=["Sacristie"],
+            npcs_present=[],
+            items_available=["Bière de Sainte-Croix", "Croix en fer"],
+        )
+        inventory = Inventory(items=[])
+        action = InterpretedAction(
+            action_type=ActionType.USE_ITEM,
+            actor_name="Temps Test",
+            item_name="Bière",
+            raw_input="je bois la bière",
+        )
+        res = EntityResolver.resolve(
+            action,
+            location=location,
+            npcs=present_npcs,
+            inventory=inventory,
+        )
+        assert res.status == "resolved"
+        assert res.field_name == "target_name"
+        assert res.resolved_entity == "Bière de Sainte-Croix"
+        assert res.reclassified_action_type == ActionType.INTERACT
+
+    def test_use_item_inventory_takes_priority_over_scene(
+        self, present_npcs: dict[str, NPC],
+    ) -> None:
+        """When an item matches both inventory and scene, inventory wins."""
+        location = Location(
+            name="Le cellier",
+            description="Un cellier sombre.",
+            connections=[],
+            npcs_present=[],
+            items_available=["Potion de force"],
+        )
+        potion = Item(
+            name="Potion de force",
+            item_type=ItemType.POTION,
+            weight=0.5,
+        )
+        inventory = Inventory(items=[potion])
+        action = InterpretedAction(
+            action_type=ActionType.USE_ITEM,
+            actor_name="Temps Test",
+            item_name="Potion",
+            raw_input="je bois la potion",
+        )
+        res = EntityResolver.resolve(
+            action,
+            location=location,
+            npcs=present_npcs,
+            inventory=inventory,
+        )
+        assert res.status == "resolved"
+        assert res.field_name == "item_name"
+        assert res.resolved_entity == "Potion de force"
+        assert res.reclassified_action_type is None
+
 
 # ---------------------------------------------------------------------------
 # EntityCandidate — smoke test

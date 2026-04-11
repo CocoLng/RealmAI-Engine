@@ -268,6 +268,24 @@ class TestLocationRepository:
         assert result is not None
         assert result.description == "A ruined city"
 
+    def test_update_persists_item_descriptions(
+        self, db_session: Session, sample_campaign: Campaign, sample_location: Location,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        repo.save(sample_location, sample_campaign.id)
+        db_session.commit()
+
+        updated = sample_location.model_copy(
+            update={"item_descriptions": {"Healing Potion": "A red vial."}},
+        )
+        repo.update(updated, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_location.name, sample_campaign.id)
+        assert result is not None
+        assert result.item_descriptions == {"Healing Potion": "A red vial."}
+
     def test_update_missing_raises(self, db_session: Session, sample_location: Location) -> None:
         repo = LocationRepository(db_session)
         with pytest.raises(ValueError, match="not found"):

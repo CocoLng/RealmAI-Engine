@@ -3,11 +3,11 @@
 import discord
 import pytest
 
-from bot.embeds.character_embed import build_character_embed
+from bot.embeds.character_embed import build_character_embed, build_party_card_embed
 from bot.embeds.combat_embed import build_combat_embed
 from bot.embeds.inventory_embed import build_inventory_embed
 from ai.models import PublicEffects
-from bot.embeds.narrative_embed import build_narrative_embed
+from bot.embeds.narrative_embed import build_countdown_embed, build_narrative_embed
 from engine.character import (
     AbilityScores,
     Character,
@@ -404,3 +404,147 @@ class TestNarrativeEmbed:
     def test_unknown_tone_falls_back_to_default(self):
         embed = build_narrative_embed(narrative="x", tone="unknown")
         assert embed.color == discord.Color(0xDAA520)
+
+    # --- NPC dialogue separation ---
+
+    def test_no_author_when_no_npc(self):
+        embed = build_narrative_embed(narrative="x")
+        assert embed.author.name is None or embed.author.name == ""
+
+    def test_no_field_when_no_npc(self):
+        embed = build_narrative_embed(narrative="x")
+        assert len(embed.fields) == 0
+
+    def test_author_set_when_npc_dialogue(self):
+        embed = build_narrative_embed(
+            narrative="He leans forward.",
+            npc_name="Thibault",
+            npc_dialogue="The village hides many secrets.",
+        )
+        assert embed.author.name is not None
+        assert "Thibault" in embed.author.name
+
+    def test_dialogue_field_when_npc_dialogue(self):
+        embed = build_narrative_embed(
+            narrative="He leans forward.",
+            npc_name="Thibault",
+            npc_dialogue="The village hides many secrets.",
+        )
+        assert len(embed.fields) == 1
+        assert "Thibault" in embed.fields[0].name
+        assert "village hides many secrets" in embed.fields[0].value
+
+    def test_dialogue_field_is_italic(self):
+        embed = build_narrative_embed(
+            narrative="n",
+            npc_name="Elie",
+            npc_dialogue="Approche.",
+        )
+        assert embed.fields[0].value.startswith("*")
+        assert embed.fields[0].value.endswith("*")
+
+
+# ---------------------------------------------------------------------------
+# Countdown embed
+# ---------------------------------------------------------------------------
+
+
+class TestCountdownEmbed:
+    """Tests for build_countdown_embed."""
+
+    def test_step_3_color_gold(self):
+        embed = build_countdown_embed(3, "My Campaign")
+        assert embed.color == discord.Color(0xDAA520)
+
+    def test_step_2_color_orange(self):
+        embed = build_countdown_embed(2, "My Campaign")
+        assert embed.color == discord.Color(0xCC7000)
+
+    def test_step_1_color_red(self):
+        embed = build_countdown_embed(1, "My Campaign")
+        assert embed.color == discord.Color(0xCC0000)
+
+    def test_title_contains_step_number(self):
+        for step in (3, 2, 1):
+            embed = build_countdown_embed(step, "Test")
+            assert str(step) in embed.title
+
+    def test_title_uses_styled_brackets(self):
+        embed = build_countdown_embed(3, "Test")
+        assert "\u300c" in embed.title
+        assert "\u300d" in embed.title
+
+    def test_description_is_italic(self):
+        embed = build_countdown_embed(3, "Test")
+        assert embed.description.startswith("*")
+        assert embed.description.endswith("*")
+
+    def test_footer_is_campaign_name(self):
+        embed = build_countdown_embed(3, "Épopée Dorée")
+        assert embed.footer.text == "Épopée Dorée"
+
+    def test_french_descriptions(self):
+        embed3 = build_countdown_embed(3, "C", language="fr")
+        assert "aventuriers" in embed3.description
+
+        embed2 = build_countdown_embed(2, "C", language="fr")
+        assert "destins" in embed2.description
+
+        embed1 = build_countdown_embed(1, "C", language="fr")
+        assert "commence" in embed1.description
+
+
+# ---------------------------------------------------------------------------
+# Party card embed
+# ---------------------------------------------------------------------------
+
+
+class TestPartyCardEmbed:
+    """Tests for build_party_card_embed."""
+
+    def test_title_format(self, fighter):
+        embed = build_party_card_embed(fighter, "PlayerOne")
+        assert "Thorin" in embed.title
+        assert "Nain" in embed.title  # Dwarf → Nain in French
+        assert "Guerrier" in embed.title  # Fighter → Guerrier
+
+    def test_description_contains_level_hp_ac(self, fighter):
+        embed = build_party_card_embed(fighter, "PlayerOne")
+        assert "Niveau" in embed.description
+        assert "PV" in embed.description
+        assert "CA" in embed.description
+
+    def test_color_matches_class(self, fighter):
+        embed = build_party_card_embed(fighter, "P")
+        assert embed.color == discord.Color(0xCC0000)  # Fighter red
+
+    def test_wizard_color(self, wizard):
+        embed = build_party_card_embed(wizard, "P")
+        assert embed.color == discord.Color(0x3366CC)  # Wizard blue
+
+    def test_footer_is_member_name(self, fighter):
+        embed = build_party_card_embed(fighter, "JoueurUn")
+        assert embed.footer.text == "JoueurUn"
+
+    def test_ability_scores_field_exists(self, fighter):
+        embed = build_party_card_embed(fighter, "P")
+        assert len(embed.fields) == 1
+
+    def test_ability_scores_in_code_block(self, fighter):
+        embed = build_party_card_embed(fighter, "P")
+        field_value = embed.fields[0].value
+        assert "```" in field_value
+
+    def test_french_ability_labels(self, fighter):
+        embed = build_party_card_embed(fighter, "P", language="fr")
+        field_value = embed.fields[0].value
+        assert "FOR" in field_value  # STR → FOR in French
+        assert "SAG" in field_value  # WIS → SAG in French
+
+    def test_ability_scores_contain_modifiers(self, fighter):
+        embed = build_party_card_embed(fighter, "P")
+        field_value = embed.fields[0].value
+        # STR 16 → (+3)
+        assert "(+3)" in field_value
+        # CHA 8 → (-1)
+        assert "(-1)" in field_value

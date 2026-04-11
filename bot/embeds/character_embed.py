@@ -2,6 +2,13 @@
 
 import discord
 
+from bot.i18n import (
+    ABILITY_LABELS,
+    CLASS_LABELS,
+    PARTY_CARD_LABELS,
+    RACE_LABELS,
+    get_label,
+)
 from engine.character import (
     SKILL_ABILITY,
     Ability,
@@ -12,7 +19,7 @@ from engine.character import (
 )
 
 # Class-based embed colors
-_CLASS_COLORS: dict[CharacterClass, int] = {
+CLASS_COLORS: dict[CharacterClass, int] = {
     CharacterClass.FIGHTER: 0xCC0000,
     CharacterClass.WIZARD: 0x3366CC,
     CharacterClass.ROGUE: 0x666666,
@@ -33,7 +40,7 @@ def build_character_embed(character: Character) -> discord.Embed:
     Returns:
         A discord.Embed with ability scores, HP/AC, and class info.
     """
-    color = _CLASS_COLORS.get(character.char_class, _DEFAULT_COLOR)
+    color = CLASS_COLORS.get(character.char_class, _DEFAULT_COLOR)
 
     embed = discord.Embed(
         title=f"{character.name} — {character.race} {character.char_class} (Niv. {character.level})",
@@ -93,5 +100,58 @@ def build_character_embed(character: Character) -> discord.Embed:
     embed.set_footer(
         text=f"XP: {character.xp} — {character.char_class} Hit Die: {character.hit_die}",
     )
+
+    return embed
+
+
+def build_party_card_embed(
+    character: Character,
+    member_name: str,
+    language: str = "fr",
+) -> discord.Embed:
+    """Build a condensed character card for party discovery at launch.
+
+    Args:
+        character: The character to display.
+        member_name: Discord display name of the player.
+        language: Language code for translated labels.
+
+    Returns:
+        A compact discord.Embed with key stats and ability scores.
+    """
+    color = CLASS_COLORS.get(character.char_class, _DEFAULT_COLOR)
+
+    race_label = get_label(RACE_LABELS, language, character.race.value)
+    class_label = get_label(CLASS_LABELS, language, character.char_class.value)
+    card_labels = PARTY_CARD_LABELS.get(language, PARTY_CARD_LABELS.get("en", {}))
+    ability_labels = ABILITY_LABELS.get(language, {})
+
+    lvl = card_labels.get("level", "Level")
+    hp = card_labels.get("hp", "HP")
+    ac = card_labels.get("ac", "AC")
+
+    embed = discord.Embed(
+        title=f"{character.name} — {race_label} {class_label}",
+        description=f"{lvl} {character.level} · {character.hp} {hp} · {ac} {character.ac}",
+        color=color,
+    )
+
+    # Compact ability scores: 2 lines of 3
+    lines: list[str] = []
+    row: list[str] = []
+    for i, ability in enumerate(Ability):
+        score = character.ability_scores.get(ability)
+        mod = compute_modifier(score)
+        sign = "+" if mod >= 0 else ""
+        label = ability_labels.get(ability.value, ability.value)
+        row.append(f"{label} {score:>2}({sign}{mod})")
+        if len(row) == 3:
+            lines.append("  ".join(row))
+            row = []
+    if row:
+        lines.append("  ".join(row))
+
+    embed.add_field(name="\u200b", value="```\n" + "\n".join(lines) + "\n```", inline=False)
+    embed.set_footer(text=member_name)
 
     return embed

@@ -9,32 +9,6 @@ from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.location import Location
 
 
-def _make_brainstorm_response() -> dict:
-    """Build a valid brainstorm response."""
-    return {
-        "options": [
-            {
-                "concept": "A smoke-filled tavern with dark secrets",
-                "key_elements": ["low rafters", "stale ale", "innkeeper with a past"],
-                "risk": "Might be too cliche",
-                "selected": True,
-            },
-            {
-                "concept": "A bright and welcoming inn",
-                "key_elements": ["warm hearth", "singing bard", "traveling merchants"],
-                "risk": "Too safe",
-                "selected": False,
-            },
-            {
-                "concept": "A ruined tavern haunted by ghosts",
-                "key_elements": ["broken windows", "spectral barkeep", "cursed ale"],
-                "risk": "Too scary for early game",
-                "selected": False,
-            },
-        ]
-    }
-
-
 @pytest.fixture
 def generator(ollama_client: OllamaClient) -> WorldGenerator:
     return WorldGenerator(ollama_client)
@@ -55,7 +29,6 @@ def test_generate_returns_location_with_name_and_description(
         "npcs_present": ["Marta the Innkeeper", "Old Gruff"],
         "items_available": ["Healing Potion", "Traveler's Rations"],
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -79,7 +52,6 @@ def test_generate_connections_populated(
         "npcs_present": ["Guard Sergeant Bram"],
         "items_available": [],
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -108,7 +80,6 @@ def test_generate_empty_npcs_and_items(
         "npcs_present": [],
         "items_available": [],
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -134,7 +105,6 @@ def test_generate_with_optional_location_name(
         "npcs_present": [],
         "items_available": ["Room Key"],
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -163,7 +133,6 @@ def test_generate_populates_item_descriptions(
             "Cierge pourri": "Un cierge consumé, la cire jaunie et craquelée.",
         },
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(
@@ -190,7 +159,6 @@ def test_generate_drops_descriptions_for_unknown_items(
             "Épée d'or": "Une lame légendaire qui n'existe pas dans la scène.",
         },
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(campaign_context="...", location_type="crypt")
@@ -210,7 +178,6 @@ def test_generate_missing_item_descriptions_defaults_empty(
         "npcs_present": [],
         "items_available": ["Lanterne"],
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     result = generator.generate(campaign_context="...", location_type="bridge")
@@ -218,21 +185,93 @@ def test_generate_missing_item_descriptions_defaults_empty(
     assert result.item_descriptions == {}
 
 
-def test_generate_falls_back_on_brainstorm_failure(
+def test_generate_with_atmosphere_hint(
     httpx_mock: HTTPXMock, generator: WorldGenerator
 ) -> None:
-    """If brainstorm fails, generate() still works with a single call."""
+    """generate() includes atmosphere hint in the user message."""
     response_data = {
-        "name": "The Fallback Tavern",
-        "description": "A simple tavern.",
-        "connections": [],
+        "name": "The Shadowed Alley",
+        "description": "A narrow passage between crumbling buildings.",
+        "connections": ["Market Square"],
         "npcs_present": [],
         "items_available": [],
     }
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("not json"))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
-    result = generator.generate(campaign_context="...", location_type="tavern")
+    result = generator.generate(
+        campaign_context="A decaying city.",
+        location_type="alley",
+        atmosphere="oppressive, claustrophobic",
+    )
 
     assert isinstance(result, Location)
-    assert result.name == "The Fallback Tavern"
+    assert result.name == "The Shadowed Alley"
+
+
+def test_generate_with_beat_context(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """generate() includes beat_context in the user message."""
+    response_data = {
+        "name": "The War Room",
+        "description": "A fortified chamber with battle maps.",
+        "connections": ["Castle Hallway"],
+        "npcs_present": ["General Voss"],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="A kingdom at war.",
+        location_type="war_room",
+        beat_context="The heroes must convince the general to commit troops.",
+    )
+
+    assert isinstance(result, Location)
+    assert "General Voss" in result.npcs_present
+
+
+def test_generate_with_npc_count_hint(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """generate() includes npc_count_hint in the user message."""
+    response_data = {
+        "name": "The Bustling Bazaar",
+        "description": "A colorful open-air market.",
+        "connections": ["City Gate"],
+        "npcs_present": ["Merchant Kira", "Spy Dalen", "Guard Halm"],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="A desert trading hub.",
+        location_type="market",
+        npc_count_hint=3,
+    )
+
+    assert isinstance(result, Location)
+    assert len(result.npcs_present) >= 3
+
+
+def test_build_user_message_includes_all_hints(
+    generator: WorldGenerator,
+) -> None:
+    """_build_user_message includes all optional hints when provided."""
+    msg = generator._build_user_message(
+        campaign_context="Context here.",
+        location_type="tavern",
+        location_name="The Red Lion",
+        location_hints=["Market Square", "Docks"],
+        atmosphere="cozy but tense",
+        beat_context="A secret meeting takes place.",
+        npc_count_hint=2,
+    )
+
+    assert "Context here." in msg
+    assert "Location type: tavern" in msg
+    assert "Suggested name: The Red Lion" in msg
+    assert "Market Square, Docks" in msg
+    assert "Atmosphere suggestion: cozy but tense" in msg
+    assert "Story context for this location: A secret meeting takes place." in msg
+    assert "at least 2 NPCs" in msg

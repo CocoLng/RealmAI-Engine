@@ -73,6 +73,7 @@ class FakeNarrator:
         language: str = "fr",
         player_intent: str = "",
         outcome_facts: str = "",
+        has_npc_dialogue: bool = False,
     ) -> NarrativeResult:
         self.calls.append(
             {
@@ -81,6 +82,7 @@ class FakeNarrator:
                 "language": language,
                 "player_intent": player_intent,
                 "outcome_facts": outcome_facts,
+                "has_npc_dialogue": has_npc_dialogue,
             },
         )
         if self.side_effect is not None:
@@ -391,6 +393,35 @@ class TestRefusalGrounding:
         assert "Aldric" in prompt  # actor name
         # The old English hint must be gone.
         assert "Describe their realisation" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_narrate_unknown_includes_items(
+        self,
+        cathedral: Location,
+        aldric: NPC,
+    ) -> None:
+        """The unknown-entity refusal prompt must also list items_available."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.TALK,
+                actor_name="Aldric",
+                target_name="fantôme",
+                raw_input="je parle au fantôme",
+                confidence=0.5,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="(refusal)", tone="somber")],
+        )
+        pipeline = _make_pipeline(interp, narrator, cathedral, npcs={})
+
+        await pipeline.process(player_text="je parle au fantôme")
+
+        assert len(narrator.calls) == 1
+        prompt = narrator.calls[0]["action_result_text"]
+        assert "Autel de pierre" in prompt
+        assert "Statue de saint" in prompt
+        assert "Objets disponibles" in prompt
 
     @pytest.mark.asyncio
     async def test_narrate_rule_failure_injects_scene_grounding(

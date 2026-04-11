@@ -2,16 +2,14 @@
 
 import logging
 from pathlib import Path
-from typing import Any
 
-from ai.client import LLMParseError, OllamaClient
+from ai.client import OllamaClient
 from ai.language import language_instruction
 from world.location import Location
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system_world_generator.txt").read_text()
-_BRAINSTORM_PROMPT = (Path(__file__).parent / "prompts" / "brainstorm_world.txt").read_text()
 
 
 class WorldGenerator:
@@ -20,9 +18,8 @@ class WorldGenerator:
     Output is a fully-formed Location (world/location.py).
     The caller is responsible for persisting the location via LocationRepository.
 
-    Uses a 2-call chain:
-      1. Brainstorm 2-3 location concepts (think=True, low budget)
-      2. Generate the full location JSON from the best concept (think=False)
+    Uses a single LLM call with enriched context (atmosphere, beat context,
+    NPC hints) to produce varied, story-coherent locations.
     """
 
     MODEL = "qwen3.5:9b"
@@ -37,6 +34,9 @@ class WorldGenerator:
         location_name: str | None = None,
         language: str = "fr",
         location_hints: list[str] | None = None,
+        atmosphere: str | None = None,
+        beat_context: str | None = None,
+        npc_count_hint: int | None = None,
     ) -> Location:
         """Generate a new location for the campaign.
 
@@ -48,35 +48,29 @@ class WorldGenerator:
             location_hints: Optional list of canonical location names from the
                 story arc. When provided, the LLM is instructed to reuse these
                 exact names for any locations it references (connections, name).
+            atmosphere: Optional atmosphere/mood suggestion for the location.
+            beat_context: Optional text from story arc beats that reference
+                this location, giving the LLM narrative direction.
+            npc_count_hint: Optional minimum number of NPCs the location
+                should contain.
 
         Returns:
             A Location ready to be saved.
         """
         user_content = self._build_user_message(
             campaign_context, location_type, location_name, location_hints,
+            atmosphere, beat_context, npc_count_hint,
         )
         lang_prefix = language_instruction(language)
-
-        # --- Call 1: Brainstorm (think=True, lower budget) ---
-        brainstorm_context = self._brainstorm(user_content, lang_prefix)
-
-        # --- Call 2: Generate (think=False) ---
-        if brainstorm_context:
-            generate_user = (
-                f"{user_content}\n\n"
-                f"## Brainstorm context\n{brainstorm_context}\n\n"
-                f"Using the selected concept above, generate the full location."
-            )
-        else:
-            generate_user = user_content
-
         system_prompt = lang_prefix + _SYSTEM_PROMPT
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": generate_user},
+            {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.8, think=False)
+        data = self._client.chat_json(self.MODEL, messages, temperature=0.9, think=False)
+
+        # --- Item description filtering (safety: drop hallucinated items) ---
         items_available = list(data.get("items_available", []))
         raw_descriptions = data.get("item_descriptions") or {}
         # Keep only descriptions whose key actually appears in items_available,
@@ -93,6 +87,7 @@ class WorldGenerator:
                 len(filtered_keys),
                 filtered_keys,
             )
+
         location = Location(
             name=str(data["name"]),
             description=str(data["description"]),
@@ -107,45 +102,15 @@ class WorldGenerator:
         )
         return location
 
-    def _brainstorm(self, user_content: str, lang_prefix: str) -> str | None:
-        """Run the brainstorm call (Call 1) and return the selected concept as context.
-
-        Returns None if the brainstorm call fails, allowing graceful fallback.
-        """
-        system_prompt = lang_prefix + _BRAINSTORM_PROMPT
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
-        try:
-            data: dict[str, Any] = self._client.chat_json(
-                self.MODEL, messages, temperature=0.8, think=True, thinking_budget=2048,
-            )
-            logger.info("WORLD brainstorm returned %d options", len(data.get("options", [])))
-            return self._format_brainstorm(data)
-        except (LLMParseError, KeyError, ValueError) as exc:
-            logger.warning("WORLD brainstorm failed, falling back to single-call: %s", exc)
-            return None
-
-    @staticmethod
-    def _format_brainstorm(data: dict[str, Any]) -> str:
-        """Format brainstorm output into a concise context string."""
-        options = data.get("options", [])
-        parts: list[str] = []
-        for opt in options:
-            marker = "[SELECTED] " if opt.get("selected") else ""
-            concept = opt.get("concept", "")
-            elements = opt.get("key_elements", [])
-            elements_str = "; ".join(str(e) for e in elements)
-            parts.append(f"{marker}{concept} — {elements_str}")
-        return "\n".join(parts)
-
     def _build_user_message(
         self,
         campaign_context: str,
         location_type: str,
         location_name: str | None,
         location_hints: list[str] | None = None,
+        atmosphere: str | None = None,
+        beat_context: str | None = None,
+        npc_count_hint: int | None = None,
     ) -> str:
         """Build the user message for the LLM prompt.
 
@@ -154,6 +119,9 @@ class WorldGenerator:
             location_type: Type of location to generate.
             location_name: Optional specific name for the location.
             location_hints: Optional canonical location names from the story arc.
+            atmosphere: Optional atmosphere/mood suggestion.
+            beat_context: Optional story arc beat text for this location.
+            npc_count_hint: Optional minimum NPC count.
 
         Returns:
             Formatted user message string.
@@ -168,5 +136,14 @@ class WorldGenerator:
                 "You MUST reuse these exact names when they match the location "
                 "you are generating or when listing connections. Do NOT invent "
                 "alternative names for locations that already appear in this list."
+            )
+        if atmosphere:
+            parts.append(f"Atmosphere suggestion: {atmosphere}")
+        if beat_context:
+            parts.append(f"Story context for this location: {beat_context}")
+        if npc_count_hint is not None:
+            parts.append(
+                f"This location needs at least {npc_count_hint} NPCs "
+                "with story-relevant information."
             )
         return "\n\n".join(parts)

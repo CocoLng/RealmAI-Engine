@@ -58,6 +58,21 @@ ALIGNMENT_LABELS: dict[str, dict[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
+# Editable field labels (character edit menu)
+# ---------------------------------------------------------------------------
+
+EDIT_FIELD_LABELS: dict[str, dict[str, str]] = {
+    "fr": {
+        "race": "Race",
+        "class": "Classe",
+        "alignment": "Alignement",
+        "stats": "Statistiques",
+        "skills": "Competences",
+        "name": "Nom",
+    },
+}
+
+# ---------------------------------------------------------------------------
 # Starter kit labels
 # ---------------------------------------------------------------------------
 
@@ -121,6 +136,47 @@ KIT_LABELS: dict[str, dict[str, dict[str, str]]] = {
             "name": "Combattant sauvage",
             "description": "Un barbare maniant deux haches à main.",
         },
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Countdown & party card labels
+# ---------------------------------------------------------------------------
+
+COUNTDOWN_LABELS: dict[str, dict[int, str]] = {
+    "fr": {
+        3: "Préparez-vous, aventuriers...",
+        2: "Les destins convergent...",
+        1: "L'aventure commence...",
+    },
+    "en": {
+        3: "Prepare yourselves, adventurers...",
+        2: "Fates converge...",
+        1: "The adventure begins...",
+    },
+}
+
+ABILITY_LABELS: dict[str, dict[str, str]] = {
+    "fr": {
+        "STR": "FOR",
+        "DEX": "DEX",
+        "CON": "CON",
+        "INT": "INT",
+        "WIS": "SAG",
+        "CHA": "CHA",
+    },
+}
+
+PARTY_CARD_LABELS: dict[str, dict[str, str]] = {
+    "fr": {
+        "level": "Niveau",
+        "hp": "PV",
+        "ac": "CA",
+    },
+    "en": {
+        "level": "Level",
+        "hp": "HP",
+        "ac": "AC",
     },
 }
 

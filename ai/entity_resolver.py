@@ -65,6 +65,7 @@ class ResolutionResult:
     resolved_entity: str | None = None
     candidates: list[EntityCandidate] = field(default_factory=list)
     reason: str | None = None
+    reclassified_action_type: ActionType | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +130,7 @@ class EntityResolver:
                 interpreter=interpreter, language=language,
             )
         if at == ActionType.USE_ITEM:
-            return _resolve_item(action, inventory)
+            return _resolve_item(action, inventory, location)
         if at == ActionType.PICKUP:
             return _resolve_pickup(action, location)
 
@@ -665,37 +666,56 @@ def _combatant_result(raw: str, matches: list[str]) -> ResolutionResult:
 def _resolve_item(
     action: InterpretedAction,
     inventory: Inventory | None,
+    location: Location | None = None,
 ) -> ResolutionResult:
     raw = action.item_name or ""
-    if inventory is None or not raw:
-        return ResolutionResult(
-            status="unknown",
-            field_name="item_name",
-            raw_value=raw,
-            reason="USE_ITEM without inventory or item_name",
-        )
 
-    item_names = [i.name for i in inventory.items] + [
-        i.name for i in inventory.equipped.values()
-    ]
-    matches = _match_candidates(raw, item_names)
-    if not matches:
-        return ResolutionResult(
-            status="unknown",
-            field_name="item_name",
-            raw_value=raw,
-            reason=f"No item matches '{raw}'",
-        )
-    if len(matches) == 1:
-        return ResolutionResult(
-            status="resolved",
-            field_name="item_name",
-            raw_value=raw,
-            resolved_entity=matches[0],
-        )
+    # --- inventory lookup (primary) ---
+    if inventory is not None and raw:
+        item_names = [i.name for i in inventory.items] + [
+            i.name for i in inventory.equipped.values()
+        ]
+        matches = _match_candidates(raw, item_names)
+        if len(matches) == 1:
+            return ResolutionResult(
+                status="resolved",
+                field_name="item_name",
+                raw_value=raw,
+                resolved_entity=matches[0],
+            )
+        if len(matches) > 1:
+            return ResolutionResult(
+                status="ambiguous",
+                field_name="item_name",
+                raw_value=raw,
+                candidates=[EntityCandidate(id=m, label=m) for m in matches],
+            )
+
+    # --- fallback: scene object (reclassify USE_ITEM → INTERACT) ---
+    if raw:
+        scene_matches = _match_candidates(raw, _available_objects(location))
+        if len(scene_matches) == 1:
+            return ResolutionResult(
+                status="resolved",
+                field_name="target_name",
+                raw_value=raw,
+                resolved_entity=scene_matches[0],
+                reclassified_action_type=ActionType.INTERACT,
+            )
+        if len(scene_matches) > 1:
+            return ResolutionResult(
+                status="ambiguous",
+                field_name="target_name",
+                raw_value=raw,
+                candidates=[
+                    EntityCandidate(id=m, label=m) for m in scene_matches
+                ],
+                reclassified_action_type=ActionType.INTERACT,
+            )
+
     return ResolutionResult(
-        status="ambiguous",
+        status="unknown",
         field_name="item_name",
         raw_value=raw,
-        candidates=[EntityCandidate(id=m, label=m) for m in matches],
+        reason=f"No item matches '{raw}'",
     )

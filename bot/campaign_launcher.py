@@ -17,16 +17,20 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot.embeds.narrative_embed import build_opening_crawl_embed
+from bot.embeds.character_embed import build_party_card_embed
+from bot.embeds.narrative_embed import build_countdown_embed, build_opening_crawl_embed
 from bot.embeds.scene_embed import build_scene_embed
 from bot.game_session import GameSession, create_ai_services
 from bot.i18n import CLASS_LABELS, RACE_LABELS, get_kit_label, get_label
 from bot.llm_retry import DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS, retry_llm_call
 from bot.views.character_create_view import CharacterCreateView
+from bot.views.character_edit_flow import CharacterEditFlow
+from bot.views.character_edit_view import CharacterEditView
 from bot.views.force_launch_view import ForceLaunchView
 from bot.views.start_onboarding_view import StartOnboardingView
 from bot.views.starter_gear_view import StarterGearView
 from engine.character import (
+    Ability,
     Character,
     assign_standard_array,
     create_character,
@@ -39,8 +43,8 @@ from world.location import Location
 from world.story_arc import StoryArc
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import TypeVar
+    from collections.abc import Callable, Coroutine
+    from typing import Any, TypeVar
 
     from ai.client import OllamaClient
     from bot.bot import RealmBot
@@ -91,6 +95,7 @@ class CampaignLauncher:
     characters: dict[int, Character] = field(default_factory=dict)
     inventories: dict[int, Inventory] = field(default_factory=dict)
     spellcasters: dict[int, SpellcasterState | None] = field(default_factory=dict)
+    raw_assignments: dict[int, dict[Ability, int]] = field(default_factory=dict)
     story_arc: StoryArc | None = None
     current_location: Location | None = None
     _generation_task: asyncio.Task[None] | None = field(
@@ -106,6 +111,9 @@ class CampaignLauncher:
     _notified_players_ready: bool = field(default=False, repr=False)
     _force_launch_offered: bool = field(default=False, repr=False)
     _gen_start: float = field(default=0.0, repr=False)
+    _ephemeral_interactions: dict[int, list[discord.Interaction]] = field(
+        default_factory=dict, repr=False,
+    )
 
     def __post_init__(self) -> None:
         for uid in self.player_ids:
@@ -182,32 +190,29 @@ class CampaignLauncher:
             return
 
         if self.player_progress[user_id] != PlayerProgress.PENDING:
-            # Reset player state for re-creation
-            self.characters.pop(user_id, None)
-            self.inventories.pop(user_id, None)
-            self.spellcasters.pop(user_id, None)
-            self.player_progress[user_id] = PlayerProgress.PENDING
-            self._notified_players_ready = False
+            # Player already has a character — show edit menu instead of full wizard
+            character = self.characters.get(user_id)
+            if character is None:
+                await interaction.response.send_message(
+                    "Erreur interne.", ephemeral=True,
+                )
+                return
 
-            # Delete from DB
-            db_session = self.bot.db_factory()
-            try:
-                from db.repositories import PlayerCharacterRepository
-
-                PlayerCharacterRepository(db_session).delete(user_id, self.campaign.id)
-                db_session.commit()
-            finally:
-                db_session.close()
-
-            await self.channel.send(
-                f"**{interaction.user.display_name}** recommence la creation de son personnage.",
+            edit_view = CharacterEditView(
+                character=character,
+                language=self.language,
+                on_modify=self._make_on_modify(user_id),
             )
-            logger.info("ONBOARD reset user=%s campaign=%s", interaction.user, self.campaign.id)
+            await interaction.response.send_message(
+                edit_view.get_summary_text(), view=edit_view, ephemeral=True,
+            )
+            return
 
         view = CharacterCreateView(language=self.language, on_complete=self._on_character_created)
         await interaction.response.send_message(
             "Choisis ta race :", view=view, ephemeral=True,
         )
+        self._ephemeral_interactions.setdefault(user_id, []).append(interaction)
 
     async def _on_character_created(
         self,
@@ -240,6 +245,7 @@ class CampaignLauncher:
         self.characters[user_id] = character
         self.inventories[user_id] = inventory
         self.spellcasters[user_id] = spellcaster
+        self.raw_assignments[user_id] = view.ability_assignments
         self.player_progress[user_id] = PlayerProgress.CHARACTER_DONE
 
         logger.info(
@@ -277,6 +283,7 @@ class CampaignLauncher:
             view=gear_view,
             ephemeral=True,
         )
+        self._ephemeral_interactions.setdefault(user_id, []).append(interaction)
 
     async def _on_gear_selected(
         self,
@@ -330,28 +337,156 @@ class CampaignLauncher:
         await interaction.response.send_message(
             f"Kit **{kit_display}** equipe ! Tu es pret(e).", ephemeral=True,
         )
+        self._ephemeral_interactions.setdefault(user_id, []).append(interaction)
 
         # Announce publicly
         await self.channel.send(
             f"**{character.name}** ({race_display} {cls_display}) est pret(e) ! [{kit_display}]",
         )
 
+        # Clean up ephemeral onboarding messages for this player
+        await self._cleanup_ephemeral(user_id)
+
         await self._check_ready()
+
+    # ------------------------------------------------------------------
+    # Character edit callbacks
+    # ------------------------------------------------------------------
+
+    def _make_on_modify(
+        self, user_id: int,
+    ) -> "Callable[[discord.Interaction, list[str]], Coroutine[Any, Any, None]]":
+        """Create an on_modify callback bound to a specific user_id."""
+        async def _on_modify(
+            interaction: discord.Interaction,
+            selected_fields: list[str],
+        ) -> None:
+            character = self.characters.get(user_id)
+            if character is None:
+                await interaction.response.send_message(
+                    "Erreur interne.", ephemeral=True,
+                )
+                return
+
+            raw = self.raw_assignments.get(user_id, {})
+            flow = CharacterEditFlow(
+                character=character,
+                raw_assignments=raw,
+                language=self.language,
+                on_complete=self._on_character_edited,
+            )
+            await flow.start(interaction, selected_fields)
+
+        return _on_modify
+
+    async def _on_character_edited(
+        self,
+        interaction: discord.Interaction,
+        flow: CharacterEditFlow,
+    ) -> None:
+        """Called when a player finishes editing their character."""
+        user_id = interaction.user.id
+
+        scores = assign_standard_array(flow.ability_assignments, flow.race)
+        character = create_character(
+            name=flow.character_name,
+            race=flow.race,
+            char_class=flow.char_class,
+            ability_scores=scores,
+            alignment=flow.alignment,
+            skill_proficiencies=flow.skill_proficiencies,
+        )
+
+        spellcaster = create_spellcaster_state(flow.char_class, level=1)
+
+        self.characters[user_id] = character
+        self.spellcasters[user_id] = spellcaster
+        self.raw_assignments[user_id] = flow.ability_assignments
+
+        logger.info(
+            "ONBOARD edit user=%s name=%s race=%s class=%s class_changed=%s campaign=%s",
+            interaction.user, character.name, flow.race.value,
+            flow.char_class.value, flow.class_changed, self.campaign.id,
+        )
+
+        # Persist updated character to DB
+        db_session = self.bot.db_factory()
+        try:
+            from db.repositories import PlayerCharacterRepository
+
+            pc_repo = PlayerCharacterRepository(db_session)
+            inventory = self.inventories.get(user_id, create_inventory())
+            pc_repo.update(
+                user_id, self.campaign.id, character,
+                inventory, spellcaster,
+            )
+            db_session.commit()
+        finally:
+            db_session.close()
+
+        if flow.class_changed:
+            # Class changed — reset inventory and show gear selection again
+            self.inventories[user_id] = create_inventory()
+            self.player_progress[user_id] = PlayerProgress.CHARACTER_DONE
+            self._notified_players_ready = False
+
+            kits = get_starter_kits(flow.char_class)
+            gear_view = StarterGearView(
+                kits=kits, on_selected=self._on_gear_selected, language=self.language,
+            )
+            items_desc = "\n".join(
+                f"**{get_kit_label(self.language, kit.name, 'name')}** — "
+                f"{get_kit_label(self.language, kit.name, 'description') or kit.description}"
+                for kit in kits
+            )
+            await interaction.response.send_message(
+                f"Personnage **{character.name}** modifie !\n\n"
+                f"Ta classe a change — choisis ton equipement de depart :\n{items_desc}",
+                view=gear_view,
+                ephemeral=True,
+            )
+            await self.channel.send(
+                f"**{character.name}** a modifie son personnage (nouvelle classe).",
+            )
+        else:
+            # Class unchanged — keep gear, stay at current progress
+            await interaction.response.send_message(
+                f"Personnage **{character.name}** modifie !", ephemeral=True,
+            )
+            await self.channel.send(
+                f"**{character.name}** a modifie son personnage.",
+            )
 
     # ------------------------------------------------------------------
     # Background generation (sequential: arc → location)
     # ------------------------------------------------------------------
 
     async def _run_generation(self, client: "OllamaClient") -> None:
-        """Run arc then location generation sequentially with retry."""
+        """Run arc then location generation sequentially with retry.
+
+        Uses the Arc Recipe Engine for structural variety:
+        1. Generate a code-driven recipe (no LLM call)
+        2. Pass recipe to ArcGenerator (single LLM call)
+        3. Pass enriched context to WorldGenerator (single LLM call)
+        """
+        import random
+
         from ai.arc_generator import ArcGenerator
         from ai.client import OllamaUnavailableError
         from ai.world_generator import WorldGenerator
+        from engine.arc_recipes import generate_recipe
 
         arc_gen = ArcGenerator(client)
         world_gen = WorldGenerator(client)
 
-        # --- Arc generation (mandatory) ---
+        # --- Generate recipe (pure Python, instant) ---
+        recipe = generate_recipe(theme=self.campaign.name)
+        logger.info(
+            "GENERATION recipe campaign=%s archetype=%s tone=%s beats=%d",
+            self.campaign.id, recipe.archetype, recipe.tone, recipe.num_beats,
+        )
+
+        # --- Arc generation (mandatory, single LLM call) ---
         self._generation_phase = GenerationPhase.ARC
         arc_start = time.monotonic()
         logger.info("GENERATION arc_start campaign=%s", self.campaign.id)
@@ -361,6 +496,7 @@ class CampaignLauncher:
                     self.campaign.name,
                     len(self.player_ids),
                     self.language,
+                    recipe=recipe,
                 ),
             )
         except OllamaUnavailableError:
@@ -382,7 +518,7 @@ class CampaignLauncher:
             len(self.story_arc.beats),
         )
 
-        # --- Location generation (mandatory, uses arc context) ---
+        # --- Location generation (mandatory, single LLM call) ---
         self._generation_phase = GenerationPhase.LOCATION
         loc_start = time.monotonic()
         logger.info("GENERATION loc_start campaign=%s", self.campaign.id)
@@ -398,6 +534,18 @@ class CampaignLauncher:
             for beat in self.story_arc.beats
             if beat.location_hint
         ]
+
+        # Enriched context for variety: atmosphere + beat context + NPC hint
+        atmospheres = [
+            "oppressante", "féerique", "délabrée", "vivante", "silencieuse",
+            "chaotique", "sacrée", "industrielle", "souterraine", "maritime",
+            "aérienne", "volcanique",
+        ]
+        atmosphere = random.choice(atmospheres)  # noqa: S311
+        first_beat = self.story_arc.beats[0] if self.story_arc.beats else None
+        beat_context = first_beat.description if first_beat else None
+        npc_hint = 2 if first_beat and first_beat.encounter_type == "social" else None
+
         try:
             location = await self._retry_llm_call(
                 lambda: world_gen.generate(
@@ -405,6 +553,9 @@ class CampaignLauncher:
                     location_type="starting_area",
                     language=self.language,
                     location_hints=arc_location_hints,
+                    atmosphere=atmosphere,
+                    beat_context=beat_context,
+                    npc_count_hint=npc_hint,
                 ),
             )
         except OllamaUnavailableError:
@@ -630,6 +781,10 @@ class CampaignLauncher:
                 "LAUNCH purge failed campaign=%s", self.campaign.id, exc_info=True,
             )
 
+        # --- Delete any remaining ephemeral onboarding messages ---
+        for uid in list(self._ephemeral_interactions):
+            await self._cleanup_ephemeral(uid)
+
         # Surface AI initialization warnings (after purge so they survive).
         for warning in session.ai_warnings:
             try:
@@ -639,17 +794,46 @@ class CampaignLauncher:
                     "Failed to send AI warning campaign=%s", self.campaign.id,
                 )
 
-        # --- Countdown ---
+        # --- Animated countdown embed (3 → 2 → 1, then deleted) ---
         try:
-            countdown_msg = await self.channel.send("**La partie commence dans 3...**")
-            for i in (2, 1):
-                await asyncio.sleep(1)
-                await countdown_msg.edit(content=f"**La partie commence dans {i}...**")
-            await asyncio.sleep(1)
+            countdown_msg = await self.channel.send(
+                embed=build_countdown_embed(3, self.campaign.name, self.language),
+            )
+            for step in (2, 1):
+                await asyncio.sleep(1.5)
+                await countdown_msg.edit(
+                    embed=build_countdown_embed(step, self.campaign.name, self.language),
+                )
+            await asyncio.sleep(1.5)
             await countdown_msg.delete()
         except Exception:
             logger.warning(
                 "LAUNCH countdown failed campaign=%s", self.campaign.id, exc_info=True,
+            )
+
+        # --- Party character cards (permanent, one per player) ---
+        try:
+            for user_id, character in self.characters.items():
+                member = self.channel.guild.get_member(user_id)
+                member_name = member.display_name if member else "???"
+                card_embed = build_party_card_embed(
+                    character, member_name, self.language,
+                )
+                await self.channel.send(embed=card_embed)
+                await asyncio.sleep(0.3)
+        except Exception:
+            logger.warning(
+                "LAUNCH party cards failed campaign=%s",
+                self.campaign.id,
+                exc_info=True,
+            )
+
+        # --- Separator ---
+        try:
+            await self.channel.send("\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501 \u2726 \u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501")
+        except Exception:
+            logger.warning(
+                "LAUNCH separator failed campaign=%s", self.campaign.id, exc_info=True,
             )
 
         # Opening crawl embed
@@ -703,6 +887,18 @@ class CampaignLauncher:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _cleanup_ephemeral(self, user_id: int) -> None:
+        """Delete all stored ephemeral interactions for a player."""
+        interactions = self._ephemeral_interactions.pop(user_id, [])
+        for itn in interactions:
+            try:
+                await itn.delete_original_response()
+            except (discord.NotFound, discord.HTTPException):
+                logger.debug(
+                    "ephemeral delete failed user=%s campaign=%s",
+                    user_id, self.campaign.id,
+                )
 
     def _safe_create_task(self, coro: object) -> asyncio.Task[None]:
         """Create an asyncio task with error logging on failure."""

@@ -19,6 +19,10 @@ class NPCGenerator:
 
     The output is persisted onto the NPC entity by the caller so this
     expensive LLM call only happens once per NPC.
+
+    An optional ``archetype_context`` parameter allows the caller to inject
+    archetype information (personality traits, narrative hooks) to produce
+    richer, more thematic backstories.
     """
 
     MODEL = "qwen3.5:4b"
@@ -32,6 +36,7 @@ class NPCGenerator:
         location_context: str,
         campaign_theme: str,
         language: str = "fr",
+        archetype_context: str | None = None,
     ) -> NPCSheet:
         """Generate a backstory sheet for ``npc_name``.
 
@@ -40,33 +45,46 @@ class NPCGenerator:
             location_context: Where the NPC is encountered — name + ambiance.
             campaign_theme: Broader campaign theme so secrets can hook in.
             language: ISO 639-1 language code for output.
+            archetype_context: Optional archetype info (personality traits,
+                narrative hooks) to produce richer backstories.
 
         Returns:
             An :class:`NPCSheet` with personality, description, secrets,
             and knowledge ready to persist on the NPC entity.
         """
-        user_content = (
-            f"NPC name: {npc_name}\n\n"
-            f"Location context:\n{location_context}\n\n"
-            f"Campaign theme: {campaign_theme}"
-        )
+        parts = [
+            f"NPC name: {npc_name}",
+            f"\nLocation context:\n{location_context}",
+            f"\nCampaign theme: {campaign_theme}",
+        ]
+        if archetype_context:
+            parts.append(f"\nNPC Archetype:\n{archetype_context}")
+        user_content = "\n".join(parts)
+
         system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
+        data = self._client.chat_json(self.MODEL, messages, temperature=0.9)
         secrets = [str(s).strip() for s in data.get("secrets", []) if str(s).strip()]
         knowledge = [str(k).strip() for k in data.get("knowledge", []) if str(k).strip()]
 
-        # M11: Guarantee non-empty secrets and knowledge with fallback defaults
+        # NPCSheet requires min_length=1 for secrets and knowledge.
+        # Use archetype-aware fallbacks when the LLM returns empty lists.
         if not secrets:
-            secrets = ["A un secret qu'il/elle ne révèle pas facilement"]
-            logger.warning("NPCGEN name=%r: empty secrets, using fallback", npc_name)
+            if archetype_context:
+                secrets = [f"{npc_name} cache un secret lié à son passé"]
+            else:
+                secrets = ["A un secret qu'il/elle ne révèle pas facilement"]
+            logger.warning("NPCGEN name=%r: empty secrets from LLM, using fallback", npc_name)
         if not knowledge:
-            knowledge = ["Connaît bien les environs"]
-            logger.warning("NPCGEN name=%r: empty knowledge, using fallback", npc_name)
+            if archetype_context:
+                knowledge = [f"Connaît bien {location_context.split(chr(10))[0].strip()[:60]}"]
+            else:
+                knowledge = ["Connaît bien les environs"]
+            logger.warning("NPCGEN name=%r: empty knowledge from LLM, using fallback", npc_name)
 
         sheet = NPCSheet(
             personality=str(data.get("personality", "")).strip(),

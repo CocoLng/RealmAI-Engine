@@ -2,16 +2,15 @@
 
 import logging
 from pathlib import Path
-from typing import Any
 
-from ai.client import LLMParseError, OllamaClient
+from ai.client import OllamaClient
 from ai.language import language_instruction
+from engine.arc_recipes import ArcRecipe
 from world.story_arc import StoryArc
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system_arc_generator.txt").read_text()
-_BRAINSTORM_PROMPT = (Path(__file__).parent / "prompts" / "brainstorm_arc.txt").read_text()
 
 
 class ArcGenerator:
@@ -20,9 +19,9 @@ class ArcGenerator:
     Output is a fully-formed StoryArc (world/story_arc.py).
     The caller is responsible for persisting the arc.
 
-    Uses a 2-call chain:
-      1. Brainstorm 2-3 arc concepts (think=True, low budget)
-      2. Generate the full arc JSON from the best concept (think=False)
+    When an ArcRecipe is provided, uses a single LLM call with the recipe
+    as structured context.  Falls back to a simple prompt when no recipe
+    is given (legacy path).
     """
 
     MODEL = "qwen3.5:9b"
@@ -35,6 +34,7 @@ class ArcGenerator:
         theme: str,
         player_count: int,
         language: str = "fr",
+        recipe: ArcRecipe | None = None,
     ) -> StoryArc:
         """Generate a new story arc for the campaign.
 
@@ -42,33 +42,28 @@ class ArcGenerator:
             theme: The campaign theme (e.g. "dark fantasy", "pirate adventure").
             player_count: Number of players in the campaign.
             language: ISO 639-1 language code for narrative output.
+            recipe: Optional ArcRecipe providing structural scaffolding
+                (archetype, beat sequence, complications, tone, etc.).
+                When provided, the LLM fills in creative narrative content
+                guided by the recipe constraints.
 
         Returns:
             A StoryArc ready to be saved.
         """
-        user_content = self._build_user_message(theme, player_count)
         lang_prefix = language_instruction(language)
-
-        # --- Call 1: Brainstorm (think=True, lower budget) ---
-        brainstorm_context = self._brainstorm(user_content, lang_prefix)
-
-        # --- Call 2: Generate (think=False) ---
-        if brainstorm_context:
-            generate_user = (
-                f"{user_content}\n\n"
-                f"## Brainstorm context\n{brainstorm_context}\n\n"
-                f"Using the selected concept above, generate the full story arc."
-            )
-        else:
-            generate_user = user_content
-
         system_prompt = lang_prefix + _SYSTEM_PROMPT
+
+        if recipe:
+            user_content = self._build_user_message_with_recipe(theme, player_count, recipe)
+        else:
+            user_content = self._build_user_message(theme, player_count)
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": generate_user},
+            {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.8, think=False)
+        data = self._client.chat_json(self.MODEL, messages, temperature=0.9, think=False)
         arc = StoryArc.model_validate(data)
         logger.info(
             "ARC theme=%r beats=%d villain=%r",
@@ -76,41 +71,8 @@ class ArcGenerator:
         )
         return arc
 
-    def _brainstorm(self, user_content: str, lang_prefix: str) -> str | None:
-        """Run the brainstorm call (Call 1) and return the selected concept as context.
-
-        Returns None if the brainstorm call fails, allowing graceful fallback.
-        """
-        system_prompt = lang_prefix + _BRAINSTORM_PROMPT
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
-        try:
-            data: dict[str, Any] = self._client.chat_json(
-                self.MODEL, messages, temperature=0.8, think=True, thinking_budget=2048,
-            )
-            logger.info("ARC brainstorm returned %d options", len(data.get("options", [])))
-            return self._format_brainstorm(data)
-        except (LLMParseError, KeyError, ValueError) as exc:
-            logger.warning("ARC brainstorm failed, falling back to single-call: %s", exc)
-            return None
-
-    @staticmethod
-    def _format_brainstorm(data: dict[str, Any]) -> str:
-        """Format brainstorm output into a concise context string."""
-        options = data.get("options", [])
-        parts: list[str] = []
-        for opt in options:
-            marker = "[SELECTED] " if opt.get("selected") else ""
-            concept = opt.get("concept", "")
-            elements = opt.get("key_elements", [])
-            elements_str = "; ".join(str(e) for e in elements)
-            parts.append(f"{marker}{concept} — {elements_str}")
-        return "\n".join(parts)
-
     def _build_user_message(self, theme: str, player_count: int) -> str:
-        """Build the user message for the LLM prompt.
+        """Build the user message for the LLM prompt (legacy, no recipe).
 
         Args:
             theme: The campaign theme.
@@ -124,3 +86,44 @@ class ArcGenerator:
             f"Number of players: {player_count}\n\n"
             f"Generate a compelling story arc with 10-15 story beats."
         )
+
+    @staticmethod
+    def _build_user_message_with_recipe(
+        theme: str,
+        player_count: int,
+        recipe: ArcRecipe,
+    ) -> str:
+        """Build the user message incorporating an ArcRecipe.
+
+        The recipe provides structural scaffolding (archetype, beat types,
+        complications, tone) so the LLM focuses on creative narrative content.
+
+        Args:
+            theme: The campaign theme.
+            player_count: Number of players.
+            recipe: The arc recipe to use as scaffolding.
+
+        Returns:
+            Formatted user message string with recipe context.
+        """
+        lines: list[str] = [
+            f"Campaign theme: {theme}",
+            f"Number of players: {player_count}",
+            "",
+            "## Narrative Recipe",
+            f"Archetype: {recipe.archetype.value}",
+            f"Tone: {recipe.tone.value}",
+            f"Complications: {', '.join(recipe.complications)}",
+            f"Villain archetype: {recipe.villain_archetype.value if recipe.villain_archetype else 'au choix'}",
+            "",
+            f"## Beat Sequence ({recipe.num_beats} beats)",
+        ]
+
+        for i, (beat, subtype) in enumerate(zip(recipe.beat_sequence, recipe.beat_subtypes, strict=True)):
+            marker = " [TWIST]" if i == recipe.twist_position else ""
+            lines.append(f"Beat {i + 1}: {beat.value} ({subtype}){marker}")
+
+        lines.append("")
+        lines.append("Fill each beat with creative narrative content. Generate the full story arc.")
+
+        return "\n".join(lines)

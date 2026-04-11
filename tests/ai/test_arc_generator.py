@@ -7,6 +7,7 @@ from pytest_httpx import HTTPXMock
 
 from ai.arc_generator import ArcGenerator
 from ai.client import OllamaClient
+from engine.arc_recipes import ArcRecipe, Archetype, BeatType, Tone, VillainArchetype
 from tests.ai.conftest import CHAT_URL, make_ollama_response
 from world.story_arc import StoryArc
 
@@ -36,30 +37,28 @@ def _make_arc_data(beat_count: int = 10) -> dict:
     }
 
 
-def _make_brainstorm_response() -> dict:
-    """Build a valid brainstorm response."""
-    return {
-        "options": [
-            {
-                "concept": "A dark corruption spreads from beneath the earth",
-                "key_elements": ["Seigneur Malachar", "undead army", "twist: betrayal"],
-                "risk": "Might be too dark",
-                "selected": True,
-            },
-            {
-                "concept": "A political intrigue threatens the realm",
-                "key_elements": ["Duke Valen", "court politics", "twist: hidden heir"],
-                "risk": "Less action-oriented",
-                "selected": False,
-            },
-            {
-                "concept": "An ancient dragon awakens",
-                "key_elements": ["Wyrm Kael", "dragon cult", "twist: dragon is ally"],
-                "risk": "Classic trope",
-                "selected": False,
-            },
-        ]
-    }
+def _make_recipe() -> ArcRecipe:
+    """Build a valid ArcRecipe for testing."""
+    return ArcRecipe(
+        archetype=Archetype.mystery,
+        beat_sequence=[
+            BeatType.exploration, BeatType.social, BeatType.puzzle,
+            BeatType.social, BeatType.exploration, BeatType.puzzle,
+            BeatType.combat, BeatType.exploration, BeatType.social,
+            BeatType.boss,
+        ],
+        beat_subtypes=[
+            "tracking", "negotiation", "riddle",
+            "interrogation", "infiltration", "investigation",
+            "ambush", "discovery", "ceremony",
+            "boss",
+        ],
+        complications=["Trahison d'un allié", "Course contre la montre"],
+        tone=Tone.mysterieux,
+        twist_position=5,
+        num_beats=10,
+        villain_archetype=VillainArchetype.manipulateur,
+    )
 
 
 @pytest.fixture
@@ -75,21 +74,12 @@ def test_system_prompt_file_exists() -> None:
     assert len(content) > 100, "System prompt seems too short"
 
 
-def test_brainstorm_prompt_file_exists() -> None:
-    """The brainstorm prompt file for arcs must exist."""
-    prompt_path = Path(__file__).parent.parent.parent / "ai" / "prompts" / "brainstorm_arc.txt"
-    assert prompt_path.exists(), f"Missing brainstorm prompt: {prompt_path}"
-    content = prompt_path.read_text()
-    assert len(content) > 50, "Brainstorm prompt seems too short"
-
-
 def test_generate_returns_valid_story_arc(
     httpx_mock: HTTPXMock, generator: ArcGenerator
 ) -> None:
     """ArcGenerator.generate() returns a valid StoryArc with correct theme."""
     arc_data = _make_arc_data(10)
-    # Call 1: brainstorm, Call 2: generate
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
+    # Single call (no recipe)
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="dark fantasy", player_count=4)
@@ -100,12 +90,26 @@ def test_generate_returns_valid_story_arc(
     assert len(result.beats) == 10
 
 
+def test_generate_with_recipe(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """ArcGenerator.generate() with a recipe uses single-call generation."""
+    arc_data = _make_arc_data(10)
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    recipe = _make_recipe()
+    result = generator.generate(theme="dark fantasy", player_count=4, recipe=recipe)
+
+    assert isinstance(result, StoryArc)
+    assert result.theme == "dark fantasy"
+    assert len(result.beats) == 10
+
+
 def test_generate_beats_have_correct_structure(
     httpx_mock: HTTPXMock, generator: ArcGenerator
 ) -> None:
     """Each beat in the generated arc has the required fields."""
     arc_data = _make_arc_data(10)
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="dark fantasy", player_count=3)
@@ -122,7 +126,6 @@ def test_generate_last_beat_is_boss(
 ) -> None:
     """The final beat of the generated arc must be a boss encounter."""
     arc_data = _make_arc_data(12)
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="pirate adventure", player_count=5)
@@ -135,7 +138,6 @@ def test_generate_contains_twist(
 ) -> None:
     """The generated arc contains at least one twist beat."""
     arc_data = _make_arc_data(10)
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="dark fantasy", player_count=4)
@@ -149,7 +151,6 @@ def test_generate_current_beat_index_starts_at_zero(
 ) -> None:
     """A freshly generated arc starts at beat index 0."""
     arc_data = _make_arc_data(10)
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
 
     result = generator.generate(theme="mystery", player_count=2)
@@ -157,16 +158,29 @@ def test_generate_current_beat_index_starts_at_zero(
     assert result.current_beat_index == 0
 
 
-def test_generate_falls_back_on_brainstorm_failure(
-    httpx_mock: HTTPXMock, generator: ArcGenerator
+def test_build_user_message_with_recipe_contains_recipe_fields(
+    generator: ArcGenerator,
 ) -> None:
-    """If brainstorm fails, generate() still works with a single call."""
-    arc_data = _make_arc_data(10)
-    # Brainstorm returns invalid JSON (non-JSON string)
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("not json"))
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+    """The recipe-based user message includes archetype, tone, beats, etc."""
+    recipe = _make_recipe()
+    msg = generator._build_user_message_with_recipe("dark fantasy", 4, recipe)
 
-    result = generator.generate(theme="dark fantasy", player_count=4)
+    assert "dark fantasy" in msg
+    assert "4" in msg
+    assert "mystery" in msg  # archetype
+    assert "mystérieux" in msg  # tone
+    assert "manipulateur" in msg  # villain archetype
+    assert "Trahison d'un allié" in msg  # complication
+    assert "[TWIST]" in msg
+    assert "Beat 1:" in msg
+    assert f"Beat {recipe.num_beats}:" in msg
 
-    assert isinstance(result, StoryArc)
-    assert result.theme == "dark fantasy"
+
+def test_build_user_message_with_recipe_no_villain(
+    generator: ArcGenerator,
+) -> None:
+    """When villain_archetype is None, the message shows 'au choix'."""
+    recipe = _make_recipe().model_copy(update={"villain_archetype": None})
+    msg = generator._build_user_message_with_recipe("dark fantasy", 4, recipe)
+
+    assert "au choix" in msg

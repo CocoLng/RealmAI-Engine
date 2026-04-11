@@ -138,6 +138,8 @@ class ActionPipelineResult(BaseModel):
     public_effects: PublicEffects = Field(default_factory=PublicEffects)
     interpreted_action: InterpretedAction
     new_beat: StoryBeat | None = None
+    npc_name: str | None = None
+    npc_dialogue: str | None = None
 
 
 class AmbiguityResult(BaseModel):
@@ -294,9 +296,12 @@ class ActionPipeline:
             and resolution.field_name == "target_name"
             and resolution.resolved_entity is not None
         ):
-            interpreted = interpreted.model_copy(
-                update={"target_name": resolution.resolved_entity},
-            )
+            updates: dict[str, object] = {
+                "target_name": resolution.resolved_entity,
+            }
+            if resolution.reclassified_action_type is not None:
+                updates["action_type"] = resolution.reclassified_action_type
+            interpreted = interpreted.model_copy(update=updates)
         elif (
             resolution.status == "resolved"
             and resolution.field_name == "item_name"
@@ -380,6 +385,8 @@ class ActionPipeline:
             public_effects=outcome.public_effects,
             interpreted_action=interpreted,
             new_beat=new_beat,
+            npc_name=outcome.npc_name,
+            npc_dialogue=outcome.npc_dialogue,
         )
         logger.info(
             "ACTION complete campaign=%s actor=%s action=%s",
@@ -431,6 +438,7 @@ class ActionPipeline:
                 language=self.language,
                 player_intent=outcome.player_intent,
                 outcome_facts=outcome.outcome_facts,
+                has_npc_dialogue=bool(outcome.npc_dialogue),
             )
 
         return await retry_llm_call(
@@ -926,7 +934,10 @@ class ActionPipeline:
                 logger.exception("NPC persist failed for %s", npc.name)
 
         # Build the outcome facts the narrator will render.
-        facts_lines = [f'{npc.name} says: "{response.dialogue}"']
+        # NPC dialogue is passed separately so the narrator only describes
+        # framing (body language, atmosphere) — the spoken words appear in
+        # a dedicated embed field on Discord.
+        facts_lines = [f"{npc.name} responds to the player."]
         if response.revealed_info:
             facts_lines.append(
                 "Reveals: " + " ; ".join(response.revealed_info),
@@ -942,6 +953,8 @@ class ActionPipeline:
             summary=summary,
             player_intent=intent,
             outcome_facts="\n".join(facts_lines),
+            npc_name=npc.name,
+            npc_dialogue=response.dialogue,
         )
 
     def _resolve_pickup(self, action: InterpretedAction) -> str:
@@ -1026,6 +1039,11 @@ class ActionPipeline:
         else:
             exits_line = "aucune"
 
+        if loc is not None and loc.items_available:
+            items_line = ", ".join(loc.items_available[:8])
+        else:
+            items_line = "aucun"
+
         verb = action.action_type.value.lower()
         raw = resolution.raw_value or "cette cible"
 
@@ -1033,10 +1051,11 @@ class ActionPipeline:
             f"{action.actor_name} a tenté de {verb} '{raw}', "
             f"mais cette cible n'existe pas à {loc_name}.\n\n"
             f"Personnages réellement présents : {npcs_line}\n"
+            f"Objets disponibles : {items_line}\n"
             f"Sorties réelles : {exits_line}\n\n"
             "Décris en UN court paragraphe la réalisation du personnage et "
             "propose-lui de reformuler en mentionnant un de ces "
-            "personnages/sorties s'il y en a. "
+            "personnages/objets/sorties s'il y en a. "
             "**N'invente AUCUN autre personnage, lieu ou objet.** "
             "Reste strictement dans le monde décrit ci-dessus."
         )

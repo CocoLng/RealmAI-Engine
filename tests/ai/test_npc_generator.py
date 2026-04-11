@@ -39,7 +39,7 @@ def test_generate_returns_npc_sheet():
 
 
 def test_generate_fallback_on_empty_secrets_and_knowledge():
-    """M11: Empty secrets/knowledge get fallback defaults instead of ValidationError."""
+    """Empty secrets/knowledge get fallback defaults instead of ValidationError."""
     client = MagicMock()
     client.chat_json.return_value = {
         "personality": "Stoïque.",
@@ -60,7 +60,7 @@ def test_generate_fallback_on_empty_secrets_and_knowledge():
 
 
 def test_generate_fallback_on_missing_secrets_and_knowledge():
-    """M11: Missing secrets/knowledge keys get fallback defaults."""
+    """Missing secrets/knowledge keys get fallback defaults."""
     client = MagicMock()
     client.chat_json.return_value = {
         "personality": "Jovial.",
@@ -77,7 +77,7 @@ def test_generate_fallback_on_missing_secrets_and_knowledge():
 
 
 def test_generate_preserves_valid_secrets_and_knowledge():
-    """M11: When secrets/knowledge are non-empty, no fallback is applied."""
+    """When secrets/knowledge are non-empty, no fallback is applied."""
     client = MagicMock()
     client.chat_json.return_value = {
         "personality": "Curieux.",
@@ -93,3 +93,55 @@ def test_generate_preserves_valid_secrets_and_knowledge():
     assert len(sheet.secrets) == 2
     assert len(sheet.knowledge) == 1
     assert "dragon" in sheet.secrets[0].lower()
+
+
+def test_generate_with_archetype_context():
+    """When archetype_context is provided, it is included in the prompt."""
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "personality": "Rusé et calculateur.",
+        "description": "Un homme mince aux yeux perçants.",
+        "secrets": ["Travaille pour la guilde des voleurs."],
+        "knowledge": ["Connaît tous les passages secrets de la ville."],
+    }
+    generator = NPCGenerator(client)
+    sheet = generator.generate(
+        npc_name="Varon",
+        location_context="Le marché noir de Duskwall",
+        campaign_theme="intrigue urbaine",
+        archetype_context="Informateur — vend des secrets au plus offrant.",
+    )
+
+    assert isinstance(sheet, NPCSheet)
+    assert "Rusé" in sheet.personality
+
+    # Verify archetype was included in the prompt
+    args, _kwargs = client.chat_json.call_args
+    messages = args[1]
+    user_msg = messages[-1]["content"]
+    assert "NPC Archetype:" in user_msg
+    assert "Informateur" in user_msg
+
+
+def test_generate_archetype_fallback_on_empty_secrets():
+    """With archetype_context, fallback secrets use the NPC name."""
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "personality": "Silencieux.",
+        "description": "Ombre furtive.",
+        "secrets": [],
+        "knowledge": [],
+    }
+    generator = NPCGenerator(client)
+    sheet = generator.generate(
+        npc_name="Kael",
+        location_context="La tour abandonnée",
+        campaign_theme="dark fantasy",
+        archetype_context="Assassin — travaille dans l'ombre.",
+    )
+
+    assert isinstance(sheet, NPCSheet)
+    assert len(sheet.secrets) == 1
+    assert "Kael" in sheet.secrets[0]
+    assert len(sheet.knowledge) == 1
+    assert "tour abandonnée" in sheet.knowledge[0]

@@ -92,8 +92,13 @@ async def test_talk_invokes_npc_agent_and_threads_dialogue_to_outcome() -> None:
     assert "Elie" in player_input or "ce qui se passe" in player_input
 
     assert isinstance(outcome, MechanicsOutcome)
-    assert "Approche, étranger" in outcome.outcome_facts
+    # Dialogue is now carried separately, not in outcome_facts.
+    assert outcome.npc_name == "Elie"
+    assert outcome.npc_dialogue == "Approche, étranger. Que cherches-tu ici ?"
+    # Revealed info still lives in outcome_facts.
     assert "Valombre" in outcome.outcome_facts
+    # outcome_facts should NOT contain verbatim dialogue anymore.
+    assert "Approche, étranger" not in outcome.outcome_facts
 
     assert npc.disposition == NPCDisposition.FRIENDLY  # NEUTRAL + 1
 

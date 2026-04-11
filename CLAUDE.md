@@ -179,8 +179,8 @@ realmAI-engine/
 │   │   ├── character.py    # /create_character, /character, /level_up
 │   │   ├── inventory.py    # /inventory, /equip, /unequip, /use_item
 │   │   ├── combat.py       # Combat flow with button views
-│   │   ├── exploration.py  # /look, /search, /talk, /move
-│   │   └── rolls.py        # /roll
+│   │   ├── action_handler.py  # @bot mention handler (free-form actions)
+│   │   └── rolls.py           # /roll
 │   ├── views/        # Discord interactive components
 │   │   ├── combat_view.py  # Attack/Cast/Defend/Flee buttons
 │   │   ├── target_select.py

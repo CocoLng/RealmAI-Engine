@@ -31,6 +31,7 @@ class Narrator:
         language: str = "fr",
         player_intent: str = "",
         outcome_facts: str = "",
+        has_npc_dialogue: bool = False,
     ) -> NarrativeResult:
         """Generate an immersive narrative description of a resolved action.
 
@@ -46,6 +47,9 @@ class Narrator:
                 framing is available.
             outcome_facts: What mechanically changed in engine state.
                 Empty string when no mutation occurred.
+            has_npc_dialogue: When ``True``, NPC spoken words will be
+                displayed separately on Discord.  The narrator should
+                describe only framing (body language, atmosphere).
 
         Returns:
             NarrativeResult with narrative text and tone classification.
@@ -57,6 +61,13 @@ class Narrator:
             sections.append(f"## Player framing\n{player_intent}")
         if outcome_facts:
             sections.append(f"## State changes\n{outcome_facts}")
+        if has_npc_dialogue:
+            sections.append(
+                "## Important\n"
+                "NPC dialogue will be displayed separately. "
+                "Describe ONLY atmosphere and body language around the "
+                "speech. Do NOT write any spoken words."
+            )
         user_content = "\n\n".join(sections)
         system_prompt = language_instruction(language) + _SYSTEM_PROMPT
         messages = [
