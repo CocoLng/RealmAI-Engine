@@ -42,6 +42,8 @@ id, name, created_at, player_names (JSON), current_location,
 interaction_count, combat_state_json (TEXT), language
 ```
 
+`combat_state_json` est le dump Pydantic (`CombatState.model_dump_json()`) roundtrip via `bot/persistence.py`. Inclut `combat_id` (UUID généré auto), `end_reason` (CombatEndReason | None), `pending_phase_narrations: list[PhaseTransitionEvent]`, et pour chaque `Combatant` les champs Phase 2 (`stat_block`, `fled`, `current_zone`, `action_budget`, `legendary_points_remaining`, `phase_save_bonus`). Les tests `test_combat_state_roundtrips_with_new_fields` (tests/test_combat_phase2.py) et `test_roundtrip_with_combat_state` (tests/test_mappers.py) couvrent la ronde-trip.
+
 #### `npcs`
 ```
 id, campaign_id, name, race, char_class, level,

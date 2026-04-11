@@ -21,7 +21,7 @@ Refonte du combat pour atteindre une fidélité "core 5e" : orthogonal aux beats
 |---|---|---|
 | **Phase 0 — Bugfixes** | 🟢 Done | Villain protégé du trivial resolve, MOVE bloqué en combat actif |
 | **Phase 1 — Fondations NPC & engine** | 🟢 Done | `NPCStatBlock` + 11 archétypes + `Zone`/`ZoneTag` + conditions `SURPRISED`/`CONCENTRATING`, persistance DB complète |
-| **Phase 2 — Moteur multi-ennemis** | 🔴 Non commencé | Combat entry, initiative 3 cas, multi-enemy turn mgmt, action economy, zone movement |
+| **Phase 2 — Moteur multi-ennemis** | 🟢 Done | `engine/combat_trigger.py` + `bot/combat_entry.py` (4 triggers), `start_combat(trigger=)` 3 cas surprise, `advance_turn` consume SURPRISED / reset ActionBudget / round wrap reactions, `check_combat_end` (VICTORY/DEFEAT/FLED/TRUCE), `resolve_npc_attack` pour stat-blocks, concentration hook sur `apply_damage`, `move_combatant_to_zone` + OOA + `disengage`, `combat_id`/`end_reason`/`pending_phase_narrations` sur `CombatState`, persistance roundtrip via `campaigns.combat_state_json` (Pydantic) |
 | **Phase 3 — Validation & pipeline** | 🔴 Non commencé | Validators stricts, dispatch combat-aware, auto-convert MOVE→FLEE |
 | **Phase 4 — Interprète & générateurs** | 🔴 Non commencé | Détection lethal intent, world gen zones/triggers, arc gen villain stat block, hydration par tier |
 | **Phase 5 — IA tactique NPC** | 🔴 Non commencé | Minion/Elite scripted, boss LLM tactician, legendary actions, phase transitions |
@@ -52,7 +52,9 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ Armes et armures (4 catégories armes, 3 catégories armures, shield +2)
 - ✅ Sorts (~20 sorts catalogue, slots full/half caster, cantrip scaling)
 - ✅ Conditions (17 conditions SRD incluant SURPRISED et CONCENTRATING, durations, effets advantage/disadvantage, helpers `consume_surprise_if_present` + `check_concentration_save`)
-- ✅ Combat (initiative, attaques, crits, death saves, sorts avec saves)
+- ✅ Combat (initiative 3 cas avec `CombatTrigger`, attaques PC + NPC stat-blocks, crits, death saves, sorts avec saves, `advance_turn` multi-ennemis avec reset ActionBudget + consume SURPRISED, `check_combat_end` VICTORY/DEFEAT/FLED/TRUCE, concentration hook sur damage)
+- ✅ Action economy 5e (`ActionBudget` : Move + Action + Bonus Action + Reaction 1/round, reset par tour / round-wrap)
+- ✅ Mouvement entre zones + attaques d'opportunité + action `Disengage`
 - ✅ Trivial resolve (Lot E)
 - ✅ Starter kits (15 kits sur 6 classes)
 - ✅ Validators (combat + exploration ; exploration bloque MOVE/TALK/SEARCH/INTERACT/PICKUP en combat actif depuis Phase 0 Task 01)
@@ -119,10 +121,10 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 | Feature | État | Gap |
 |---|---|---|
 | `/save` / `/resume` | 🟡 | Tests basiques OK, pas tous les edge cases (combat actif, sessions concurrentes) |
-| Combat state persistance | 🟡 | Sérialisé en JSON dans `campaigns.combat_state_json` mais pas de test cross-restart |
+| Combat state persistance | 🟢 | Sérialisé en JSON dans `campaigns.combat_state_json` (roundtrip Pydantic incluant `combat_id`, `end_reason`, `pending_phase_narrations`, `ActionBudget`) |
 | i18n dynamique | 🟡 | Labels statiques OK ; contenu dynamique repose sur la compliance du prompt |
 | Story Director | 🟡 | Implémenté mais ne s'auto-déclenche pas ; silent fail si ChromaDB down |
-| Initiative complète | 🟡 | Roll d'initiative présent mais ordre = surprise attacker first dans bootstrap |
+| Initiative complète | 🟢 | 3 cas supportés via `CombatTrigger` : PLAYER surprise (agresseur en tête, enemies SURPRISED), NPC surprise (ambushers en tête, tous les PCs SURPRISED), BOTH_READY (roll standard + DEX tiebreak) |
 | Spell slots recovery | 🟡 | Long rest fonction existe mais pas intégrée à une mécanique de repos dans l'UX |
 | Combat rests / short rest | 🔴 | Non implémenté |
 | Check de concentration conflict | 🔴 | `cast_spell` n'interrompt pas l'ancienne concentration |

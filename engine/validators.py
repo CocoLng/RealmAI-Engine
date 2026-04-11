@@ -34,6 +34,7 @@ class ActionType(StrEnum):
     ATTACK = "Attack"
     CAST_SPELL = "Cast Spell"
     DEFEND = "Defend"
+    DISENGAGE = "Disengage"
     FLEE = "Flee"
     USE_ITEM = "Use Item"
     # Exploration
@@ -151,6 +152,7 @@ def validate_action(action: Action, combat_state: CombatState) -> ValidationResu
         ActionType.ATTACK: validate_attack,
         ActionType.CAST_SPELL: validate_cast_spell,
         ActionType.DEFEND: validate_defend,
+        ActionType.DISENGAGE: validate_disengage,
         ActionType.FLEE: validate_flee,
         ActionType.USE_ITEM: validate_use_item,
     }
@@ -287,6 +289,19 @@ def validate_cast_spell(action: Action, state: CombatState) -> ValidationResult:
 
 def validate_defend(action: Action, state: CombatState) -> ValidationResult:
     """Validate a defend action. Just common checks."""
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+    return ValidationResult(is_valid=True)
+
+
+def validate_disengage(action: Action, state: CombatState) -> ValidationResult:
+    """Validate the Disengage action.
+
+    Common checks only for now; task 30 will tighten this (e.g. verify
+    the Action slot isn't already spent). Disengage suppresses OOA for
+    the rest of the turn — see :func:`engine.combat.disengage`.
+    """
     common = _validate_common(action, state)
     if common is not None:
         return common

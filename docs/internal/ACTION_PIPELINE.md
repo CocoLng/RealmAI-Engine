@@ -89,6 +89,20 @@ Checks :
 - **Lot E — Trivial resolve** : si PNJ pacifique (`disposition ≥ NEUTRAL`) et fragile (`max_hp < TRIVIAL_RESOLVE_HP_THRESHOLD`, =10), appelle `engine.combat.trivial_resolve()` qui résout l'attaque en one-shot sans démarrer un `CombatState` complet. Flip l'état `is_alive=False` du PNJ.
 - **Hostile witnessing** : si un PNJ ami voit un kill gratuit, il passe `HOSTILE` (logique de propagation simpliste, voir `bot/action_pipeline.py`).
 
+### Détection de trigger combat (Phase 2 — `bot/combat_entry.py`)
+
+Le module `bot.combat_entry` (`detect_combat_trigger` + `enter_combat`) est le point d'entrée party-wide du combat 5e. Il est **pas encore câblé** dans le dispatch de la pipeline — c'est le scope de la task 31 — mais le moteur est prêt :
+
+| Déclencheur | `CombatTriggerKind` | Surprise | Source |
+|---|---|---|---|
+| `ATTACK` sur NPC combat-worthy (`stat_block` ou HP/AC seuil) | `PLAYER_ATTACK` | `PLAYERS` si cible NEUTRAL/FRIENDLY, `BOTH_READY` si HOSTILE/UNFRIENDLY | `detect_combat_trigger` — path ATTACK |
+| `IMPROVISE` flaggé `is_lethal_intent=True` (task 40) | `LETHAL_INTENT` | `PLAYERS` | `detect_combat_trigger` — path IMPROVISE |
+| `INTERACT` sur `Location.combat_triggers[target]` (task 41) | `AMBUSH` | `NPCS` (party surprise) | `detect_combat_trigger` — path INTERACT (dormant : `hasattr` guard) |
+| `TALK` dépassant l'`aggression_threshold` d'un PNJ (task 81) | `PROVOCATION` | décidé par task 81 | Reserved |
+| Beat scripté combat au lancement/advancement | `SCRIPTED_BEAT` | décidé par le générateur d'arc | Called from `bot/campaign_launcher.py` (task 41+) |
+
+`enter_combat(session, trigger)` assemble un `CombatState` party-wide (tous les PCs + les enemies nommés dans `trigger.enemy_names`, résolus via `session.npcs`) et le stocke sur `session.combat_state`. Raise `ValueError` si aucun enemy trouvable. L'initiative et la condition `SURPRISED` sont appliquées par `engine.combat.start_combat(combatants, trigger)` — pas par `enter_combat`. `CombatTrigger` / `CombatTriggerKind` / `InitiativeSide` vivent dans `engine/combat_trigger.py` pour que `engine/` puisse les importer sans violer la règle « engine ne dépend jamais de bot/ai ».
+
 Sortie : `ValidationResult(is_valid, error_message)`. Si invalide → narré comme échec in-character.
 
 ## Phase 4 — RESOLVING_ACTION

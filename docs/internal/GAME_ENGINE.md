@@ -13,8 +13,9 @@ Inspiration SRD 5e simplifié. Chaque module porte une responsabilité unique.
 | [inventory.py](../../engine/inventory.py) | 631 | Items, équipement, armures, weapons, slots, attunement |
 | [spells.py](../../engine/spells.py) | 557 | Slots, cantrips scaling, catalogue ~20 sorts |
 | [conditions.py](../../engine/conditions.py) | 325 | 17 conditions SRD (+ SURPRISED, CONCENTRATING), durées, interactions |
-| [combat.py](../../engine/combat.py) | 706 | Initiative, attaques, sorts, death saves, trivial resolve |
-| [validators.py](../../engine/validators.py) | 352 | Légalité d'action (combat + exploration) |
+| [combat.py](../../engine/combat.py) | 1 100+ | Initiative 3 cas, turn management multi-ennemis, attaques (PC + NPC stat-block), sorts, death saves, action economy, zone movement + OOA, trivial resolve |
+| [combat_trigger.py](../../engine/combat_trigger.py) | 90 | Modèle `CombatTrigger` / `CombatTriggerKind` / `InitiativeSide` consommé par `start_combat` |
+| [validators.py](../../engine/validators.py) | 380 | Légalité d'action (combat + exploration) |
 | [starter_gear.py](../../engine/starter_gear.py) | 177 | 15 kits pré-construits (6 classes × 2-3 kits) |
 | [npc_stat_block.py](../../engine/npc_stat_block.py) | 170 | Stat block D&D 5e-style pour NPCs de combat (attacks, signatures, legendary, phases) |
 | [npc_library.py](../../engine/npc_library.py) | 400 | 11 archétypes de combat (minions/elites/generic_boss) avec `get_archetype()` |
@@ -168,29 +169,60 @@ Frozensets de classification hardcodées. EXHAUSTION stack (1-6) ; les autres re
 
 ## `combat.py`
 
-Le plus gros module. 706 lignes. Couvre initiative, attaques, sorts, death saves, damage, trivial resolve.
+Module principal du combat — couvre initiative (3 cas surprise), turn management multi-ennemis, action economy 5e, zone movement + OOA, attaques (PC + NPC stat-block), sorts, death saves, damage, concentration hook, trivial resolve. Le LLM n'y met jamais les pieds.
 
 ### Modèles
 
-- `Combatant(name, side, character, inventory, spellcaster, initiative, conditions, death_saves, is_alive)`
-- `CombatState(combatants, round_number, current_turn_index, is_active)`
-- `AttackResult` (complet : rolls, crit, outcome, damage, HP restant)
-- `SpellCastResult`
-- `DeathSaveResult`
-- `TrivialResolveResult`
+- `Combatant(name, side, character, inventory, spellcaster, initiative, conditions, death_saves, is_alive, stat_block, fled, current_zone, action_budget, legendary_points_remaining, phase_save_bonus)` — les derniers champs (stat_block, fled, current_zone, action_budget, legendary_points_remaining, phase_save_bonus) ont été ajoutés en Phase 2 Task 22 pour que les tâches aval (32, 53, 54) n'aient pas à reshape le modèle.
+- `CombatState(combat_id, combatants, round_number, current_turn_index, is_active, end_reason, pending_phase_narrations)` — `combat_id` est un UUID généré auto, `end_reason` (StrEnum `CombatEndReason`) est renseigné par `check_combat_end`/`advance_turn`, `pending_phase_narrations: list[PhaseTransitionEvent]` est la queue consommée par le narrateur (tâche 71).
+- `ActionBudget(movement_remaining_feet, action_used, bonus_action_used, reaction_used_this_round, disengaged_this_turn)` — budget 5e par tour. `reset_for_new_turn(speed_feet)` refill Move/Action/Bonus sans toucher à la Reaction (persiste entre tours, reset au wrap de round).
+- `CombatEndReason` StrEnum : `VICTORY`, `DEFEAT`, `FLED`, `TRUCE`.
+- `PhaseTransitionEvent(combatant_name, phase_index, narrative_cue)` — événement queuing pour la tâche 54/71.
+- `AttackResult`, `SpellCastResult`, `DeathSaveResult`, `TrivialResolveResult` (inchangés).
 
-### Functions critiques
+### Initiative — 3 cas de surprise
 
-| Fonction | Rôle |
+`start_combat(combatants, trigger: CombatTrigger | None = None)` délègue à un helper selon `trigger.surprise_side` :
+
+| Cas | `InitiativeSide` | Ordre | SURPRISED |
+|---|---|---|---|
+| 1 — Agression joueur | `PLAYERS` | Aggresseur PC en tête, puis roll standard | Enemies nommés dans `trigger.enemy_names` |
+| 2 — Ambush | `NPCS` | Ambushers NPC en tête (tri interne par initiative + DEX), puis roll standard | Tous les PCs |
+| 3 — Face-à-face | `BOTH_READY` (ou `trigger=None`) | Roll `1d20 + DEX` standard, tiebreak DEX score | Personne |
+
+La condition `SURPRISED` est consommée par `advance_turn` à la **fin** du premier tour du combattant surpris via `consume_surprise_if_present` — leur tour est un no-op (validator rejette), puis la condition est nettoyée. L'initiative rollée est stockée sur chaque `Combatant.initiative` pour reprise de session.
+
+### Turn management
+
+`advance_turn(state)` fait dans l'ordre : (1) tick conditions + consume SURPRISED sur le combattant sortant, (2) walk forward à l'index suivant en skippant les morts **ET** les `fled=True`, (3) si wrap → `round_number += 1` et reset `reaction_used_this_round` pour tous, (4) reset `action_budget` du nouveau combattant via `reset_for_new_turn(speed)`, (5) `check_combat_end` → set `is_active=False` + `end_reason` si terminal.
+
+`check_combat_end(state)` retourne la raison de fin ou `None` : VICTORY si aucun ENEMY debout (non mort, non fui), DEFEAT si aucun PC debout, FLED si **tous** les PCs ont `fled=True` (distinction vs DEFEAT), mutual wipe → DEFEAT. Les cases TRUCE et l'override explicite sont réservés aux tâches 32/81. `is_combat_over(state)` reste un wrapper booléen pour la rétro-compatibilité.
+
+### Action economy (`ActionBudget` + consume helpers)
+
+| Helper | Effet |
 |---|---|
-| `roll_initiative(combatant)` | 1d20 + DEX mod |
-| `start_combat(combatants)` | Trie par initiative, init round |
-| `advance_turn(state)` | Tick conditions, skip dead, incrément round |
-| `resolve_attack(attacker, defender, weapon, advantage, disadvantage)` | Résolution complète. Double-dice on crit, auto-crit si défenseur UNCONSCIOUS/PARALYZED |
-| `resolve_spell(caster, spell, target, slot_level)` | Damage (halved on save), healing, condition apply, upcasting |
-| `resolve_death_save(combatant)` | Nat 1 = -2 échec, nat 20 = revive 1 HP, 3 succès = stabilize, 3 échecs = mort |
-| `apply_damage(combatant, damage)` | Player → UNCONSCIOUS, enemy → instant death |
-| `trivial_resolve(attacker, target_npc, weapon)` | 1 attack vs PNJ sans défense ; hardcode STR mod + 1d4 default damage. Pour Lot E. |
+| `consume_action(c)` | Flag `action_used` ; raise si déjà utilisé |
+| `consume_bonus_action(c)` | Flag `bonus_action_used` ; raise si déjà utilisé |
+| `consume_movement(c, feet)` | Soustrait de `movement_remaining_feet` ; raise si insuffisant ou si `feet<0` |
+| `consume_reaction(c)` | Flag `reaction_used_this_round` ; raise si déjà utilisé ce round |
+
+Ces helpers sont les seuls points de mutation du budget. Task 30 câblera les validators ; Task 50-52 les appelleront depuis les NPC brains.
+
+### Zone movement + attaques d'opportunité
+
+- `move_combatant_to_zone(state, combatant, target_zone, location)` : valide l'adjacence via `location.are_adjacent`, calcule le coût (15 ft/step, doublé sur `DIFFICULT_TERRAIN`), consomme le mouvement, déclenche une OOA de chaque ennemi vivant en mêlée dans la zone source (sauf si `Disengage` pris ce tour), relocalise le combattant. Retourne la liste des `AttackResult` OOA.
+- `_resolve_opportunity_attack(attacker, defender)` : si l'attaquant a un `stat_block` avec au moins un `NPCAttack`, utilise `resolve_npc_attack` ; sinon retombe sur `resolve_attack` avec l'arme main hand (silent skip si rien d'équipé).
+- `disengage(combatant)` : consomme l'Action et set `disengaged_this_turn`. `ActionType.DISENGAGE` existe côté validators (valid par common checks seulement — task 30 durcira).
+- Si un combattant meurt pendant un move (OOA létale), la boucle OOA s'arrête et `current_zone` n'est **pas** mis à jour — le corps reste où il tombe.
+
+### NPC attacks (`resolve_npc_attack`)
+
+`resolve_npc_attack(attacker, defender, npc_attack)` miroir de `resolve_attack` mais tire ses numéros de `NPCAttack` (`to_hit_bonus`, `damage_dice`, `damage_type`) au lieu d'une `Weapon`. Même contrat `AttackResult`, mêmes règles (nat 1 auto-miss, nat 20 auto-crit, advantage/disadvantage depuis conditions, auto-crit sur cible UNCONSCIOUS/PARALYZED, doublement des dés sur crit). Le modificateur de dégâts est supposé déjà inclus dans `damage_dice` — aucun calcul de STR/DEX superposé.
+
+### Concentration hook
+
+`apply_damage(combatant, damage)` appelle `_on_damage_taken(combatant, damage)` avant la transition death/unconscious. Si le combattant est `CONCENTRATING`, un CON save est roulé via `check_concentration_save` (DC `max(10, damage // 2)`) ; sur échec, `drop_concentration` retire la condition. Le hook est idempotent si non-concentrating ou si `damage <= 0`. Toutes les sources de dégâts qui passent par `apply_damage` déclenchent le hook gratuitement (attacks, spells, futures zones HAZARD).
 
 ### Règles appliquées
 
@@ -206,7 +238,7 @@ Le plus gros module. 706 lignes. Couvre initiative, attaques, sorts, death saves
 
 ### `ActionType` enum
 
-11 types : `ATTACK`, `CAST_SPELL`, `DEFEND`, `FLEE`, `USE_ITEM`, `LOOK`, `SEARCH`, `TALK`, `MOVE`, `INTERACT`, `PICKUP`, `IMPROVISE`.
+`ATTACK`, `CAST_SPELL`, `DEFEND`, `DISENGAGE`, `FLEE`, `USE_ITEM`, `LOOK`, `SEARCH`, `TALK`, `MOVE`, `INTERACT`, `PICKUP`, `IMPROVISE`, `QUESTION`.
 
 ### Functions
 
@@ -261,7 +293,7 @@ Positionnement abstrait par **zones nommées** plutôt qu'une grille 5-pieds. `L
 - Helpers : `Location.has_combat_zones()`, `get_zone(name)`, `are_adjacent(a, b)`.
 - `combat_zones=[]` est le défaut ; les locations existantes sans combat fonctionnent comme avant.
 
-L'intégration côté combat (tracking `Combatant.current_zone`, mouvement zone-à-zone, opportunity attacks) est portée par les tâches 22 et 24 du chantier combat — non câblée ici.
+L'intégration côté combat est implémentée : `Combatant.current_zone: str | None`, `engine.combat.move_combatant_to_zone(state, combatant, target_zone, location)` pour le mouvement zone-à-zone avec validation d'adjacence, coût `DIFFICULT_TERRAIN` x2, déclenchement d'opportunity attacks, et `engine.combat.disengage(combatant)` pour l'action Disengage (voir la section « combat.py » ci-dessus).
 
 ## Dépendances inter-modules
 

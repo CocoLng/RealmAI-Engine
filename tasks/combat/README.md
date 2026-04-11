@@ -52,11 +52,11 @@ Phase 0 ──────► Phase 1 ──► Phase 2 ──► Phase 3 ──
 ### Phase 2 — Moteur de combat multi-ennemis
 | # | Tâche | Dépendances | Status |
 |---|-------|-------------|--------|
-| 20 | [combat_entry_module](20_combat_entry_module.md) | 10, 11, 13 | ⬜ |
-| 21 | [initiative_and_surprise](21_initiative_and_surprise.md) | 13, 20 | ⬜ |
-| 22 | [multi_enemy_combat_state](22_multi_enemy_combat_state.md) | 21 | ⬜ |
-| 23 | [action_economy](23_action_economy.md) | 22 | ⬜ |
-| 24 | [zone_movement_and_opportunity](24_zone_movement_and_opportunity.md) | 12, 23 | ⬜ |
+| 20 | [combat_entry_module](20_combat_entry_module.md) | 10, 11, 13 | ✅ |
+| 21 | [initiative_and_surprise](21_initiative_and_surprise.md) | 13, 20 | ✅ |
+| 22 | [multi_enemy_combat_state](22_multi_enemy_combat_state.md) | 21 | ✅ |
+| 23 | [action_economy](23_action_economy.md) | 22 | ✅ |
+| 24 | [zone_movement_and_opportunity](24_zone_movement_and_opportunity.md) | 12, 23 | ✅ |
 
 ### Phase 3 — Validation, pipeline, détection de triggers
 | # | Tâche | Dépendances | Status |

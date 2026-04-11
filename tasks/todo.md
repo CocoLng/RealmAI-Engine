@@ -17,11 +17,11 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 13 — Conditions SURPRISED et CONCENTRATING
 
 ### Phase 2 — Moteur de combat multi-ennemis
-- [ ] Task 20 — Module d'entrée en combat
-- [ ] Task 21 — Initiative & surprise (3 cas)
-- [ ] Task 22 — CombatState multi-enemies + turn mgmt + persistence
-- [ ] Task 23 — Action economy (Move + Action + Bonus + Reaction)
-- [ ] Task 24 — Zone movement + opportunity attacks
+- [x] Task 20 — Module d'entrée en combat
+- [x] Task 21 — Initiative & surprise (3 cas)
+- [x] Task 22 — CombatState multi-enemies + turn mgmt + persistence
+- [x] Task 23 — Action economy (Move + Action + Bonus + Reaction)
+- [x] Task 24 — Zone movement + opportunity attacks
 
 ### Phase 3 — Validation & pipeline
 - [ ] Task 30 — Validateurs de combat stricts
