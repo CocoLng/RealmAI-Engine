@@ -85,11 +85,11 @@ Phase 0 ──────► Phase 1 ──► Phase 2 ──► Phase 3 ──
 ### Phase 6 — Discord UI
 | # | Tâche | Dépendances | Status |
 |---|-------|-------------|--------|
-| 60 | [dice_embed_module](60_dice_embed_module.md) | — | ⬜ |
-| 61 | [combat_start_embed](61_combat_start_embed.md) | 21 | ⬜ |
-| 62 | [combat_state_embed](62_combat_state_embed.md) | 22, 12 | ⬜ |
-| 63 | [combat_action_views](63_combat_action_views.md) | 31, 62 | ⬜ |
-| 64 | [turn_ping_and_timeout](64_turn_ping_and_timeout.md) | 63 | ⬜ |
+| 60 | [dice_embed_module](60_dice_embed_module.md) | — | ✅ |
+| 61 | [combat_start_embed](61_combat_start_embed.md) | 21 | ✅ |
+| 62 | [combat_state_embed](62_combat_state_embed.md) | 22, 12 | ✅ |
+| 63 | [combat_action_views](63_combat_action_views.md) | 31, 62 | ✅ |
+| 64 | [turn_ping_and_timeout](64_turn_ping_and_timeout.md) | 63 | ✅ |
 
 ### Phase 7 — Narrateur & cohérence narrative
 | # | Tâche | Dépendances | Status |

@@ -4,7 +4,6 @@ import discord
 import pytest
 
 from bot.embeds.character_embed import build_character_embed, build_party_card_embed
-from bot.embeds.combat_embed import build_combat_embed
 from bot.embeds.inventory_embed import build_inventory_embed
 from ai.models import PublicEffects
 from bot.embeds.narrative_embed import build_countdown_embed, build_narrative_embed
@@ -284,55 +283,10 @@ class TestInventoryEmbed:
         assert len(embed.fields) == 4
 
 
-# ---------------------------------------------------------------------------
-# Combat embed
-# ---------------------------------------------------------------------------
-
-
-class TestCombatEmbed:
-    """Tests for build_combat_embed."""
-
-    def test_title(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        assert embed.title == "Combat — Round 2"
-
-    def test_color(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        assert embed.color == discord.Color(0xCC0000)
-
-    def test_active_combatant_marker(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        assert "> **Thorin**" in embed.description
-
-    def test_inactive_combatant_no_marker(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        # Goblin should not have the > marker at the line start
-        lines = embed.description.split("\n")
-        goblin_line = next(line for line in lines if "Goblin" in line)
-        assert not goblin_line.startswith(">")
-
-    def test_initiative_shown(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        assert "(15)" in embed.description
-        assert "(10)" in embed.description
-
-    def test_hp_bar_present(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        # Should contain the block characters
-        assert "\u2588" in embed.description or "\u2591" in embed.description
-
-    def test_conditions_shown(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        assert "Poisoned" in embed.description
-
-    def test_footer_active_combatant(self, combat_state):
-        embed = build_combat_embed(combat_state)
-        assert embed.footer.text == "Tour de: Thorin"
-
-    def test_no_fields(self, combat_state):
-        """Combat embed uses description, not fields."""
-        embed = build_combat_embed(combat_state)
-        assert len(embed.fields) == 0
+# NOTE: Combat embed tests moved to tests/bot/test_combat_embed.py as part
+# of task 62's refactor (zone grouping, boss legendary points, French
+# conditions). The fixtures above are kept because other tests still use
+# them, but the TestCombatEmbed class was replaced by the new suite.
 
 
 # ---------------------------------------------------------------------------

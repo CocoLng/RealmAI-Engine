@@ -24,11 +24,24 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ai.models import InterpretedAction
-from engine.combat import CombatState, Combatant
+from engine.character import (
+    Ability,
+    Character,
+    CharacterClass,
+    Size,
+)
+from engine.combat import CombatSide, CombatState, Combatant
 from engine.combat_trigger import (
     CombatTrigger,
     CombatTriggerKind,
     InitiativeSide,
+)
+from engine.inventory import (
+    EquipmentSlot,
+    add_item,
+    create_inventory,
+    default_weapon_for_class,
+    equip_item,
 )
 from engine.validators import ActionType
 from world.npc import NPC, NPCDisposition
@@ -41,6 +54,8 @@ __all__ = [
     "CombatTrigger",
     "CombatTriggerKind",
     "InitiativeSide",
+    "build_npc_combatant",
+    "build_pc_combatants",
     "detect_combat_trigger",
     "enter_combat",
 ]
@@ -122,6 +137,68 @@ def detect_combat_trigger(
 # ---------------------------------------------------------------------------
 
 
+def build_pc_combatants(session: "GameSession") -> list[Combatant]:
+    """Convert every PC in ``session`` into a PLAYER-side :class:`Combatant`.
+
+    Used by :func:`enter_combat` to assemble the party when combat
+    bootstraps. The helper lives in this module (previously in the combat
+    cog) so the bot-layer orchestrators can depend on a single combat
+    entry surface.
+    """
+    combatants: list[Combatant] = []
+    for user_id, char in session.characters.items():
+        inv = session.inventories.get(user_id)
+        spell = session.spellcasters.get(user_id)
+        combatants.append(
+            Combatant(
+                name=char.name,
+                side=CombatSide.PLAYER,
+                character=char,
+                inventory=inv if inv is not None else create_inventory(),
+                spellcaster=spell,
+            ),
+        )
+    return combatants
+
+
+def build_npc_combatant(npc: NPC) -> Combatant:
+    """Wrap an :class:`NPC` into an ENEMY-side :class:`Combatant`.
+
+    Only used for NPCs that do not (yet) carry a full stat block — the
+    tier dispatcher / scene hydration layer upgrades "bare" NPCs to
+    proper stat blocks when they enter combat. This helper builds a
+    minimal Character + equipped weapon so the engine can still resolve
+    an attack on legacy data.
+    """
+    char_class = npc.char_class or CharacterClass.FIGHTER
+    char = Character(
+        name=npc.name,
+        race=npc.race,
+        char_class=char_class,
+        level=npc.level,
+        ability_scores=npc.ability_scores,
+        hp=npc.hp,
+        max_hp=npc.max_hp,
+        ac=npc.ac,
+        speed=30,
+        proficiency_bonus=2,
+        saving_throw_proficiencies=(Ability.STR, Ability.CON),
+        hit_die="1d8",
+        size=Size.MEDIUM,
+    )
+    weapon = default_weapon_for_class(char_class)
+    inv = create_inventory()
+    inv = add_item(inv, weapon)
+    inv = equip_item(inv, weapon.name, EquipmentSlot.MAIN_HAND)
+
+    return Combatant(
+        name=npc.name,
+        side=CombatSide.ENEMY,
+        character=char,
+        inventory=inv,
+    )
+
+
 def enter_combat(
     session: "GameSession",
     trigger: CombatTrigger,
@@ -140,10 +217,6 @@ def enter_combat(
         ValueError: If none of the requested enemies can be found in the
         session's NPC registry.
     """
-    # Local import avoids a circular dep: bot.cogs.combat imports from here
-    # indirectly via engine.combat.
-    from bot.cogs.combat import build_npc_combatant, build_pc_combatants
-
     pcs = build_pc_combatants(session)
     enemies: list[Combatant] = []
     for name in trigger.enemy_names:

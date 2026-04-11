@@ -7,6 +7,7 @@ import difflib
 import logging
 import unicodedata
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from engine.character import Character
 from engine.combat import CombatState
@@ -27,6 +28,9 @@ from ai.story_director import StoryDirector
 from bot.story_bible_logger import StoryBibleLogger
 from memory.semantic import SemanticMemory
 
+if TYPE_CHECKING:
+    from bot.combat_turn_manager import TurnManager
+
 logger = logging.getLogger(__name__)
 
 _BEAT_MATCH_THRESHOLD = 0.7
@@ -46,6 +50,14 @@ class GameSession:
     inventories: dict[int, Inventory] = field(default_factory=dict)
     spellcasters: dict[int, SpellcasterState | None] = field(default_factory=dict)
     combat_state: CombatState | None = None
+    combat_turn_manager: "TurnManager | None" = None
+    """Live Discord UI orchestrator for the active combat encounter (task 64).
+
+    Set by :class:`bot.cogs.action_handler.ActionHandlerCog` right after
+    the pipeline bootstraps a fresh ``combat_state``. Cleared by
+    :meth:`bot.combat_turn_manager.TurnManager._finalize` when the
+    encounter ends. ``None`` outside of combat.
+    """
     current_location: Location | None = None
     npcs: dict[str, NPC] = field(default_factory=dict)
     quests: list[Quest] = field(default_factory=list)

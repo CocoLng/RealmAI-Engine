@@ -8,6 +8,8 @@
 
 Une fois le système de combat complet et validé end-to-end (tâche [82](82_end_to_end_live_test.md)), il faut produire une **documentation développeur** de référence dans `docs/internal/COMBAT_SYSTEM.md`. Cette doc sert à deux publics :
 
+ATTENTION : Les référence au phase et task directement dans le code ou la doc sont à éviter — elles vont devenir obsolètes. Les docs/ or docs/internal sont temporaires tous comme les tasks / plan proposer, donc il faut supprimer ses références dans le code et la doc. Par contre, dans le plan coordinateur, il faut garder les références aux tasks et docs pour expliquer l'historique des décisions qui seront mises dans archive.
+
 1. **Les futurs agents** qui toucheront au combat (bugfix, extension, refactor) — pour qu'ils comprennent l'architecture et les règles sans relire tout le code.
 2. **L'équipe humaine** qui voudra debugger ou ajouter une feature — pour éviter que les règles soient orphelines dans leur tête.
 

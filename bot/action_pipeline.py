@@ -277,6 +277,21 @@ class ActionPipeline:
 
         return await self._continue_from_resolution(patched, progress_callback)
 
+    async def process_interpreted_action(
+        self,
+        action: InterpretedAction,
+        progress_callback: ProgressCallback | None = None,
+    ) -> PipelineOutput:
+        """Run the pipeline starting from a pre-built :class:`InterpretedAction`.
+
+        Used by the combat TurnManager (task 64) when a player clicks a
+        button on the combat hub — the action is already fully structured,
+        so we skip the interpreter phase and jump straight into entity
+        resolution + validation + mechanics + narration. Auto-Dodge on
+        timeout also routes through here.
+        """
+        return await self._continue_from_resolution(action, progress_callback)
+
     # ------------------------------------------------------------------
     # Internal flow
     # ------------------------------------------------------------------

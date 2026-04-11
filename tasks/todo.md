@@ -42,11 +42,11 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 54 — Phase transitions
 
 ### Phase 6 — Discord UI
-- [ ] Task 60 — Module d'embeds de jets de dés
-- [ ] Task 61 — Embed "Combat commence"
-- [ ] Task 62 — Refonte embed d'état combat
-- [ ] Task 63 — Vues d'actions de combat (boutons)
-- [ ] Task 64 — Ping de tour + timeout
+- [x] Task 60 — Module d'embeds de jets de dés
+- [x] Task 61 — Embed "Combat commence"
+- [x] Task 62 — Refonte embed d'état combat
+- [x] Task 63 — Vues d'actions de combat (boutons)
+- [x] Task 64 — Ping de tour + timeout
 
 ### Phase 7 — Narrateur & cohérence narrative
 - [ ] Task 70 — Narrateur : contexte combat

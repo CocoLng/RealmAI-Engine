@@ -62,9 +62,13 @@ Voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md) pour le flux détaillé.
 
 ### `combat.py` — `CombatCog`
 
-Pas de slash commands directes pour le joueur (combat piloté par buttons via `CombatView`). Fournit des helpers utilisés par `ActionHandlerCog` :
-- `start_combat_encounter(session, enemies)` — initie un fight
-- `_end_combat(session)` — award XP, check level-up
+Shell minimal introduit en Phase 6 (task 64). Le cog ne fait plus que charger un factory-only attribut exposé aux autres cogs :
+
+- `build_turn_manager(channel, session) → TurnManager` — crée l'orchestrateur de l'encounter et le rattache à la session.
+
+Toute la logique de tour (prompt PC, brain NPC par tier, timeout 5 min, finalize) vit dans [bot/combat_turn_manager.py](../../bot/combat_turn_manager.py) — voir la section _TurnManager_ plus bas. L'ancien flow (`start_combat_encounter`, `_prompt_turn`, `CombatView`) a été supprimé : incompatible avec Phase 5 (zones, NPC tier AI, legendary actions, phase transitions).
+
+Les helpers `build_pc_combatants(session)` et `build_npc_combatant(npc)` vivent désormais dans [bot/combat_entry.py](../../bot/combat_entry.py) pour garder un unique point d'entrée combat-bootstrap.
 
 ### `exploration.py` — `ExplorationCog`
 
@@ -99,12 +103,15 @@ Toutes héritent de `LoggedView(ui.View)` pour un logging uniforme des erreurs.
 |---|---|---|
 | `CharacterCreateView` | Race select → Class select → Align select → Name modal | — |
 | `StarterGearView` | Boutons de kits (2-3) + détails | — |
-| `CombatView` | Attaquer / Lancer sort / Défendre / Fuir | 5 min |
-| `TargetSelectView` | Dropdown des cibles (combat) | — |
-| `SpellSelectView` | Dropdown des sorts disponibles (filtrés par slots) | — |
+| `CombatActionView` | Attaquer / Sort / Défendre / Fuir / Se déplacer — hub PC édité en place (task 63) | — (TurnManager timeout) |
+| `TargetSelectView` | Ephemeral followup après Attaquer / Sort — enemies vivants ≤ 25 | 60 s |
+| `SpellSelectView` | Ephemeral followup après Sort — sorts castables (slots dispo) | 60 s |
+| `ZoneSelectView` | Ephemeral followup après Se déplacer — zones adjacentes | 60 s |
 | `ClarificationView` | Jusqu'à 4 candidats + Annuler (Lot B) | 2 min |
 | `StartOnboardingView` | Bouton « Créer Personnage » (re-cliquable pour recommencer) | — |
 | `ForceLaunchView` | Bouton « Lancer la partie » réservé au créateur (exclut joueurs non-ready) | 10 min |
+
+`CombatActionView` et les trois selects secondaires vérifient `interaction.user.id == acting_user_id` dans `interaction_check` (tout autre clic reçoit un message éphémère « Ce n'est pas ton tour. »). Les boutons sont désactivés quand leur pré-condition est vide (pas de cible vivante → Attaquer grisé, pas de sort jetable → Sort grisé, pas de zone adjacente → Se déplacer grisé). La vue elle-même a `timeout=None` — c'est le `TurnManager` qui surveille le 5-minute timeout via une task asyncio et déclenche l'auto-Dodge.
 
 `ClarificationView` vérifie via `interaction_check` que seul l'acteur original peut cliquer.
 `ForceLaunchView` vérifie que seul le créateur de la campagne (`creator_id`) peut cliquer.
@@ -120,7 +127,9 @@ Toutes les couleurs sont pilotées par le `tone` renvoyé par le Narrator.
 | `scene_embed.py` | Scène : location, PNJs, exits, items (post au launch et après MOVE) |
 | `beat_embed.py` | Annonce d'avancée de beat (Lot D) |
 | `character_embed.py` | Fiche perso complète |
-| `combat_embed.py` | Round, current turn, combatants HP |
+| `combat_embed.py` | Hub d'état : round, combatant actif, HP bars, conditions FR, zones (task 62) |
+| `combat_start_embed.py` | Bannière « ⚔️ Combat commence » avec ordre d'initiative et surprise 5e (task 61) |
+| `dice_embed.py` | Jets d20 : `build_attack_roll_embed`, `build_save_check_embed`, `build_damage_roll_embed`, `build_generic_check_embed` — couleurs hit/miss/crit, français (task 60) |
 | `inventory_embed.py` | Équipement + backpack + gold |
 | `state_embed.py` | Embed d'état bleu (0x4A90D9) pour les actions QUESTION : items, PNJs, sorties, objectif de beat actif |
 
@@ -166,9 +175,33 @@ Méthodes clés :
 - `advance_beat_if_ready()` — fuzzy match location vs prochain beat (Lot D)
 - `get_actor_character(user_id)`, `get_inventory(user_id)`, `get_spellcaster(user_id)`
 
+## `combat_turn_manager.py` — `TurnManager`
+
+Drive le cycle de vie d'une encounter de combat à l'intérieur d'un canal Discord (Phase 6, task 64). Une instance par combat actif, stockée sur `session.combat_turn_manager` par `ActionHandlerCog` juste après le bootstrap par le pipeline.
+
+Responsabilités :
+
+1. **Bannière de démarrage** : `start(trigger)` poste `build_combat_start_embed(state, trigger)` une seule fois.
+2. **Hub édité en place** : un seul `discord.Message` long-lived par combat (`self.hub_message`). Chaque tour édite `content`/`embed`/`view` via `discord.abc.Messageable.edit`. Les résultats (narration, dice embed) sont postés en dessous pour garder l'historique lisible.
+3. **Tour PC** : `_prompt_pc_turn` pose un `CombatActionView` avec `<@user_id>` en ping, start un watcher `asyncio.create_task(self._timeout_watcher(…))` de 5 min. Le watcher dispatch un auto-Dodge via la même route que les boutons.
+4. **Tour NPC** : `_prompt_npc_turn` passe la main à `_resolve_npc_turn` qui dispatch par tier :
+   - `MINION` → `engine.npc_ai.scripted.decide_minion_action`
+   - `ELITE` → `engine.npc_ai.elite.decide_elite_action`
+   - `BOSS` → `engine.npc_ai.boss_brain.decide_boss_action(tactician=…)` avec `NPCTactician(session.ollama_client)` si disponible, fallback sur `decide_elite_action` sinon.
+   Exécute le plan via `execute_action_plan`, poste un `build_attack_roll_embed` pour les attaques, puis appelle `advance_turn` + `on_action_resolved` en récursion jusqu'au prochain PC ou à la fin du combat.
+5. **Dispatch boutons / auto-Dodge** : `dispatch_action(interpreted)` acquiert `session.action_lock`, construit un `ActionPipeline` frais, appelle la méthode publique `pipeline.process_interpreted_action(action)` (bypass interpreter), rend la narration + dice embeds, puis délègue à `on_action_resolved`.
+6. **Cues off-turn** : `_flush_pending_cues` vide `state.pending_legendary_summaries` et `state.pending_phase_narrations` en messages compacts (⚡ / 🔥). La narration enrichie de ces cues sera ajoutée par la Phase 7 task 71.
+7. **Fin de combat** : `_finalize` fige le hub avec un libellé (🏆 Victoire / 💀 Défaite / 🏃 Échappés / 🕊️ Trêve), applique un stub XP (100 par ennemi mort, split sur les survivants — port du legacy, la Phase 8 task 80 le remplacera), et nettoie `session.combat_state` / `session.combat_turn_manager`.
+
+Points d'extension / non-négociables :
+
+- Le TurnManager **ne touche jamais aux dés** — chaque résolution mécanique passe par le pipeline ou `resolve_npc_attack`. C'est la règle d'or du chantier combat.
+- Le pipeline n'avance pas le tour lui-même ; c'est `on_action_resolved` qui appelle `advance_turn(state)`.
+- Les free-text actions (`@bot je frappe X`) passent par `ActionHandlerCog._run_pipeline` → `pipeline.process` → `on_action_resolved` (pas par `dispatch_action`). Les deux chemins convergent sur la même méthode pour flusher les cues et prompter le tour suivant.
+
 ## `action_pipeline.py` — `ActionPipeline`
 
-Voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md). Point d'entrée : `pipeline.run(player_text, actor_name, progress_callback)`.
+Voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md). Point d'entrée : `pipeline.run(player_text, actor_name, progress_callback)`. Pour le combat, la méthode publique supplémentaire `pipeline.process_interpreted_action(action)` permet aux boutons du hub de sauter la phase d'interprétation avec un `InterpretedAction` déjà structuré.
 
 ## `scene_hydration.py` — `hydrate_scene()`
 

@@ -214,6 +214,31 @@ class ActionHandlerCog(commands.Cog):
             )
             return
 
+        # 3b. Combat bootstrap handoff (task 64) — if the pipeline just
+        # set up a fresh combat state, create a TurnManager and post the
+        # "⚔️ Combat commence" banner before rendering the first action
+        # result. The TurnManager then drives the turn lifecycle.
+        pending_combat_start = getattr(
+            pipeline, "_pending_combat_start_embed", None,
+        )
+        if (
+            pending_combat_start is not None
+            and session.combat_turn_manager is None
+        ):
+            combat_cog = self.bot.get_cog("CombatCog")
+            if combat_cog is not None:
+                try:
+                    turn_manager = combat_cog.build_turn_manager(  # type: ignore[attr-defined]
+                        message.channel, session,
+                    )
+                    session.combat_turn_manager = turn_manager
+                    await turn_manager.start(trigger=pending_combat_start[1])
+                except Exception:
+                    logger.exception(
+                        "ACTION combat bootstrap failed campaign=%s",
+                        session.campaign.id,
+                    )
+
         # 4. Dispatch on result type.
         if isinstance(result, ActionPipelineResult):
             await self._render_success(progress_msg, result, session=session)
@@ -281,6 +306,24 @@ class ActionHandlerCog(commands.Cog):
             )
         elif isinstance(result, UnknownEntityResult):
             await self._render_unknown(progress_msg, result)
+
+        # 5. Hand control back to the TurnManager if combat is live.
+        # The pipeline does not advance the turn itself — the TurnManager
+        # does so inside on_action_resolved.
+        if (
+            session.combat_turn_manager is not None
+            and session.combat_state is not None
+            and session.combat_state.is_active
+        ):
+            try:
+                await session.combat_turn_manager.on_action_resolved(
+                    result if isinstance(result, ActionPipelineResult) else None,
+                )
+            except Exception:
+                logger.exception(
+                    "ACTION turn_manager.on_action_resolved failed campaign=%s",
+                    session.campaign.id,
+                )
 
         logger.info(
             "ACTION done campaign=%s elapsed=%.1fs",

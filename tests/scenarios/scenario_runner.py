@@ -31,7 +31,12 @@ from engine.character import (
     roll_ability_scores,
 )
 from engine.combat import CombatSide, Combatant
-from engine.inventory import Inventory, create_inventory
+from engine.inventory import (
+    EquipmentSlot,
+    Inventory,
+    Weapon,
+    create_inventory,
+)
 from engine.spells import create_spellcaster_state
 from world.campaign import Campaign
 
@@ -491,25 +496,32 @@ class ScenarioRunner:
     async def start_combat(
         self, enemies: list[Combatant],
     ) -> EmbedCapture:
-        """Start a combat encounter with the given enemies.
+        """Start a combat encounter with the given enemies (engine-direct).
 
-        Patches _prompt_turn to prevent CombatView.wait() from blocking.
-        Player actions are driven by explicit calls to attack/defend/flee.
+        Phase 6 removed the legacy ``CombatCog.start_combat_encounter``
+        entry point — the runner now assembles the party-wide
+        ``CombatState`` via :func:`engine.combat.start_combat` directly so
+        the scenario suite stays decoupled from the Discord UI layer.
+        Player actions are still driven by the runner's explicit
+        attack/defend/flee helpers.
         """
-        from unittest.mock import AsyncMock, patch
+        from bot.combat_entry import build_pc_combatants
+        from bot.embeds.combat_embed import build_combat_embed
+        from engine.combat import start_combat
 
         session = self.session
         if session is None:
             msg = "No active session"
             raise RuntimeError(msg)
 
-        with patch.object(
-            self._combat_cog, "_prompt_turn", new_callable=AsyncMock,
-        ):
-            await self._combat_cog.start_combat_encounter(
-                self.channel, session, enemies,
-            )
-        return self.channel_capture.last
+        pcs = build_pc_combatants(session)
+        state = start_combat(pcs + enemies)
+        session.combat_state = state
+
+        embed = build_combat_embed(state)
+        cap = EmbedCapture(content="Combat !", embed=embed)
+        self.channel_capture.messages.append(cap)
+        return cap
 
     def _find_player_combatant(
         self, player_idx: int,
@@ -539,10 +551,12 @@ class ScenarioRunner:
     async def attack(
         self, target: str, player_idx: int = 0,
     ) -> EmbedCapture:
-        """Resolve an attack action for a player.
+        """Resolve an attack action for a player (engine-direct).
 
-        Bypasses the CombatView flow and directly calls the resolution.
-        Finds the player's combatant regardless of initiative order.
+        Bypasses the Phase 6 TurnManager and drives
+        :func:`engine.combat.resolve_attack` directly so multi-step
+        scenarios stay fast. Player weapon lookup is done inline against
+        the inventory to avoid any dependency on the combat cog.
         """
         session = self.session
         if session is None or session.combat_state is None:
@@ -562,10 +576,9 @@ class ScenarioRunner:
             msg = f"Target '{target}' not found or dead"
             raise ValueError(msg)
 
-        # Get weapon
-        weapon = self._combat_cog._get_equipped_weapon(session, player.id)
+        weapon = self._lookup_player_weapon(session, player.id)
         if weapon is None:
-            weapon = self._combat_cog._get_combatant_weapon(attacker)
+            weapon = self._lookup_combatant_weapon(attacker)
 
         if weapon is None:
             cap = EmbedCapture(content="Aucune arme equipee !")
@@ -597,9 +610,50 @@ class ScenarioRunner:
         await self._auto_resolve_enemies()
 
         if is_combat_over(session.combat_state):
-            await self._combat_cog._end_combat(self.channel, session)
+            await self._finalize_combat(session)
 
         return cap
+
+    @staticmethod
+    def _lookup_player_weapon(session: GameSession, user_id: int) -> Weapon | None:
+        inv = session.inventories.get(user_id)
+        if inv is None:
+            return None
+        main_hand = inv.equipped.get(EquipmentSlot.MAIN_HAND)
+        if isinstance(main_hand, Weapon):
+            return main_hand
+        return None
+
+    @staticmethod
+    def _lookup_combatant_weapon(combatant: Combatant) -> Weapon | None:
+        main_hand = combatant.inventory.equipped.get(EquipmentSlot.MAIN_HAND)
+        if isinstance(main_hand, Weapon):
+            return main_hand
+        return None
+
+    async def _finalize_combat(self, session: GameSession) -> None:
+        """Drop combat state and award a 100xp-per-kill stub (legacy parity)."""
+        if session.combat_state is None:
+            return
+        xp_per_enemy = 100
+        dead_enemies = sum(
+            1
+            for c in session.combat_state.combatants
+            if c.side == CombatSide.ENEMY and not c.is_alive
+        )
+        survivors = [
+            c
+            for c in session.combat_state.combatants
+            if c.side == CombatSide.PLAYER and c.is_alive
+        ]
+        if survivors:
+            xp_each = (dead_enemies * xp_per_enemy) // max(len(survivors), 1)
+            from engine.character import add_xp
+
+            for combatant in survivors:
+                if xp_each > 0:
+                    add_xp(combatant.character, xp_each)
+        session.combat_state = None
 
     async def cast_spell(
         self, spell: str, target: str, player_idx: int = 0,
@@ -651,7 +705,7 @@ class ScenarioRunner:
         await self._auto_resolve_enemies()
 
         if is_combat_over(session.combat_state):
-            await self._combat_cog._end_combat(self.channel, session)
+            await self._finalize_combat(session)
 
         return cap
 
@@ -678,7 +732,7 @@ class ScenarioRunner:
         await self._auto_resolve_enemies()
 
         if is_combat_over(session.combat_state):
-            await self._combat_cog._end_combat(self.channel, session)
+            await self._finalize_combat(session)
 
         return cap
 
@@ -705,7 +759,7 @@ class ScenarioRunner:
         await self._auto_resolve_enemies()
 
         if is_combat_over(session.combat_state):
-            await self._combat_cog._end_combat(self.channel, session)
+            await self._finalize_combat(session)
 
         return cap
 
@@ -741,7 +795,7 @@ class ScenarioRunner:
                 continue
 
             target_c = players[0]
-            weapon = self._combat_cog._get_combatant_weapon(current)
+            weapon = self._lookup_combatant_weapon(current)
             if weapon is None:
                 advance_turn(session.combat_state)
                 continue

@@ -1,133 +1,19 @@
-"""Tests for bot/views — Discord UI components (sync-only, no event loop)."""
+"""Tests for bot/views — Discord UI components (sync-only, no event loop).
+
+Note: Combat-related view tests moved to tests/bot/test_combat_action_view.py
+as part of task 63's wholesale rewrite of the combat UI (see
+bot/views/combat_action_view.py and the three select_view modules).
+"""
 
 from __future__ import annotations
-
-from unittest.mock import MagicMock
 
 import discord
 from discord import SelectOption
 
 from bot.views.character_create_view import CharacterCreateView, CharacterNameModal
-from bot.views.combat_view import CombatView
-from bot.views.spell_select import SpellSelectView
 from bot.views.starter_gear_view import StarterGearView
-from bot.views.target_select import TargetSelectView
-from engine.character import Ability, Alignment, CharacterClass, Race
-from engine.spells import SpellcasterState
+from engine.character import Alignment, CharacterClass, Race
 from engine.starter_gear import STARTER_KITS
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_session(
-    *, spellcasters: dict[int, SpellcasterState | None] | None = None
-) -> MagicMock:
-    """Build a minimal mock GameSession for CombatView tests."""
-    session = MagicMock()
-    session.spellcasters = spellcasters or {}
-    return session
-
-
-# ---------------------------------------------------------------------------
-# CombatView
-# ---------------------------------------------------------------------------
-
-
-class TestCombatView:
-    """CombatView initialisation and attribute tests."""
-
-    def test_action_starts_none(self) -> None:
-        view = CombatView(session=_make_session(), active_user_id=1)
-        assert view.action is None
-
-    def test_cast_spell_disabled_without_spellcaster(self) -> None:
-        view = CombatView(session=_make_session(), active_user_id=1)
-        assert view.cast_spell.disabled is True
-
-    def test_cast_spell_enabled_with_spellcaster(self) -> None:
-        state = SpellcasterState(spellcasting_ability=Ability.INT)
-        session = _make_session(spellcasters={42: state})
-        view = CombatView(session=session, active_user_id=42)
-        assert view.cast_spell.disabled is False
-
-    def test_active_user_id_stored(self) -> None:
-        view = CombatView(session=_make_session(), active_user_id=99)
-        assert view.active_user_id == 99
-
-    def test_timeout_is_five_minutes(self) -> None:
-        view = CombatView(session=_make_session(), active_user_id=1)
-        assert view.timeout == 300.0
-
-    def test_has_four_buttons(self) -> None:
-        view = CombatView(session=_make_session(), active_user_id=1)
-        buttons = [
-            child
-            for child in view.children
-            if isinstance(child, discord.ui.Button)
-        ]
-        assert len(buttons) == 4
-
-    def test_button_labels(self) -> None:
-        view = CombatView(session=_make_session(), active_user_id=1)
-        labels = {
-            child.label
-            for child in view.children
-            if isinstance(child, discord.ui.Button)
-        }
-        assert labels == {"Attaquer", "Lancer sort", "Defendre", "Fuir"}
-
-
-# ---------------------------------------------------------------------------
-# TargetSelectView
-# ---------------------------------------------------------------------------
-
-
-class TestTargetSelectView:
-    """TargetSelectView initialisation tests."""
-
-    def test_selected_target_starts_none(self) -> None:
-        targets = [("Goblin A", "HP 7/7"), ("Goblin B", "HP 5/7")]
-        view = TargetSelectView(targets=targets)
-        assert view.selected_target is None
-
-    def test_options_populated(self) -> None:
-        targets = [("Goblin A", "HP 7/7"), ("Goblin B", "HP 5/7")]
-        view = TargetSelectView(targets=targets)
-        options: list[SelectOption] = view.select_target.options  # type: ignore[assignment]
-        labels = [opt.label for opt in options]
-        assert labels == ["Goblin A", "Goblin B"]
-
-    def test_timeout_is_sixty_seconds(self) -> None:
-        view = TargetSelectView(targets=[("Wolf", "HP 10/10")])
-        assert view.timeout == 60.0
-
-
-# ---------------------------------------------------------------------------
-# SpellSelectView
-# ---------------------------------------------------------------------------
-
-
-class TestSpellSelectView:
-    """SpellSelectView initialisation tests."""
-
-    def test_selected_spell_starts_none(self) -> None:
-        spells = [("Fireball", "3rd level, 8d6 fire"), ("Shield", "1st level, +5 AC")]
-        view = SpellSelectView(spells=spells)
-        assert view.selected_spell is None
-
-    def test_options_populated(self) -> None:
-        spells = [("Fireball", "3rd level, 8d6 fire"), ("Shield", "1st level, +5 AC")]
-        view = SpellSelectView(spells=spells)
-        options: list[SelectOption] = view.select_spell.options  # type: ignore[assignment]
-        labels = [opt.label for opt in options]
-        assert labels == ["Fireball", "Shield"]
-
-    def test_timeout_is_sixty_seconds(self) -> None:
-        view = SpellSelectView(spells=[("Magic Missile", "1st level, 3 darts")])
-        assert view.timeout == 60.0
 
 
 # ---------------------------------------------------------------------------
