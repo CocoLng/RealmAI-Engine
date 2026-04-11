@@ -25,6 +25,7 @@ from engine.character import (
 from engine.validators import ActionType
 from world.location import Location
 from world.npc import NPC
+from world.story_arc import StoryArc, StoryBeat, CompletionTrigger, BeatEffects
 
 
 # ---------------------------------------------------------------------------
@@ -615,3 +616,92 @@ class TestQuestionAction:
 
 # Concurrency serialization is enforced by the action_handler cog via
 # GameSession.action_lock — see tests/test_cog_exploration.py.
+
+
+# ---------------------------------------------------------------------------
+# Beat completion helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_session_with_arc(location, story_arc):
+    """Create a minimal mock session for beat advancement tests."""
+    from unittest.mock import MagicMock
+    session = MagicMock()
+    session.current_location = location
+    session.story_arc = story_arc
+    session.npcs = {}
+    session.language = "fr"
+    session.combat_state = None
+    session.inventory = None
+    return session
+
+
+# ---------------------------------------------------------------------------
+# Beat completion
+# ---------------------------------------------------------------------------
+
+
+class TestBeatCompletion:
+    """Deterministic beat completion via triggers."""
+
+    @pytest.mark.asyncio
+    async def test_interact_trigger_completes_beat(self):
+        loc = Location(
+            name="Bone Barrier",
+            description="A wall of bones.",
+            connections=[],
+            items_available=["Le levier de l'Échiquier"],
+        )
+        arc = StoryArc(
+            campaign_id="test",
+            theme="dungeon",
+            premise="A dungeon adventure with many challenges ahead.",
+            beats=[
+                StoryBeat(
+                    beat_number=i + 1,
+                    title=f"Beat {i + 1}",
+                    description=f"Description {i + 1}",
+                    location_hint="Bone Barrier" if i == 0 else f"Area {i + 1}",
+                    encounter_type="puzzle" if i == 0 else "exploration",
+                    completion_trigger=CompletionTrigger(
+                        type="interact",
+                        target="Le levier de l'Échiquier",
+                    ) if i == 0 else None,
+                    on_complete=BeatEffects(
+                        unlock_exits=["Inner Court"],
+                        state_flags={"breach_open": True},
+                        narrative_hint="A breach opens.",
+                    ) if i == 0 else BeatEffects(),
+                )
+                for i in range(10)
+            ],
+            villain_name="Thaumiel",
+            villain_motivation="Purify humanity.",
+        )
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.INTERACT,
+                actor_name="Hero",
+                target_name="Le levier de l'Échiquier",
+                raw_input="I pull the lever",
+                confidence=0.95,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="The lever moves.", tone="tense")],
+        )
+        session = _make_session_with_arc(loc, arc)
+        pipeline = _make_pipeline(
+            interp, narrator, loc, {},
+            actor_name="Hero",
+        )
+        pipeline.session = session
+
+        result = await pipeline.process("I pull the lever")
+        assert isinstance(result, ActionPipelineResult)
+        # Beat should have advanced
+        assert result.new_beat is not None
+        assert result.new_beat.beat_number == 2
+        # Location should have been mutated
+        assert "Inner Court" in loc.unlocked_exits
+        assert loc.state_flags.get("breach_open") is True

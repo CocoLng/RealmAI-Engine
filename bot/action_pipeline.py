@@ -29,6 +29,7 @@ is still acquired so future state-mutating handlers do not race.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -67,7 +68,7 @@ from engine.validators import (
 )
 from world.location import Location
 from world.npc import NPC, NPCDisposition
-from world.story_arc import StoryBeat
+from world.story_arc import BeatEffects, StoryBeat
 
 if TYPE_CHECKING:
     from bot.game_session import GameSession
@@ -327,6 +328,28 @@ class ActionPipeline:
         await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)
         outcome = await self._resolve_mechanics(interpreted)
 
+        # Beat completion check — deterministic trigger.
+        beat_completed = False
+        if (
+            self.session is not None
+            and interpreted.action_type != ActionType.QUESTION
+            and self._check_beat_completion(interpreted)
+        ):
+            beat_completed = True
+            arc = self.session.story_arc
+            beat = arc.beats[arc.current_beat_index]
+            hint = self._apply_beat_effects(beat.on_complete)
+            if hint:
+                outcome = outcome.model_copy(update={
+                    "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
+                })
+            from world.story_arc import advance_beat
+            self.session.story_arc = advance_beat(arc)
+            logger.info(
+                "BEAT trigger-complete campaign=%s beat=%d title=%r",
+                self.campaign_id, beat.beat_number, beat.title,
+            )
+
         await self._emit(progress_callback, PipelinePhase.ASSEMBLING_CONTEXT)
         context_prompt = self._assemble_context(interpreted)
 
@@ -336,9 +359,13 @@ class ActionPipeline:
             context_prompt=context_prompt,
         )
 
-        # Lot D — beat advancement check after every resolved action.
+        # Lot D — beat advancement (trigger-based or location-based fallback).
         new_beat: StoryBeat | None = None
-        if self.session is not None and hasattr(
+        if beat_completed and self.session and self.session.story_arc:
+            new_beat = self.session.story_arc.beats[
+                self.session.story_arc.current_beat_index
+            ]
+        elif self.session is not None and hasattr(
             self.session, "advance_beat_if_ready",
         ):
             try:
@@ -350,24 +377,24 @@ class ActionPipeline:
                 candidate = None
             if isinstance(candidate, StoryBeat):
                 new_beat = candidate
-            if new_beat is not None and self.db_factory is not None:
-                try:
-                    await asyncio.to_thread(
-                        _persist_story_arc,
-                        self.db_factory,
-                        self.session.story_arc,
-                    )
-                    logger.info(
-                        "BEAT advanced campaign=%s to=%d title=%r",
-                        self.campaign_id,
-                        self.session.story_arc.current_beat_index
-                        if self.session.story_arc is not None else -1,
-                        new_beat.title,
-                    )
-                except Exception:
-                    logger.exception(
-                        "BEAT persist failed campaign=%s", self.campaign_id,
-                    )
+        if new_beat is not None and self.db_factory is not None:
+            try:
+                await asyncio.to_thread(
+                    _persist_story_arc,
+                    self.db_factory,
+                    self.session.story_arc,
+                )
+                logger.info(
+                    "BEAT advanced campaign=%s to=%d title=%r",
+                    self.campaign_id,
+                    self.session.story_arc.current_beat_index
+                    if self.session.story_arc is not None else -1,
+                    new_beat.title,
+                )
+            except Exception:
+                logger.exception(
+                    "BEAT persist failed campaign=%s", self.campaign_id,
+                )
 
         # Auto-checkpoint: persist full session state after every resolved action (B1).
         if self.db_factory is not None and self.session is not None:
@@ -829,6 +856,71 @@ class ActionPipeline:
             summary=f"{action.actor_name} performs {at.value}.",
             player_intent=intent,
         )
+
+    # ------------------------------------------------------------------
+    # Beat completion (deterministic triggers)
+    # ------------------------------------------------------------------
+
+    def _check_beat_completion(
+        self, action: InterpretedAction,
+    ) -> bool:
+        """Check if the action satisfies the current beat's completion trigger."""
+        if self.session is None or self.session.story_arc is None:
+            return False
+        arc = self.session.story_arc
+        if arc.current_beat_index >= len(arc.beats):
+            return False
+        beat = arc.beats[arc.current_beat_index]
+        trigger = beat.completion_trigger
+        if trigger is None:
+            return False
+
+        type_map: dict[str, set[str]] = {
+            "interact": {ActionType.INTERACT},
+            "defeat": {ActionType.ATTACK},
+            "talk": {ActionType.TALK},
+            "arrive": {ActionType.MOVE},
+            "search": {ActionType.SEARCH},
+            "pickup": {ActionType.PICKUP},
+        }
+        allowed = type_map.get(trigger.type, set())
+        if action.action_type not in allowed:
+            return False
+
+        if trigger.target and action.target_name:
+            from bot.game_session import _normalize_location
+            ratio = difflib.SequenceMatcher(
+                None,
+                _normalize_location(action.target_name),
+                _normalize_location(trigger.target),
+            ).ratio()
+            return ratio >= 0.6
+        return False
+
+    def _apply_beat_effects(self, effects: BeatEffects) -> str:
+        """Apply beat completion effects to the current location.
+
+        Returns a narrative hint string for the narrator.
+        """
+        loc = self.location
+        if loc is None:
+            return effects.narrative_hint
+
+        for exit_name in effects.unlock_exits:
+            if exit_name not in loc.unlocked_exits:
+                loc.unlocked_exits.append(exit_name)
+        for npc_name in effects.add_npcs:
+            if npc_name not in loc.npcs_present:
+                loc.npcs_present.append(npc_name)
+        for item_name in effects.remove_items:
+            if item_name in loc.items_available:
+                loc.items_available.remove(item_name)
+        for item_name in effects.add_items:
+            if item_name not in loc.items_available:
+                loc.items_available.append(item_name)
+        loc.state_flags.update(effects.state_flags)
+
+        return effects.narrative_hint
 
     def _build_player_intent(self, action: InterpretedAction) -> str:
         """Concatenate raw input with any interpreter-extracted intent extras."""
