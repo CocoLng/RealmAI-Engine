@@ -23,7 +23,7 @@ from bot.action_pipeline import (
 )
 from bot.embeds.action_progress_embed import build_action_progress_embed
 from bot.embeds.beat_embed import build_beat_advance_embed
-from bot.embeds.narrative_embed import build_narrative_embed
+from bot.embeds.narrative_embed import build_narrative_embed, build_state_embed
 from bot.embeds.scene_embed import build_scene_embed
 from bot.story_bible_logger import record_turn_and_maybe_check
 from bot.views.clarification_view import (
@@ -216,7 +216,7 @@ class ActionHandlerCog(commands.Cog):
 
         # 4. Dispatch on result type.
         if isinstance(result, ActionPipelineResult):
-            await self._render_success(progress_msg, result)
+            await self._render_success(progress_msg, result, session=session)
             # Story Director — record the turn and trigger a coherence
             # check every N turns, same pattern as combat/exploration cogs.
             await record_turn_and_maybe_check(
@@ -291,14 +291,31 @@ class ActionHandlerCog(commands.Cog):
         self,
         progress_msg: discord.Message,
         result: ActionPipelineResult,
+        session: "Any | None" = None,
     ) -> None:
-        embed = build_narrative_embed(
-            narrative=result.narrative,
-            public_effects=result.public_effects,
-            tone=result.tone,
-            npc_name=result.npc_name,
-            npc_dialogue=result.npc_dialogue,
-        )
+        if result.is_question and session is not None:
+            loc = session.current_location
+            beat_title = None
+            if session.story_arc:
+                arc = session.story_arc
+                beat_title = arc.beats[arc.current_beat_index].title
+            embed = build_state_embed(
+                narrative=result.narrative,
+                location_name=loc.name if loc else "???",
+                items=list(loc.items_available) if loc else [],
+                npcs=list(loc.npcs_present) if loc else [],
+                exits=(list(loc.connections) + list(loc.unlocked_exits)) if loc else [],
+                beat_title=beat_title,
+                language=session.language,
+            )
+        else:
+            embed = build_narrative_embed(
+                narrative=result.narrative,
+                public_effects=result.public_effects,
+                tone=result.tone,
+                npc_name=result.npc_name,
+                npc_dialogue=result.npc_dialogue,
+            )
         await progress_msg.edit(embed=embed, view=None)
 
     async def _render_unknown(

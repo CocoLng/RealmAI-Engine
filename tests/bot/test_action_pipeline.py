@@ -568,6 +568,50 @@ class TestQuestionAction:
         assert result.interpreted_action.action_type == ActionType.QUESTION
         assert len(narrator.calls) == 1
 
+    @pytest.mark.asyncio
+    async def test_question_returns_is_question_flag(self, cathedral, aldric, corin):
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.QUESTION,
+                actor_name="Aldric",
+                raw_input="Are there NPCs here?",
+                confidence=0.9,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="You see priests.", tone="dramatic")],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral,
+            {"Père Aldric": aldric, "Frère Corin": corin},
+        )
+        result = await pipeline.process("Are there NPCs here?")
+        assert isinstance(result, ActionPipelineResult)
+        assert result.is_question is True
+
+    @pytest.mark.asyncio
+    async def test_question_outcome_facts_contain_state(self, cathedral, aldric, corin):
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.QUESTION,
+                actor_name="Aldric",
+                raw_input="What's around me?",
+                confidence=0.9,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="Cathedral.", tone="dramatic")],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral,
+            {"Père Aldric": aldric, "Frère Corin": corin},
+        )
+        result = await pipeline.process("What's around me?")
+        assert isinstance(result, ActionPipelineResult)
+        call = narrator.calls[0]
+        assert "Place de la Cathédrale" in call["outcome_facts"]
+        assert "Autel de pierre" in call["outcome_facts"]
+
 
 # Concurrency serialization is enforced by the action_handler cog via
 # GameSession.action_lock — see tests/test_cog_exploration.py.

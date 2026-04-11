@@ -84,6 +84,48 @@ def build_narrative_embed(
     return embed
 
 
+_STATE_COLOR = 0x4A90D9  # Blue — distinct from narrative tones
+
+
+def build_state_embed(
+    narrative: str,
+    *,
+    location_name: str,
+    items: list[str],
+    npcs: list[str],
+    exits: list[str],
+    beat_title: str | None = None,
+    language: str = "fr",
+) -> discord.Embed:
+    """Build a blue state-info embed for question responses.
+
+    Visually distinct from narrative embeds to signal meta-info.
+    """
+    embed = discord.Embed(
+        title=f"\U0001f4cb {location_name}",
+        description=narrative,
+        color=_STATE_COLOR,
+    )
+
+    if items:
+        label = "Objets visibles" if language == "fr" else "Visible items"
+        embed.add_field(name=label, value="\n".join(f"- {i}" for i in items), inline=True)
+
+    if npcs:
+        label = "PNJ présents" if language == "fr" else "NPCs present"
+        embed.add_field(name=label, value="\n".join(f"- {n}" for n in npcs), inline=True)
+
+    if exits:
+        label = "Sorties" if language == "fr" else "Exits"
+        embed.add_field(name=label, value="\n".join(f"- {e}" for e in exits), inline=True)
+
+    if beat_title:
+        label = "Chapitre en cours" if language == "fr" else "Current chapter"
+        embed.add_field(name=label, value=f"*{beat_title}*", inline=False)
+
+    return embed
+
+
 def build_opening_crawl_embed(
     campaign_name: str,
     story_arc: StoryArc | None,

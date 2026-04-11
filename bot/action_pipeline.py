@@ -140,6 +140,7 @@ class ActionPipelineResult(BaseModel):
     new_beat: StoryBeat | None = None
     npc_name: str | None = None
     npc_dialogue: str | None = None
+    is_question: bool = False
 
 
 class AmbiguityResult(BaseModel):
@@ -378,6 +379,7 @@ class ActionPipeline:
                 logger.exception("AUTO-CHECKPOINT failed campaign=%s", self.campaign_id)
 
         await self._emit(progress_callback, PipelinePhase.DONE)
+        is_question = interpreted.action_type == ActionType.QUESTION
         result = ActionPipelineResult(
             narrative=narration.narrative,
             tone=narration.tone,
@@ -387,6 +389,7 @@ class ActionPipeline:
             new_beat=new_beat,
             npc_name=outcome.npc_name,
             npc_dialogue=outcome.npc_dialogue,
+            is_question=is_question,
         )
         logger.info(
             "ACTION complete campaign=%s actor=%s action=%s",
@@ -719,6 +722,33 @@ class ActionPipeline:
                 f"{action.actor_name} observes {loc.name if loc else 'the area'}."
             )
             return MechanicsOutcome(summary=summary, player_intent=intent)
+
+        if at == ActionType.QUESTION:
+            loc = self.location
+            parts: list[str] = []
+            if loc:
+                parts.append(f"Location: {loc.name}. {loc.description}")
+                all_exits = loc.connections + loc.unlocked_exits
+                if all_exits:
+                    parts.append(f"Exits: {', '.join(all_exits)}.")
+                if loc.items_available:
+                    parts.append(f"Visible items: {', '.join(loc.items_available)}.")
+                if loc.npcs_present:
+                    parts.append(f"NPCs present: {', '.join(loc.npcs_present)}.")
+                if loc.state_flags:
+                    active = [k for k, v in loc.state_flags.items() if v]
+                    if active:
+                        parts.append(f"Environment state: {', '.join(active)}.")
+            if self.session and self.session.story_arc:
+                arc = self.session.story_arc
+                beat = arc.beats[arc.current_beat_index]
+                parts.append(f"Current objective: {beat.title} — {beat.description}")
+            summary = f"{action.actor_name} asks about the surroundings."
+            return MechanicsOutcome(
+                summary=summary,
+                player_intent=intent,
+                outcome_facts=" ".join(parts),
+            )
 
         if at == ActionType.SEARCH:
             summary = (

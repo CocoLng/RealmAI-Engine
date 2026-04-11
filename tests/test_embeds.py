@@ -548,3 +548,68 @@ class TestPartyCardEmbed:
         assert "(+3)" in field_value
         # CHA 8 → (-1)
         assert "(-1)" in field_value
+
+
+# ---------------------------------------------------------------------------
+# State embed
+# ---------------------------------------------------------------------------
+
+
+class TestStateEmbed:
+    """Tests for build_state_embed (question responses)."""
+
+    def test_state_embed_color_is_blue(self):
+        from bot.embeds.narrative_embed import build_state_embed
+        embed = build_state_embed(
+            narrative="You see a cathedral.",
+            location_name="Place de la Cathédrale",
+            items=["Autel de pierre"],
+            npcs=["Père Aldric"],
+            exits=["Ruelle nord"],
+        )
+        assert embed.color == discord.Color(0x4A90D9)
+
+    def test_state_embed_has_title(self):
+        from bot.embeds.narrative_embed import build_state_embed
+        embed = build_state_embed(
+            narrative="You see a cathedral.",
+            location_name="Place de la Cathédrale",
+            items=[], npcs=[], exits=[],
+        )
+        assert embed.title is not None
+        assert "Place de la Cathédrale" in embed.title
+
+    def test_state_embed_has_fields(self):
+        from bot.embeds.narrative_embed import build_state_embed
+        embed = build_state_embed(
+            narrative="You observe.",
+            location_name="Barrier",
+            items=["Lever", "Sand bag"],
+            npcs=["Guard"],
+            exits=["North gate", "South gate"],
+        )
+        field_names = [f.name for f in embed.fields]
+        assert any("Objets" in n or "Items" in n for n in field_names)
+        assert any("PNJ" in n or "NPC" in n for n in field_names)
+        assert any("Sorties" in n or "Exits" in n for n in field_names)
+
+    def test_state_embed_omits_empty_sections(self):
+        from bot.embeds.narrative_embed import build_state_embed
+        embed = build_state_embed(
+            narrative="Nothing here.",
+            location_name="Empty Room",
+            items=[], npcs=[], exits=["Door"],
+        )
+        field_names = [f.name for f in embed.fields]
+        assert not any("Objets" in n or "Items" in n for n in field_names)
+        assert not any("PNJ" in n or "NPC" in n for n in field_names)
+
+    def test_state_embed_shows_beat_info(self):
+        from bot.embeds.narrative_embed import build_state_embed
+        embed = build_state_embed(
+            narrative="You look around.",
+            location_name="Barrier",
+            items=[], npcs=[], exits=[],
+            beat_title="Le Mur qui Soupire",
+        )
+        assert any("Mur qui Soupire" in (f.value or "") for f in embed.fields)
