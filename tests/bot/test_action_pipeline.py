@@ -543,5 +543,31 @@ class TestProgressCallback:
         assert seen_phases == sorted(seen_phases, key=lambda p: p.value)
 
 
+class TestQuestionAction:
+    """QUESTION action type short-circuits the pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_question_skips_entity_resolution(self, cathedral, aldric, corin):
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.QUESTION,
+                actor_name="Aldric",
+                raw_input="What do I see?",
+                confidence=0.9,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="You see a cathedral.", tone="dramatic")],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral,
+            {"Père Aldric": aldric, "Frère Corin": corin},
+        )
+        result = await pipeline.process("What do I see?")
+        assert isinstance(result, ActionPipelineResult)
+        assert result.interpreted_action.action_type == ActionType.QUESTION
+        assert len(narrator.calls) == 1
+
+
 # Concurrency serialization is enforced by the action_handler cog via
 # GameSession.action_lock — see tests/test_cog_exploration.py.

@@ -109,6 +109,7 @@ class EntityResolver:
             ActionType.DEFEND,
             ActionType.FLEE,
             ActionType.IMPROVISE,
+            ActionType.QUESTION,
         ):
             return ResolutionResult(status="not_applicable")
 

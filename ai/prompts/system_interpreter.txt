@@ -27,6 +27,7 @@ ActionType values:
 - "Move"        — travel to one of the visible exits
 - "Interact"    — manipulate a visible object that stays in place (push a lever, open a door, …). For taking/grabbing/picking up an object, use "Pick Up" instead.
 - "Improvise"   — any creative action that does not fit the categories above. The narrator will arbitrate the outcome.
+- "Question"   — the player asks about the game state, requests clarification, or wants information about their environment. Examples: "What do I see?", "Are there NPCs nearby?", "Did I succeed?", "What can I interact with?", "What happened to the breach?". Do NOT classify roleplay questions directed at an NPC as Question — those are "Talk".
 
 Rules:
 - Use the **Scene context** block (provided in the user message) to resolve references. If the player says "the priest" and the scene lists exactly one priest, set target_name to that priest's exact name. If the scene lists several, set target_name to the rough term ("the priest") and lower confidence — the system will ask the player to disambiguate.

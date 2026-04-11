@@ -45,6 +45,8 @@ class ActionType(StrEnum):
     PICKUP = "Pick Up"
     # Catch-all (works in combat and exploration)
     IMPROVISE = "Improvise"
+    # Meta
+    QUESTION = "Question"
 
 
 EXPLORATION_ACTION_TYPES: frozenset[ActionType] = frozenset({
@@ -55,6 +57,7 @@ EXPLORATION_ACTION_TYPES: frozenset[ActionType] = frozenset({
     ActionType.INTERACT,
     ActionType.PICKUP,
     ActionType.IMPROVISE,
+    ActionType.QUESTION,
 })
 
 
@@ -349,7 +352,12 @@ def validate_exploration_action(action: Action) -> ValidationResult:
             ),
         )
 
-    if action.action_type in (ActionType.LOOK, ActionType.SEARCH, ActionType.IMPROVISE):
+    if action.action_type in (
+        ActionType.LOOK,
+        ActionType.SEARCH,
+        ActionType.IMPROVISE,
+        ActionType.QUESTION,
+    ):
         return ValidationResult(is_valid=True)
 
     if action.action_type == ActionType.PICKUP:
