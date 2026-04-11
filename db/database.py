@@ -92,8 +92,14 @@ def _migrate_v1_to_v2(raw: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v2_to_v3(raw: sqlite3.Connection) -> None:
+    """V2 → V3: add state_flags and unlocked_exits to locations."""
+    _add_column_if_missing(raw, "locations", "state_flags", "JSON DEFAULT '{}'")
+    _add_column_if_missing(raw, "locations", "unlocked_exits", "JSON DEFAULT '[]'")
+
+
 # Ordered list of migration functions. Index 0 = v0→v1, index 1 = v1→v2, etc.
-_MIGRATIONS = [_migrate_v0_to_v1, _migrate_v1_to_v2]
+_MIGRATIONS = [_migrate_v0_to_v1, _migrate_v1_to_v2, _migrate_v2_to_v3]
 
 
 def _migrate_schema(engine: Engine) -> None:

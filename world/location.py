@@ -3,7 +3,7 @@
 Represents places in the game world that players can visit.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Location(BaseModel):
@@ -11,7 +11,9 @@ class Location(BaseModel):
 
     name: str
     description: str = ""
-    connections: list[str] = []
-    npcs_present: list[str] = []
-    items_available: list[str] = []
-    item_descriptions: dict[str, str] = {}
+    connections: list[str] = Field(default_factory=list)
+    npcs_present: list[str] = Field(default_factory=list)
+    items_available: list[str] = Field(default_factory=list)
+    item_descriptions: dict[str, str] = Field(default_factory=dict)
+    state_flags: dict[str, bool] = Field(default_factory=dict)
+    unlocked_exits: list[str] = Field(default_factory=list)

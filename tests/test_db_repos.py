@@ -313,6 +313,41 @@ class TestLocationRepository:
             db_session.commit()
         db_session.rollback()
 
+    def test_location_state_flags_persist(self, db_session: Session, sample_campaign: Campaign) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        loc = Location(
+            name="Bone Barrier",
+            description="A wall of bones.",
+            connections=["Village"],
+            state_flags={"lever_activated": True, "breach_open": True},
+            unlocked_exits=["Inner Court"],
+        )
+        repo.save(loc, sample_campaign.id)
+        db_session.commit()
+
+        loaded = repo.get_by_name("Bone Barrier", sample_campaign.id)
+        assert loaded is not None
+        assert loaded.state_flags == {"lever_activated": True, "breach_open": True}
+        assert loaded.unlocked_exits == ["Inner Court"]
+
+    def test_location_update_persists_state_flags(self, db_session: Session, sample_campaign: Campaign) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        loc = Location(name="Barrier", description="Desc", connections=["A"])
+        repo.save(loc, sample_campaign.id)
+        db_session.commit()
+
+        loc.state_flags["puzzle_solved"] = True
+        loc.unlocked_exits.append("Secret Exit")
+        repo.update(loc, sample_campaign.id)
+        db_session.commit()
+
+        loaded = repo.get_by_name("Barrier", sample_campaign.id)
+        assert loaded is not None
+        assert loaded.state_flags == {"puzzle_solved": True}
+        assert loaded.unlocked_exits == ["Secret Exit"]
+
 
 # ---------------------------------------------------------------------------
 # QuestRepository

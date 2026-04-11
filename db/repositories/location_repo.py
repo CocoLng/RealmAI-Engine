@@ -51,6 +51,8 @@ class LocationRepository:
         row.npcs_present = location.npcs_present  # type: ignore[assignment]
         row.items_available = location.items_available  # type: ignore[assignment]
         row.item_descriptions = location.item_descriptions  # type: ignore[assignment]
+        row.state_flags = location.state_flags  # type: ignore[assignment]
+        row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
 
     def delete(self, name: str, campaign_id: str) -> None:
         """Delete a location by name within a campaign."""
