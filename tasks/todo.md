@@ -1,36 +1,31 @@
-# RealmAI-Engine — Task Board
+# TODO — RealmAI-Engine
 
-## UX Immersion (Agents 01–03) — DONE ✅
+## Chantier en cours : Refonte Character System
 
-- [x] Agent 01 — Character re-creation (re-clic "Créer mon personnage")
-- [x] Agent 02 — Force launch (bouton lancer sans joueurs manquants)
-- [x] Agent 03 — Launch immersion (purge + countdown + opening crawl)
+Voir `tasks/README.md` pour l'orchestration et `tasks/agents/` pour les fiches détaillées.
 
-## Character System Refactor (Agents 01–05) — DONE ✅
+- [ ] Agent 01 — Package split (`character.py` → `character/`)
+- [ ] Agent 02 — Feature system + Skills
+- [ ] Agent 03 — Standard Array + refonte `create_character()`
+- [ ] Agent 04 — Discord wizard (stats + skills + flow complet)
+- [ ] Agent 05 — DB migration + cleanup
 
-- [x] Agent 01 — Package split: `engine/character.py` → `engine/character/` package
-- [x] Agent 02 — Features & skill proficiencies (`Feature`, `Skill`, `RACIAL_FEATURES`, `CLASS_FEATURES`)
-- [x] Agent 03 — Standard Array + `create_character()` flow (stat assignment, starter gear, race/class defaults)
-- [x] Agent 04 — Discord wizard: `/create_character` multi-step modal flow with skill selection
-- [x] Agent 05 — DB compatibility: backfill function, isolation audit, documentation update
+## Character Creation (autres items)
 
-## Character Creation (UX backlog)
+- [ ] Permettre de remodifier son perso après création (pendant l'attente de la génération). Si la personne re-clique sur "Create Character"
+- [ ] Clear le channel Discord des messages pour l'immersion
+- [ ] Ajouter un compteur de démarrage pour avertir les joueurs que le jeu va commencer
+- [ ] Ajouter un bouton pour forcer le lancement du jeu si la génération est finie mais que certains joueurs n'ont pas créé de perso (ils sont exclus mais peuvent voir le channel)
+- [ ] Ajouter un message initial de contexte pour l'immersion (embed avec les personnages du groupe et intro de l'aventure)
 
-- [x] Permettre de remodifier son perso apres création (pendant l'attente de la génération). Si la personne re clique sur "Create Character"
-- [x] Clear le channel discord des messages pour l'immersion
-- [x] Ajouter un compteur de démarrage pour avertir les joueurs que le jeu va commencer
-- [x] Ajouter un bouton sur le premier message pour forcer le lancement du jeu si la génération est fini mais que certains joueurs n'ont pas cliqué sur "Create Character" alors ils sont exclus du jeu
-- [x] Ajouter un message initial de contexte pour l'immersion lorsque le jeu commence
-- [ ] Faire des stats de perso avec un level ou le joueur peut comme sur un DnD classique faire des choix pour augmenter certaines stats
+## Différé (à faire plus tard)
 
-## Deferred (future phases)
-
-- [ ] Backgrounds (Acolyte, Criminal, Noble, etc.) — 2 skill proficiencies + equipment + RP trait
-- [ ] Feats (ASI-or-feat at levels 4/8/12/16/19)
+- [ ] Backgrounds (Acolyte, Criminal, Noble, etc.) — 2 skill proficiencies + équipements + trait RP
+- [ ] Feats (choix ASI-ou-feat aux niveaux 4/8/12/16/19)
 - [ ] Multiclassing
-- [ ] Language system
+- [ ] Système de langues
 - [ ] Tool proficiencies
-- [ ] Class features level 2+ (full progression)
-- [ ] Point Buy and 4d6-drop-lowest as alternative stat methods
-- [ ] Shop / buy-sell system
-- [ ] Extended spell catalog (>20 current spells)
+- [ ] Class features de niveau 2+ (progression complète)
+- [ ] Point Buy et 4d6-drop-lowest comme méthodes alternatives de stats
+- [ ] Boutique / système achat-vente
+- [ ] Catalogue de sorts étendu (>20 sorts actuels)

@@ -33,7 +33,7 @@ Un **embed de progression** est posté dès le début (phases `⚪ pending → �
 - objets visibles
 - combat actif (round, tour courant, enemies)
 
-**Sortie** : `InterpretedAction` (pydantic) avec `action_type` parmi 14 enum values (`ATTACK`, `CAST_SPELL`, `DEFEND`, `FLEE`, `USE_ITEM`, `PICK_UP`, `LOOK`, `SEARCH`, `TALK`, `MOVE`, `INTERACT`, `IMPROVISE`, …), `target_name`, `item_name`, `spell_name`, `talk_topic`, `search_detail`, `confidence`.
+**Sortie** : `InterpretedAction` (pydantic) avec `action_type` parmi 15 enum values (`ATTACK`, `CAST_SPELL`, `DEFEND`, `FLEE`, `USE_ITEM`, `PICK_UP`, `LOOK`, `SEARCH`, `TALK`, `MOVE`, `INTERACT`, `IMPROVISE`, `QUESTION`), `target_name`, `item_name`, `spell_name`, `talk_topic`, `search_detail`, `confidence`.
 
 **Resilience** :
 - Wrappé dans [bot/llm_retry.py](../../bot/llm_retry.py) `retry_llm_call(max_retries=2, delays=(5, 15))`.
@@ -63,7 +63,7 @@ Un **embed de progression** est posté dès le début (phases `⚪ pending → �
 | `PICKUP` | location items |
 | `ATTACK`, `CAST_SPELL` | Combat enemies d'abord, fallback PNJs de la location (Lot C — bootstrap) |
 | `USE_ITEM` | `inventory.items` |
-| `LOOK`, `DEFEND`, `FLEE`, `IMPROVISE` | `not_applicable` |
+| `LOOK`, `DEFEND`, `FLEE`, `IMPROVISE`, `QUESTION` | `not_applicable` |
 
 ### Résultats possibles
 
@@ -110,10 +110,36 @@ Dispatch par `action_type` :
 | `DEFEND` | Applique un effet temporaire (advantage défensif). |
 | `FLEE` | Termine le combat si réussi (check d'opportunité). |
 | `IMPROVISE` | Construit un `MechanicsOutcome` générique avec l'intent joueur, laissé à narrer tel quel. |
+| `QUESTION` | Court-circuit : construit un résumé factuel de l'état du jeu (location, items, PNJ, sorties, state_flags, objectif du beat courant) dans `outcome_facts`. Pas de mutation. |
 
 **Sortie** : `MechanicsOutcome(summary, player_intent, outcome_facts, public_effects: PublicEffects)`.
 
 `PublicEffects` inclut uniquement les changements **visibles au joueur** : `hp_delta`, `items_gained/lost`, `gold_delta`, `location_change`, `xp_gained`, `level_up`. Pas de disposition interne, pas de rolls cachés. Render en footer via `to_footer_text()`.
+
+### Phase 4b — BEAT COMPLETION CHECK
+
+Après Phase 4, si l'action n'est pas `QUESTION`, le pipeline vérifie si le beat courant est complété.
+
+**Trigger déterministe** : chaque `StoryBeat` possède un `completion_trigger: CompletionTrigger(type, target)` optionnel. Le pipeline compare `action_type` et `target_name` (fuzzy match ≥ 0.6) contre le trigger.
+
+| trigger.type | action_type attendu |
+|---|---|
+| `interact` | `INTERACT` |
+| `defeat` | `ATTACK` |
+| `talk` | `TALK` |
+| `arrive` | `MOVE` |
+| `search` | `SEARCH` |
+| `pickup` | `PICKUP` |
+
+Si match → `_apply_beat_effects(beat.on_complete)` mute la `Location` :
+- `unlock_exits` → ajoutés à `location.unlocked_exits`
+- `add_npcs` / `remove_items` / `add_items` → mutations directes
+- `state_flags` → merges dans `location.state_flags`
+- `narrative_hint` → ajouté à `outcome_facts` pour le Narrator
+
+Puis `advance_beat(arc)` incrémente `current_beat_index`.
+
+**Fallback LLM** : si le trigger déterministe ne match pas mais que (1) le joueur est au bon lieu (fuzzy ≥ 0.5), (2) l'action est non-triviale (pas LOOK/QUESTION), et (3) le beat a un trigger, un appel rapide au modèle 4b juge si l'action résout créativement l'objectif. Seuil : `confidence ≥ 0.85`. Le code reste l'arbitre final.
 
 ## Phase 5 — ASSEMBLING_CONTEXT
 
@@ -149,7 +175,10 @@ Side-effect : peut déclencher `Summarizer.summarize()` si seuil de 20 exchanges
 1. **Embed narratif** posté via `bot/embeds/narrative_embed.py` (description + footer `PublicEffects`).
 2. **Story bible** : `session.story_bible.log_turn(turn_number, actor, command, outcome_summary, narrative_excerpt)` — Markdown append-only.
 3. **Exchange persisté** en Layer 2 : `PLAYER` entry + `NARRATOR` entry.
-4. **Beat advancement (Lot D)** : `session.advance_beat_if_ready()` — fuzzy match location courante vs `arc.beats[current + 1].location_hint`, seuil 0.7. Si match, `arc.current_beat_index += 1` + persist + poste un `beat_embed`.
+4. **Beat advancement** : deux mécanismes, par priorité :
+   - **Trigger déterministe (Phase 4b)** : si `action_type` + `target_name` matchent le `completion_trigger` du beat courant → `on_complete` appliqué, beat avancé.
+   - **Fallback location (Lot D hérité)** : `session.advance_beat_if_ready()` — fuzzy match location courante vs `arc.beats[current + 1].location_hint`, seuil 0.7. Sert de filet pour les beats de type `arrive`.
+   Dans les deux cas : persist arc + poste un `beat_embed`.
 5. **Story Director (tous les ~20 tours)** : `StoryDirector.check_coherence(campaign_id, context)` → `DirectorNote(coherence_issues, suggested_hooks, priority)`, persisté en `SemanticMemory` comme `SemanticDocument`. Voir [NARRATIVE_COHERENCE.md](NARRATIVE_COHERENCE.md).
 
 ## Cas d'erreur
@@ -165,7 +194,7 @@ Side-effect : peut déclencher `Summarizer.summarize()` si seuil de 20 exchanges
 
 | Type | Traitement |
 |---|---|
-| `ActionPipelineResult` | Post embed narratif + footer effects + mise à jour story bible. |
+| `ActionPipelineResult` | Si `is_question=True` → post **embed d'état** (bleu, 0x4A90D9) avec sections items/PNJ/sorties/beat. Sinon → post embed narratif + footer effects + mise à jour story bible. |
 | `AmbiguityResult` | Post `ClarificationView`, attend clic, relance Phase 2. |
 | `UnknownEntityResult` | Post message de refus in-character (pas d'erreur). |
 
