@@ -37,7 +37,7 @@ from engine.inventory import (
     WeaponCategory,
     WeaponProperty,
 )
-from engine.npc_stat_block import NPCAttack, NPCStatBlock
+from engine.npc_stat_block import NPCAttack, NPCStatBlock, NPCTier
 from world.combat_zone import ZoneTag
 from world.npc import NPC
 from engine.spells import (
@@ -173,6 +173,11 @@ class CombatState(BaseModel):
     is_active: bool = True
     end_reason: CombatEndReason | None = None
     pending_phase_narrations: list[PhaseTransitionEvent] = Field(default_factory=list)
+    pending_legendary_summaries: list[str] = Field(default_factory=list)
+    """Off-turn legendary action summaries accumulated during ``advance_turn``.
+    Populated by task 53's ``maybe_spend_legendary_action`` hook and consumed
+    by the TurnManager (task 64) so the player sees what the boss did in
+    between everyone else's turns."""
 
 
 class AttackResult(BaseModel):
@@ -349,9 +354,11 @@ def advance_turn(state: CombatState) -> CombatState:
 
     Ticks condition durations on the combatant who just finished their
     turn, consumes their SURPRISED condition if present (a surprised
-    combatant's no-op turn has now elapsed), walks forward to the next
+    combatant's no-op turn has now elapsed), fires off-turn legendary
+    actions for any living boss (task 53), walks forward to the next
     alive-and-not-fled combatant, increments ``round_number`` at the
-    wrap, resets the incoming combatant's action budget, refills
+    wrap, resets the incoming combatant's action budget (refilling
+    legendary points too if the incoming combatant is a boss), refills
     reactions on round wrap, and sets ``is_active=False`` / ``end_reason``
     via :func:`check_combat_end` if the encounter should stop.
 
@@ -369,6 +376,22 @@ def advance_turn(state: CombatState) -> CombatState:
     current = state.combatants[state.current_turn_index]
     tick_durations(current.conditions)
     consume_surprise_if_present(current.conditions)
+
+    # 1b. Off-turn legendary actions (task 53). After a PC's turn, every
+    #     living boss NPC gets a chance to spend its legendary points.
+    #     Summaries are queued on ``state.pending_legendary_summaries``
+    #     for the TurnManager (task 64) to surface to the player.
+    if current.is_alive and current.side == CombatSide.PLAYER:
+        from engine.npc_ai.legendary import maybe_spend_legendary_action
+
+        for boss in state.combatants:
+            if boss.name == current.name:
+                continue
+            if boss.side == current.side:
+                continue
+            summary = maybe_spend_legendary_action(state, boss, current)
+            if summary is not None:
+                state.pending_legendary_summaries.append(summary)
 
     # 2. Walk forward to the next eligible combatant. A combatant is
     #    eligible if it is alive AND has not fled. Skip dead/fled slots
@@ -394,9 +417,18 @@ def advance_turn(state: CombatState) -> CombatState:
         for c in state.combatants:
             c.action_budget.reaction_used_this_round = False
 
-    # 4. Reset the incoming combatant's turn pool (Move/Action/Bonus).
+    # 4. Reset the incoming combatant's turn pool (Move/Action/Bonus) and
+    #    refill legendary points if the incoming combatant is a boss
+    #    (task 53 — 5e RAW: reset at the start of the boss's own turn).
     new_current = state.combatants[next_index]
     new_current.action_budget.reset_for_new_turn(max(new_current.character.speed, 0))
+    if (
+        new_current.stat_block is not None
+        and new_current.stat_block.tier == NPCTier.BOSS
+    ):
+        new_current.legendary_points_remaining = (
+            new_current.stat_block.legendary_points_per_round
+        )
 
     # 5. Check for end of combat.
     end = check_combat_end(state)

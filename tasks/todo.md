@@ -38,7 +38,7 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 50 — IA scripted pour minions
 - [x] Task 51 — IA elite : behavior profiles + signatures
 - [x] Task 52 — Boss : LLM tactician
-- [ ] Task 53 — Legendary actions off-turn
+- [x] Task 53 — Legendary actions off-turn
 - [ ] Task 54 — Phase transitions
 
 ### Phase 6 — Discord UI

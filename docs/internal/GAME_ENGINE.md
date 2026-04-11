@@ -307,7 +307,13 @@ Chaque NPC avec un `NPCStatBlock` a un cerveau tactique qui décide de son actio
 
 **Signature executor** (`execute_signature_ability(caster, signature, targets, state)`) résout les 3 kinds MVP : `damage` roule les dés puis `apply_damage`, `heal` roule puis `apply_healing` (clamp max HP), `condition` applique la `ActiveCondition` après échec d'un save (save_ability + save_dc sur l'effet, inclut le `phase_save_bonus` du combattant). `uses_remaining` est décrémenté quand c'est un `int`, laissé à `None` pour les `at_will`. Les 4 kinds restants (`aoe_damage`, `buff`, `debuff`, `move`) logguent un WARNING et retournent un summary de fallback — le caller peut alors réinvoquer `resolve_npc_attack` pour une attaque standard.
 
-`decide_action_for(combatant, state, location)` est le **point d'entrée unique** côté `scripted.py` : il regarde `stat_block.tier` et route vers le bon brain (minion/elite, boss = fallback elite pour l'instant avant task 52). Le TurnManager (task 64) consommera ce dispatcher.
+`decide_action_for(combatant, state, location)` est le **point d'entrée unique** côté `scripted.py` : il regarde `stat_block.tier` et route vers le bon brain (minion/elite, boss = fallback elite ; pour l'appel LLM boss, le TurnManager task 64 invoquera `decide_boss_action` explicitement). Le TurnManager consommera ce dispatcher.
+
+### Legendary actions off-turn (task 53)
+
+Les bosses ont `legendary_points_per_round` points de legendary action (3 par défaut) qu'ils peuvent dépenser **entre** les tours des autres créatures. `engine/npc_ai/legendary.py::maybe_spend_legendary_action(state, boss, previous_combatant)` gate sur `tier == BOSS`, `is_alive`, `not fled`, `legendary_points_remaining > 0`, puis applique la heuristique `_pick_legendary` : cost-3 uniquement si HP < 30%, sinon cost-2 si dispo, sinon cost-1 eagerly. Le point est décrémenté, l'action est exécutée via le pipeline de signature existant (l'action est enrobée dans une `SignatureAbility` éphémère `at_will`).
+
+`advance_turn` hooke cette logique à deux endroits : (1) après chaque fin de tour PC, itère sur les bosses ennemis vivants et déclenche `maybe_spend_legendary_action` — les summaries retournés sont accumulés sur `CombatState.pending_legendary_summaries` pour consommation par le TurnManager (task 64) ; (2) quand le nouveau combattant actif est un boss, reset `legendary_points_remaining = stat_block.legendary_points_per_round` (5e RAW : reset au début du tour du boss, pas au round).
 
 ## Dépendances inter-modules
 
