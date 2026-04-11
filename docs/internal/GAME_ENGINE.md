@@ -295,6 +295,16 @@ Positionnement abstrait par **zones nommées** plutôt qu'une grille 5-pieds. `L
 
 L'intégration côté combat est implémentée : `Combatant.current_zone: str | None`, `engine.combat.move_combatant_to_zone(state, combatant, target_zone, location)` pour le mouvement zone-à-zone avec validation d'adjacence, coût `DIFFICULT_TERRAIN` x2, déclenchement d'opportunity attacks, et `engine.combat.disengage(combatant)` pour l'action Disengage (voir la section « combat.py » ci-dessus).
 
+## NPC AI — tactical brains (`engine/npc_ai/`)
+
+Chaque NPC avec un `NPCStatBlock` a un cerveau tactique qui décide de son action à son tour. Le cerveau est dispatché par `tier` :
+
+- **Minion** → [`engine/npc_ai/scripted.py::decide_minion_action`](../../engine/npc_ai/scripted.py) — heuristique pure, 3 règles (1) attaque la cible en range avec le moins de HP (tiebreak AC ascendant), (2) sinon step BFS vers la zone ennemie la plus proche, (3) sinon `Dodge` (DEFEND). Aucun appel LLM, pas de multi-attaques (un minion = `multiattack_count=1` par contrat de tier).
+- **Elite** → `engine/npc_ai/elite.py` (task 51, à venir).
+- **Boss** → `engine/npc_ai/boss_brain.py` + LLM tactician `ai/npc_tactician.py` (task 52, à venir).
+
+`NPCActionPlan` (Pydantic) est le contrat de sortie commun : `action_type`, `target_name`, `weapon_name`, `move_to_zone`, `signature_name` (reserved elite/boss), `rationale`. Le resolver `execute_action_plan(combatant, plan, state, location)` consomme l'Action via `consume_action`, route ATTACK via `resolve_npc_attack` (l'engine roule les dés, jamais le brain), MOVE via `move_combatant_to_zone` (OOA inclus), DEFEND via `consume_action` simple. Les ranged attacks du stat block permettent au brain de cibler à travers n'importe quelle zone (pas de LOS en MVP).
+
 ## Dépendances inter-modules
 
 ```

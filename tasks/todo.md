@@ -35,7 +35,7 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 43 — Hydration : dispatch par tier d'archétype
 
 ### Phase 5 — IA tactique (NPC brains)
-- [ ] Task 50 — IA scripted pour minions
+- [x] Task 50 — IA scripted pour minions
 - [ ] Task 51 — IA elite : behavior profiles + signatures
 - [ ] Task 52 — Boss : LLM tactician
 - [ ] Task 53 — Legendary actions off-turn
