@@ -645,6 +645,68 @@ class TestBeatCompletion:
     """Deterministic beat completion via triggers."""
 
     @pytest.mark.asyncio
+    async def test_llm_fallback_fires_on_creative_solution(self):
+        """When deterministic trigger doesn't match but player is creative, LLM fallback fires."""
+        loc = Location(
+            name="Bone Barrier",
+            description="A wall of bones.",
+            connections=[],
+            items_available=["Le levier de l'Échiquier", "Sac de sable"],
+        )
+        arc = StoryArc(
+            campaign_id="test",
+            theme="dungeon",
+            premise="A dungeon adventure with many challenges ahead.",
+            beats=[
+                StoryBeat(
+                    beat_number=i + 1,
+                    title=f"Beat {i + 1}",
+                    description="Balance the mechanism to open a breach." if i == 0 else f"Desc {i + 1}",
+                    location_hint="Bone Barrier" if i == 0 else f"Area {i + 1}",
+                    encounter_type="puzzle" if i == 0 else "exploration",
+                    completion_trigger=CompletionTrigger(type="interact", target="Le levier de l'Échiquier") if i == 0 else None,
+                    on_complete=BeatEffects(
+                        unlock_exits=["Inner Court"],
+                        state_flags={"breach_open": True},
+                        narrative_hint="A breach opens.",
+                    ) if i == 0 else BeatEffects(),
+                )
+                for i in range(10)
+            ],
+            villain_name="Thaumiel",
+            villain_motivation="Purify humanity.",
+        )
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.IMPROVISE,
+                actor_name="Hero",
+                target_name=None,
+                raw_input="I use the sand to balance the mechanism",
+                improvise_description="Hero uses sand to balance the mechanism",
+                confidence=0.8,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="Sand balances it.", tone="tense")],
+        )
+        session = _make_session_with_arc(loc, arc)
+        pipeline = _make_pipeline(
+            interp, narrator, loc, {},
+            actor_name="Hero",
+        )
+        pipeline.session = session
+
+        from unittest.mock import AsyncMock, patch
+        mock_judge = AsyncMock(return_value={"completed": True, "confidence": 0.9})
+        with patch.object(pipeline, "_llm_beat_fallback", mock_judge):
+            result = await pipeline.process("I use the sand")
+
+        assert isinstance(result, ActionPipelineResult)
+        assert result.new_beat is not None
+        assert result.new_beat.beat_number == 2
+        assert "Inner Court" in loc.unlocked_exits
+
+    @pytest.mark.asyncio
     async def test_interact_trigger_completes_beat(self):
         loc = Location(
             name="Bone Barrier",

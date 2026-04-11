@@ -349,6 +349,45 @@ class ActionPipeline:
                 "BEAT trigger-complete campaign=%s beat=%d title=%r",
                 self.campaign_id, beat.beat_number, beat.title,
             )
+        elif (
+            self.session is not None
+            and self.session.story_arc is not None
+            and interpreted.action_type not in (
+                ActionType.QUESTION, ActionType.LOOK,
+            )
+        ):
+            arc = self.session.story_arc
+            beat = arc.beats[arc.current_beat_index]
+            if (
+                beat.completion_trigger is not None
+                and self.location is not None
+            ):
+                from bot.game_session import _normalize_location
+                loc_ratio = difflib.SequenceMatcher(
+                    None,
+                    _normalize_location(self.location.name),
+                    _normalize_location(beat.location_hint),
+                ).ratio()
+                if loc_ratio >= 0.5:
+                    judge = await self._llm_beat_fallback(interpreted, beat, outcome)
+                    logger.info(
+                        "BEAT fallback campaign=%s completed=%s confidence=%.2f",
+                        self.campaign_id,
+                        judge.get("completed"), judge.get("confidence"),
+                    )
+                    if judge.get("completed") and judge.get("confidence", 0) >= 0.85:
+                        beat_completed = True
+                        hint = self._apply_beat_effects(beat.on_complete)
+                        if hint:
+                            outcome = outcome.model_copy(update={
+                                "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
+                            })
+                        from world.story_arc import advance_beat
+                        self.session.story_arc = advance_beat(arc)
+                        logger.info(
+                            "BEAT fallback-complete campaign=%s beat=%d title=%r",
+                            self.campaign_id, beat.beat_number, beat.title,
+                        )
 
         await self._emit(progress_callback, PipelinePhase.ASSEMBLING_CONTEXT)
         context_prompt = self._assemble_context(interpreted)
@@ -921,6 +960,52 @@ class ActionPipeline:
         loc.state_flags.update(effects.state_flags)
 
         return effects.narrative_hint
+
+    async def _llm_beat_fallback(
+        self,
+        action: InterpretedAction,
+        beat: "StoryBeat",
+        outcome: MechanicsOutcome,
+    ) -> dict:
+        """Ask the 4b model if the player's creative action completes the beat.
+
+        Returns {"completed": bool, "confidence": float}.
+        Falls back to {"completed": False, "confidence": 0.0} on any error.
+        """
+        if self.interpreter is None:
+            return {"completed": False, "confidence": 0.0}
+        trigger_desc = ""
+        if beat.completion_trigger:
+            trigger_desc = f"{beat.completion_trigger.type} on \"{beat.completion_trigger.target}\""
+        prompt = (
+            f"Beat objective: \"{beat.description}\"\n"
+            f"Expected trigger: {trigger_desc}\n"
+            f"Player action: {action.action_type.value} on \"{action.target_name or 'nothing'}\"\n"
+            f"Action summary: \"{outcome.summary}\"\n\n"
+            f"Has the player achieved the beat objective through a creative approach?\n"
+            f"Return JSON: {{\"completed\": true/false, \"confidence\": 0.0-1.0}}"
+        )
+        try:
+            client = self.interpreter._client
+            result = client.chat_json(
+                "qwen3.5:4b",
+                [
+                    {"role": "system", "content": "You judge whether a player's action has completed a story beat objective. Respond with JSON only: {\"completed\": bool, \"confidence\": float}"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                think=False,
+            )
+            return {
+                "completed": bool(result.get("completed", False)),
+                "confidence": float(result.get("confidence", 0.0)),
+            }
+        except Exception:
+            logger.warning(
+                "BEAT LLM fallback failed campaign=%s", self.campaign_id,
+                exc_info=True,
+            )
+            return {"completed": False, "confidence": 0.0}
 
     def _build_player_intent(self, action: InterpretedAction) -> str:
         """Concatenate raw input with any interpreter-extracted intent extras."""
