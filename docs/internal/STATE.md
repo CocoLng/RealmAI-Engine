@@ -22,7 +22,7 @@ Refonte du combat pour atteindre une fidélité "core 5e" : orthogonal aux beats
 | **Phase 0 — Bugfixes** | 🟢 Done | Villain protégé du trivial resolve, MOVE bloqué en combat actif |
 | **Phase 1 — Fondations NPC & engine** | 🟢 Done | `NPCStatBlock` + 11 archétypes + `Zone`/`ZoneTag` + conditions `SURPRISED`/`CONCENTRATING`, persistance DB complète |
 | **Phase 2 — Moteur multi-ennemis** | 🟢 Done | `engine/combat_trigger.py` + `bot/combat_entry.py` (4 triggers), `start_combat(trigger=)` 3 cas surprise, `advance_turn` consume SURPRISED / reset ActionBudget / round wrap reactions, `check_combat_end` (VICTORY/DEFEAT/FLED/TRUCE), `resolve_npc_attack` pour stat-blocks, concentration hook sur `apply_damage`, `move_combatant_to_zone` + OOA + `disengage`, `combat_id`/`end_reason`/`pending_phase_narrations` sur `CombatState`, persistance roundtrip via `campaigns.combat_state_json` (Pydantic) |
-| **Phase 3 — Validation & pipeline** | 🔴 Non commencé | Validators stricts, dispatch combat-aware, auto-convert MOVE→FLEE |
+| **Phase 3 — Validation & pipeline** | 🟡 En cours | Task 30 ✅ Implémenté — Validators stricts (SURPRISED guard, action budget, friendly fire, range zones, validate_move_in_combat) ; Tasks 31/32 (dispatch pipeline + MOVE→FLEE) à venir |
 | **Phase 4 — Interprète & générateurs** | 🔴 Non commencé | Détection lethal intent, world gen zones/triggers, arc gen villain stat block, hydration par tier |
 | **Phase 5 — IA tactique NPC** | 🔴 Non commencé | Minion/Elite scripted, boss LLM tactician, legendary actions, phase transitions |
 | **Phase 6 — Discord UI** | 🔴 Non commencé | Embeds dés/combat start/state, views boutons, turn ping |
@@ -57,7 +57,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ Mouvement entre zones + attaques d'opportunité + action `Disengage`
 - ✅ Trivial resolve (Lot E)
 - ✅ Starter kits (15 kits sur 6 classes)
-- ✅ Validators (combat + exploration ; exploration bloque MOVE/TALK/SEARCH/INTERACT/PICKUP en combat actif depuis Phase 0 Task 01)
+- ✅ Validators (combat + exploration ; exploration bloque MOVE/TALK/SEARCH/INTERACT/PICKUP en combat actif depuis Phase 0 Task 01 ; Task 30 : SURPRISED guard, action budget ATTACK/CAST_SPELL, friendly fire, range par zone, validate_move_in_combat)
 
 ### AI / LLM
 - ✅ Interpreter (15 ActionType incl. QUESTION, fallback déterministe)

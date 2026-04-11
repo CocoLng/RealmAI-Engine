@@ -34,6 +34,7 @@ from engine.validators import (
     validate_defend,
     validate_exploration_action,
     validate_flee,
+    validate_move_in_combat,
     validate_use_item,
 )
 
@@ -962,3 +963,238 @@ class TestConcentrationLogging:
             result = validate_cast_spell(action, state)
         assert result.is_valid
         assert "Hunter's Mark" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Task 30 — Strict validators
+# ---------------------------------------------------------------------------
+
+
+def _make_state(actor: Combatant, target: Combatant) -> CombatState:
+    """Helper: build a two-combatant CombatState with actor at index 0."""
+    return CombatState(combatants=[actor, target], current_turn_index=0)
+
+
+@pytest.fixture()
+def enemy_combatant(fighter_combatant: Combatant) -> Combatant:
+    """Same stats as fighter but on the ENEMY side, unarmed."""
+    c = fighter_combatant.model_copy(deep=True)
+    c.name = "Goblin"
+    c.side = CombatSide.ENEMY
+    c.inventory = Inventory()
+    return c
+
+
+@pytest.fixture()
+def ally_combatant(fighter_combatant: Combatant) -> Combatant:
+    """Same stats, same PLAYER side — for friendly fire test."""
+    c = fighter_combatant.model_copy(deep=True)
+    c.name = "Ally Fighter"
+    return c
+
+
+def test_validate_attack_rejects_if_action_already_used(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.action_budget.action_used = True
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.ATTACK,
+        target_name=enemy_combatant.name,
+        weapon_name="Longsword",
+    )
+    result = validate_attack(action, state)
+    assert not result.is_valid
+    assert "Action" in (result.error_message or "")
+
+
+def test_validate_attack_rejects_friendly_fire(
+    fighter_combatant: Combatant,
+    ally_combatant: Combatant,
+) -> None:
+    # Give ally the same sword so the weapon check passes
+    ally_combatant.inventory.equipped[EquipmentSlot.MAIN_HAND] = (
+        fighter_combatant.inventory.equipped[EquipmentSlot.MAIN_HAND]
+    )
+    state = _make_state(fighter_combatant, ally_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.ATTACK,
+        target_name=ally_combatant.name,
+        weapon_name="Longsword",
+    )
+    result = validate_attack(action, state)
+    assert not result.is_valid
+    assert "allié" in (result.error_message or "").lower()
+
+
+def test_validate_attack_rejects_out_of_range_melee_cross_zone(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.current_zone = "zone_a"
+    enemy_combatant.current_zone = "zone_b"
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.ATTACK,
+        target_name=enemy_combatant.name,
+        weapon_name="Longsword",
+    )
+    result = validate_attack(action, state)
+    assert not result.is_valid
+    assert "portée" in (result.error_message or "").lower()
+
+
+def test_validate_attack_allows_ranged_cross_zone(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    bow = Weapon(
+        name="Shortbow",
+        item_type=ItemType.WEAPON,
+        damage_dice="1d6",
+        damage_type=DamageType.PIERCING,
+        weapon_category=WeaponCategory.SIMPLE_RANGED,
+        properties=[WeaponProperty.AMMUNITION],
+        weight=2.0,
+    )
+    fighter_combatant.inventory.equipped[EquipmentSlot.MAIN_HAND] = bow
+    fighter_combatant.current_zone = "zone_a"
+    enemy_combatant.current_zone = "zone_b"
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.ATTACK,
+        target_name=enemy_combatant.name,
+        weapon_name="Shortbow",
+    )
+    result = validate_attack(action, state)
+    assert result.is_valid
+
+
+def test_validate_move_in_combat_rejects_without_movement(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.action_budget.movement_remaining_feet = 0
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.MOVE,
+        target_name="zone_b",
+    )
+    result = validate_move_in_combat(action, state)
+    assert not result.is_valid
+    assert "mouvement" in (result.error_message or "").lower()
+
+
+def test_validate_move_in_combat_rejects_while_restrained(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.conditions.append(
+        ActiveCondition(condition_type=ConditionType.RESTRAINED, source="test")
+    )
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.MOVE,
+        target_name="zone_b",
+    )
+    result = validate_move_in_combat(action, state)
+    assert not result.is_valid
+
+
+def test_validate_cast_spell_rejects_if_action_budget_used(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.spellcaster = SpellcasterState(
+        spellcasting_ability=Ability.INT,
+        spells_known=["Magic Missile"],
+        spell_slots_max={1: 2},
+        spell_slots_remaining={1: 2},
+    )
+    fighter_combatant.action_budget.action_used = True
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.CAST_SPELL,
+        spell_name="Magic Missile",
+        target_name=enemy_combatant.name,
+    )
+    result = validate_cast_spell(action, state)
+    assert not result.is_valid
+    assert "Action" in (result.error_message or "")
+
+
+def test_validate_cast_spell_rejects_if_bonus_action_budget_used(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.spellcaster = SpellcasterState(
+        spellcasting_ability=Ability.WIS,
+        spells_known=["Healing Word"],
+        spell_slots_max={1: 2},
+        spell_slots_remaining={1: 2},
+    )
+    fighter_combatant.action_budget.bonus_action_used = True
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.CAST_SPELL,
+        spell_name="Healing Word",
+        target_name=fighter_combatant.name,
+    )
+    result = validate_cast_spell(action, state)
+    assert not result.is_valid
+    assert "Bonus" in (result.error_message or "")
+
+
+def test_validate_action_rejects_surprised_combatant(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.conditions.append(
+        ActiveCondition(condition_type=ConditionType.SURPRISED, source="ambush")
+    )
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.ATTACK,
+        target_name=enemy_combatant.name,
+        weapon_name="Longsword",
+    )
+    result = validate_action(action, state)
+    assert not result.is_valid
+    assert "surpris" in (result.error_message or "").lower()
+
+
+def test_validate_exploration_rejects_move_in_combat(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.MOVE,
+        target_name="taverne",
+    )
+    result = validate_exploration_action(action, combat_state=state)
+    assert not result.is_valid
+
+
+def test_validate_exploration_allows_look_in_combat(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.LOOK,
+    )
+    result = validate_exploration_action(action, combat_state=state)
+    assert result.is_valid

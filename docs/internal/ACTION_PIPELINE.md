@@ -83,6 +83,10 @@ Checks :
 - Pour `USE_ITEM` : item présent en inventaire.
 - Pour `FLEE` : `can_move()` (pas `RESTRAINED` etc).
 
+### Règles strictes D&D 5e (Task 30)
+
+`validate_action()` applique un garde `SURPRISED` en amont : un combatant surpris ne peut rien faire ce tour (belt-and-suspenders — le turn manager skipe déjà les surpris, mais le validator le renforce). Les types d'action inconnus sont rejetés avec un message clair au lieu de lever une `KeyError`. `validate_attack()` vérifie dans l'ordre : budget action (action déjà utilisée = refus), existence et vie de la cible, absence de tir allié (`CombatSide` identique = refus), arme équipée, puis contrôle de portée par zone (`current_zone`) — une arme de mêlée ne peut pas toucher un combatant dans une zone différente, mais une arme de jet ou à distance (`SIMPLE_RANGED`/`MARTIAL_RANGED`, propriété `THROWN`) passe toutes les zones. `validate_cast_spell()` vérifie maintenant le budget action economy selon le `casting_time` du sort (`ACTION`, `BONUS_ACTION`, `REACTION`). `validate_move_in_combat()` (nouvelle fonction) vérifie les conditions bloquantes (`cannot_move`) et le mouvement restant (`movement_remaining_feet > 0`) avant d'autoriser un déplacement de zone.
+
 ### Cas spéciaux (Lots)
 
 - **Lot C — Combat bootstrap** : si `ATTACK` hors combat sur un PNJ existant, crée un `CombatState` à la volée (joueur surprise ⇒ joueur initie). Implémenté dans l'action_pipeline directement (pas dans validators).

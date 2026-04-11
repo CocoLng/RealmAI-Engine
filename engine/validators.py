@@ -5,13 +5,14 @@ Pure deterministic Python (no LLM).
 
 import logging
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from engine.combat import CombatState, Combatant
-from engine.conditions import cannot_move, is_incapacitated
-from engine.inventory import EquipmentSlot, Weapon
-from engine.spells import SPELL_CATALOG, can_cast_spell
+from engine.conditions import cannot_move, is_incapacitated, is_surprised
+from engine.inventory import EquipmentSlot, Weapon, WeaponCategory, WeaponProperty
+from engine.spells import SPELL_CATALOG, CastingTime, can_cast_spell
 
 logger = logging.getLogger(__name__)
 
@@ -141,33 +142,88 @@ def _validate_common(action: Action, state: CombatState) -> ValidationResult | N
     return None
 
 
+def _check_range(
+    attacker: Combatant,
+    target: Combatant,
+    weapon: Weapon | None,
+) -> bool:
+    """Zone-aware range check. Melee = same zone only; ranged/thrown = any zone.
+
+    Returns True for zoneless combats (current_zone is None on either side).
+    """
+    if attacker.current_zone is None or target.current_zone is None:
+        return True  # zoneless combat — everyone in range
+    if attacker.current_zone == target.current_zone:
+        return True  # point-blank, any weapon type
+
+    if weapon is None:
+        return False  # unarmed = melee only
+
+    is_ranged = weapon.weapon_category in (
+        WeaponCategory.SIMPLE_RANGED,
+        WeaponCategory.MARTIAL_RANGED,
+    )
+    is_thrown = WeaponProperty.THROWN in weapon.properties
+    return is_ranged or is_thrown
+
+
 # ---------------------------------------------------------------------------
 # Public validators
 # ---------------------------------------------------------------------------
 
 
 def validate_action(action: Action, combat_state: CombatState) -> ValidationResult:
-    """Validate an action. Dispatches to specific validators based on action type."""
-    validators = {
+    """Validate a combat action. Common checks + surprised guard + type dispatch.
+
+    Adds a SURPRISED safety net before dispatching: a surprised combatant
+    cannot act (the turn manager should already skip them, but the validator
+    enforces it as a belt-and-suspenders check). Unknown action types are
+    rejected with a clear message rather than raising KeyError.
+    """
+    actor = _find_combatant(action.actor_name, combat_state)
+    if actor is not None and is_surprised(actor.conditions):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' est surpris et ne peut rien faire ce tour.",
+        )
+
+    validators: dict[ActionType, Any] = {
         ActionType.ATTACK: validate_attack,
         ActionType.CAST_SPELL: validate_cast_spell,
         ActionType.DEFEND: validate_defend,
         ActionType.DISENGAGE: validate_disengage,
         ActionType.FLEE: validate_flee,
         ActionType.USE_ITEM: validate_use_item,
+        ActionType.MOVE: validate_move_in_combat,
     }
-    validator = validators[action.action_type]
+    validator = validators.get(action.action_type)
+    if validator is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.action_type.value}' n'est pas une action de combat valide.",
+        )
     return validator(action, combat_state)
 
 
 def validate_attack(action: Action, state: CombatState) -> ValidationResult:
     """Validate an attack action.
 
-    Checks: common checks + target exists + target alive + weapon equipped.
+    Checks (in order): common checks, action budget, target exists and alive,
+    no friendly fire, weapon equipped, zone-based range.
     """
     common = _validate_common(action, state)
     if common is not None:
         return common
+
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None  # checked in _validate_common
+
+    # Action economy
+    if actor.action_budget.action_used:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà utilisé son Action ce tour.",
+        )
 
     # Target required
     if action.target_name is None:
@@ -187,26 +243,40 @@ def validate_attack(action: Action, state: CombatState) -> ValidationResult:
             error_message=f"Target '{action.target_name}' is already dead",
         )
 
-    # Weapon check: need weapon_name and it must be equipped
-    actor = _find_combatant(action.actor_name, state)
-    assert actor is not None  # already checked in common
+    # No friendly fire
+    if target.side == actor.side:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Impossible d'attaquer l'allié '{action.target_name}'.",
+        )
 
+    # Weapon check: need weapon_name and it must be equipped
     if action.weapon_name is None:
         return ValidationResult(
             is_valid=False, error_message="Attack requires a weapon"
         )
 
-    # Check weapon is equipped (in MAIN_HAND or OFF_HAND)
-    equipped_weapons: list[str] = []
+    weapon_obj: Weapon | None = None
     for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
         item = actor.inventory.equipped.get(slot)
-        if item is not None and isinstance(item, Weapon):
-            equipped_weapons.append(item.name)
+        if item is not None and isinstance(item, Weapon) and item.name == action.weapon_name:
+            weapon_obj = item
+            break
 
-    if action.weapon_name not in equipped_weapons:
+    if weapon_obj is None:
         return ValidationResult(
             is_valid=False,
             error_message=f"Weapon '{action.weapon_name}' is not equipped",
+        )
+
+    # Zone-based range check
+    if not _check_range(actor, target, weapon_obj):
+        return ValidationResult(
+            is_valid=False,
+            error_message=(
+                f"'{action.target_name}' est hors de portée de "
+                f"'{action.weapon_name}' (zones différentes, arme de mêlée)."
+            ),
         )
 
     # TODO: Check weapon proficiency once the proficiency system is implemented.
@@ -246,6 +316,23 @@ def validate_cast_spell(action: Action, state: CombatState) -> ValidationResult:
         return ValidationResult(
             is_valid=False,
             error_message=f"Spell '{action.spell_name}' does not exist",
+        )
+
+    # Action economy based on casting time
+    if spell.casting_time == CastingTime.ACTION and actor.action_budget.action_used:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà utilisé son Action ce tour.",
+        )
+    if spell.casting_time == CastingTime.BONUS_ACTION and actor.action_budget.bonus_action_used:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà utilisé sa Bonus Action ce tour.",
+        )
+    if spell.casting_time == CastingTime.REACTION and actor.action_budget.reaction_used_this_round:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà utilisé sa Réaction ce round.",
         )
 
     if not can_cast_spell(actor.spellcaster, spell):
@@ -323,6 +410,38 @@ def validate_flee(action: Action, state: CombatState) -> ValidationResult:
             error_message=f"'{action.actor_name}' cannot move",
         )
 
+    return ValidationResult(is_valid=True)
+
+
+def validate_move_in_combat(action: Action, state: CombatState) -> ValidationResult:
+    """Validate a Move action in combat: movement budget + cannot_move conditions.
+
+    Adjacency check (whether the target zone is actually adjacent) is deferred
+    to resolution — the validator only verifies that the combatant *can* move
+    and has movement left this turn. A target zone name is required.
+    """
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None  # checked in _validate_common
+
+    if cannot_move(actor.conditions):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' ne peut pas se déplacer (entravé/agrippé/etc.).",
+        )
+    if actor.action_budget.movement_remaining_feet <= 0:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' n'a plus de mouvement ce tour.",
+        )
+    if action.target_name is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message="Move nécessite un nom de zone cible.",
+        )
     return ValidationResult(is_valid=True)
 
 
