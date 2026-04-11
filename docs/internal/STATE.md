@@ -13,6 +13,23 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 | **Phase 3 — Discord Bot** | 🟡 En cours | Cogs, pipeline, views, embeds, launcher — fonctionnel |
 | **Phase 4 — Polish + ship** | 🔴 Non commencé | Pas de CI, pas de README final, pas de blog post |
 
+## Chantier combat D&D 5e (tasks/combat/)
+
+Refonte du combat pour atteindre une fidélité "core 5e" : orthogonal aux beats, NPCs richement statués, IA hybride scripted/LLM, initiative à 3 cas, boss avec signatures/phases/legendary actions. Plan coordinateur : [tasks/combat/README.md](../../tasks/combat/README.md).
+
+| Phase | État | Contenu |
+|---|---|---|
+| **Phase 0 — Bugfixes** | 🟢 Done | Villain protégé du trivial resolve, MOVE bloqué en combat actif |
+| **Phase 1 — Fondations NPC & engine** | 🟢 Done | `NPCStatBlock` + 11 archétypes + `Zone`/`ZoneTag` + conditions `SURPRISED`/`CONCENTRATING`, persistance DB complète |
+| **Phase 2 — Moteur multi-ennemis** | 🔴 Non commencé | Combat entry, initiative 3 cas, multi-enemy turn mgmt, action economy, zone movement |
+| **Phase 3 — Validation & pipeline** | 🔴 Non commencé | Validators stricts, dispatch combat-aware, auto-convert MOVE→FLEE |
+| **Phase 4 — Interprète & générateurs** | 🔴 Non commencé | Détection lethal intent, world gen zones/triggers, arc gen villain stat block, hydration par tier |
+| **Phase 5 — IA tactique NPC** | 🔴 Non commencé | Minion/Elite scripted, boss LLM tactician, legendary actions, phase transitions |
+| **Phase 6 — Discord UI** | 🔴 Non commencé | Embeds dés/combat start/state, views boutons, turn ping |
+| **Phase 7 — Narrateur** | 🔴 Non commencé | Contexte combat, prompt phase transition |
+| **Phase 8 — Fin de combat** | 🔴 Non commencé | Conditions de fin, truce mid-combat, test e2e Discord live (gate) |
+| **Phase 9 — Documentation** | 🔴 Non commencé | `docs/internal/COMBAT_SYSTEM.md` |
+
 ## Lots post-mortem campagne 1 (tasks/agents/)
 
 Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations significatives, le code a été refactoré en 6 lots parallèles — **tous complétés** :
@@ -34,7 +51,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ Inventaire (25+ items catalogue, 9 slots, attunement max 3)
 - ✅ Armes et armures (4 catégories armes, 3 catégories armures, shield +2)
 - ✅ Sorts (~20 sorts catalogue, slots full/half caster, cantrip scaling)
-- ✅ Conditions (15 conditions SRD, durations, effets advantage/disadvantage)
+- ✅ Conditions (17 conditions SRD incluant SURPRISED et CONCENTRATING, durations, effets advantage/disadvantage, helpers `consume_surprise_if_present` + `check_concentration_save`)
 - ✅ Combat (initiative, attaques, crits, death saves, sorts avec saves)
 - ✅ Trivial resolve (Lot E)
 - ✅ Starter kits (15 kits sur 6 classes)

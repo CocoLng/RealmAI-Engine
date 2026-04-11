@@ -220,6 +220,146 @@ class TestNPCRepository:
             db_session.commit()
         db_session.rollback()
 
+    def test_roundtrips_without_stat_block(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+        sample_npc: NPC,
+    ) -> None:
+        """Regression: commoner NPC without stat_block still roundtrips cleanly."""
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = NPCRepository(db_session)
+        repo.save(sample_npc, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_npc.name, sample_campaign.id)
+        assert result is not None
+        assert result.stat_block is None
+
+    def test_roundtrips_stat_block(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+        sample_npc: NPC,
+    ) -> None:
+        """Save then load an NPC that carries a combat stat block."""
+        from engine.inventory import DamageType
+        from engine.npc_stat_block import (
+            BehaviorProfile,
+            LegendaryAction,
+            NPCAttack,
+            NPCStatBlock,
+            NPCTier,
+            PhaseTransition,
+            SignatureAbility,
+            SignatureAbilityEffect,
+        )
+
+        block = NPCStatBlock(
+            tier=NPCTier.BOSS,
+            archetype="villain",
+            multiattack_count=3,
+            attacks=[
+                NPCAttack(
+                    name="Dread Blade",
+                    damage_dice="2d6+4",
+                    damage_type=DamageType.SLASHING,
+                    to_hit_bonus=7,
+                ),
+            ],
+            signature_abilities=[
+                SignatureAbility(
+                    name="Terrifying Shout",
+                    description="Enemies must save or be frightened.",
+                    usage="per_combat",
+                    uses_remaining=1,
+                    effects=[
+                        SignatureAbilityEffect(
+                            kind="condition",
+                            condition_name="Frightened",
+                            condition_duration_rounds=2,
+                            save_ability="WIS",
+                            save_dc=15,
+                            target_scope="all_enemies",
+                        ),
+                    ],
+                ),
+            ],
+            legendary_actions=[
+                LegendaryAction(
+                    name="Quick Strike",
+                    cost=1,
+                    description="An off-turn melee attack.",
+                ),
+            ],
+            legendary_points_per_round=3,
+            phases=[
+                PhaseTransition(
+                    trigger_hp_percent=50,
+                    narrative_cue="The villain grows enraged.",
+                    attack_bonus=2,
+                ),
+            ],
+            behavior_profile=BehaviorProfile.TACTICAL,
+            aggression_threshold=10,
+        )
+        boss = sample_npc.model_copy(update={"name": "Vellus the Cruel", "stat_block": block})
+
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = NPCRepository(db_session)
+        repo.save(boss, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name("Vellus the Cruel", sample_campaign.id)
+        assert result is not None
+        assert result.stat_block is not None
+        assert result.stat_block.tier == NPCTier.BOSS
+        assert result.stat_block.multiattack_count == 3
+        assert result.stat_block.legendary_points_per_round == 3
+        assert len(result.stat_block.phases) == 1
+        assert result.stat_block.phases[0].trigger_hp_percent == 50
+        assert result.stat_block == block
+
+    def test_update_preserves_stat_block(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+        sample_npc: NPC,
+    ) -> None:
+        """update() path must persist stat_block changes, not drop them."""
+        from engine.inventory import DamageType
+        from engine.npc_stat_block import NPCAttack, NPCStatBlock, NPCTier
+
+        block = NPCStatBlock(
+            tier=NPCTier.MINION,
+            archetype="bandit",
+            attacks=[
+                NPCAttack(
+                    name="Scimitar",
+                    damage_dice="1d6+1",
+                    damage_type=DamageType.SLASHING,
+                    to_hit_bonus=3,
+                ),
+            ],
+        )
+        npc_with_block = sample_npc.model_copy(update={"stat_block": block})
+
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = NPCRepository(db_session)
+        repo.save(npc_with_block, sample_campaign.id)
+        db_session.commit()
+
+        # Mutate and update
+        new_block = block.model_copy(update={"aggression_threshold": 5})
+        updated = npc_with_block.model_copy(update={"stat_block": new_block})
+        repo.update(updated, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_npc.name, sample_campaign.id)
+        assert result is not None
+        assert result.stat_block is not None
+        assert result.stat_block.aggression_threshold == 5
+
 
 # ---------------------------------------------------------------------------
 # LocationRepository
@@ -312,6 +452,100 @@ class TestLocationRepository:
         with pytest.raises(IntegrityError):
             db_session.commit()
         db_session.rollback()
+
+    def test_roundtrips_combat_zones(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+    ) -> None:
+        """Locations with combat zones persist and reload cleanly."""
+        from world.combat_zone import Zone, ZoneTag
+
+        location = Location(
+            name="Burning Barn",
+            description="A barn set ablaze in the middle of the night.",
+            combat_zones=[
+                Zone(
+                    name="Entrance",
+                    description="The scorched barn doors.",
+                    adjacent_zone_names=["Hayloft", "Central"],
+                ),
+                Zone(
+                    name="Central",
+                    description="The main open area, engulfed in smoke.",
+                    adjacent_zone_names=["Entrance", "Hayloft"],
+                    tags=[ZoneTag.HAZARD, ZoneTag.OBSCURED],
+                ),
+                Zone(
+                    name="Hayloft",
+                    description="A raised loft above the central floor.",
+                    adjacent_zone_names=["Entrance", "Central"],
+                    tags=[ZoneTag.ELEVATED, ZoneTag.COVER],
+                ),
+            ],
+        )
+
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        repo.save(location, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name("Burning Barn", sample_campaign.id)
+        assert result is not None
+        assert result.has_combat_zones() is True
+        assert len(result.combat_zones) == 3
+        assert result.are_adjacent("Entrance", "Central") is True
+        hayloft = result.get_zone("Hayloft")
+        assert hayloft is not None
+        assert ZoneTag.ELEVATED in hayloft.tags
+        assert ZoneTag.COVER in hayloft.tags
+
+    def test_roundtrips_without_combat_zones(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+        sample_location: Location,
+    ) -> None:
+        """Regression: legacy locations without zones still roundtrip."""
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        repo.save(sample_location, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_location.name, sample_campaign.id)
+        assert result is not None
+        assert result.combat_zones == []
+        assert result.has_combat_zones() is False
+
+    def test_update_persists_combat_zones(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+        sample_location: Location,
+    ) -> None:
+        """The update() path must propagate zone changes to the row."""
+        from world.combat_zone import Zone
+
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        repo.save(sample_location, sample_campaign.id)
+        db_session.commit()
+
+        updated = sample_location.model_copy(
+            update={
+                "combat_zones": [
+                    Zone(name="North", adjacent_zone_names=["South"]),
+                    Zone(name="South", adjacent_zone_names=["North"]),
+                ],
+            }
+        )
+        repo.update(updated, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_location.name, sample_campaign.id)
+        assert result is not None
+        assert len(result.combat_zones) == 2
+        assert result.are_adjacent("North", "South") is True
 
     def test_location_state_flags_persist(self, db_session: Session, sample_campaign: Campaign) -> None:
         CampaignRepository(db_session).save(sample_campaign)

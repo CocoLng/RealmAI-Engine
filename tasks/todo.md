@@ -9,10 +9,10 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 01 — Bloquer MOVE en combat actif (filet, sans auto-convert pour l'instant)
 
 ### Phase 1 — Fondations NPC & engine (parallèle Phase 0)
-- [ ] Task 10 — NPCStatBlock model
-- [ ] Task 11 — Librairie d'archétypes NPCs
-- [ ] Task 12 — Zone model
-- [ ] Task 13 — Conditions SURPRISED et CONCENTRATING
+- [x] Task 10 — NPCStatBlock model
+- [x] Task 11 — Librairie d'archétypes NPCs
+- [x] Task 12 — Zone model
+- [x] Task 13 — Conditions SURPRISED et CONCENTRATING
 
 ### Phase 2 — Moteur de combat multi-ennemis
 - [ ] Task 20 — Module d'entrée en combat

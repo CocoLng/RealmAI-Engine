@@ -3,12 +3,19 @@
 Pure deterministic Python (no LLM).
 """
 
+from __future__ import annotations
+
 import logging
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from engine.character import Ability
+from engine.character import Ability, compute_modifier
+from engine.dice import D20CheckResult, roll_check
+
+if TYPE_CHECKING:
+    from engine.combat import Combatant
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +46,8 @@ class ConditionType(StrEnum):
     STUNNED = "Stunned"
     UNCONSCIOUS = "Unconscious"
     EXHAUSTION = "Exhaustion"
+    SURPRISED = "Surprised"
+    CONCENTRATING = "Concentrating"
 
 
 # ---------------------------------------------------------------------------
@@ -230,3 +239,102 @@ def get_exhaustion_level(conditions: list[ActiveCondition]) -> int:
     """Get current exhaustion level (0 if no exhaustion condition)."""
     cond = get_condition(conditions, ConditionType.EXHAUSTION)
     return cond.exhaustion_level if cond is not None else 0
+
+
+# ---------------------------------------------------------------------------
+# SURPRISED helpers
+# ---------------------------------------------------------------------------
+
+
+def is_surprised(conditions: list[ActiveCondition]) -> bool:
+    """True if the SURPRISED condition is active."""
+    return has_condition(conditions, ConditionType.SURPRISED)
+
+
+def cannot_act_due_to_surprise(conditions: list[ActiveCondition]) -> bool:
+    """A surprised creature cannot act on its first turn (SRD 5e).
+
+    The turn manager calls this at turn start: if True, the combatant
+    skips their action and move, then ``consume_surprise_if_present``
+    clears the condition so the next turn plays normally.
+    """
+    return is_surprised(conditions)
+
+
+def cannot_react_due_to_surprise(conditions: list[ActiveCondition]) -> bool:
+    """A surprised creature cannot take reactions until that turn ends (SRD 5e)."""
+    return is_surprised(conditions)
+
+
+def consume_surprise_if_present(conditions: list[ActiveCondition]) -> bool:
+    """Remove the SURPRISED condition. Returns True if it was present.
+
+    Called by the turn manager at the END of the surprised creature's first
+    turn. Idempotent: if the condition is not present, this is a no-op
+    returning False (no warning logged, unlike ``remove_condition``).
+    """
+    if not has_condition(conditions, ConditionType.SURPRISED):
+        return False
+    # Inline removal to avoid the warning path in remove_condition.
+    indices = [
+        i for i, c in enumerate(conditions)
+        if c.condition_type == ConditionType.SURPRISED
+    ]
+    for i in reversed(indices):
+        conditions.pop(i)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# CONCENTRATING helpers
+# ---------------------------------------------------------------------------
+
+
+def is_concentrating(conditions: list[ActiveCondition]) -> bool:
+    """True if the CONCENTRATING condition is active."""
+    return has_condition(conditions, ConditionType.CONCENTRATING)
+
+
+def check_concentration_save(
+    combatant: Combatant,
+    incoming_damage: int,
+) -> D20CheckResult:
+    """Roll a CON save to maintain concentration. SRD 5e: DC = max(10, damage // 2).
+
+    Args:
+        combatant: The concentrating creature who just took damage.
+        incoming_damage: Damage dealt by the triggering hit (before resistance
+            reductions are applied — RAW uses the final damage taken, callers
+            must pass the post-mitigation value).
+
+    Returns:
+        A ``D20CheckResult`` with the roll, the DC, and the outcome.
+
+    Raises:
+        ValueError: If the combatant is not currently concentrating.
+    """
+    if not is_concentrating(combatant.conditions):
+        raise ValueError(
+            f"{combatant.name} is not concentrating — nothing to save against"
+        )
+    con_mod = compute_modifier(combatant.character.ability_scores.get(Ability.CON))
+    dc = max(10, incoming_damage // 2)
+    sign = "+" if con_mod >= 0 else "-"
+    return roll_check(f"1d20{sign}{abs(con_mod)}", dc)
+
+
+def drop_concentration(combatant: Combatant) -> None:
+    """Remove CONCENTRATING from a combatant. Idempotent: no-op if absent.
+
+    Callers are responsible for clearing any spell effects (ongoing damage,
+    auras, buffs) that depended on the concentration — this function only
+    touches the condition itself.
+    """
+    if not is_concentrating(combatant.conditions):
+        return
+    indices = [
+        i for i, c in enumerate(combatant.conditions)
+        if c.condition_type == ConditionType.CONCENTRATING
+    ]
+    for i in reversed(indices):
+        combatant.conditions.pop(i)

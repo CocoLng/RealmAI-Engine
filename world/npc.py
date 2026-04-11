@@ -8,6 +8,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from engine.character import AbilityScores, CharacterClass, Race
+from engine.npc_stat_block import NPCStatBlock
 
 
 class NPCDisposition(StrEnum):
@@ -52,6 +53,8 @@ class NPC(BaseModel):
     secrets: list[str] = Field(default_factory=list)
     knowledge: list[str] = Field(default_factory=list)
     dialogue_history: list[DialogueExchange] = Field(default_factory=list)
+    stat_block: NPCStatBlock | None = None
+    """Combat stat block. ``None`` for purely narrative NPCs (commoners)."""
 
     def kill(self) -> None:
         """Mark this NPC as dead. Idempotent."""

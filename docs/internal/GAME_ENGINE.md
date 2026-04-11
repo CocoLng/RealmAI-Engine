@@ -12,10 +12,12 @@ Inspiration SRD 5e simplifié. Chaque module porte une responsabilité unique.
 | [character.py](../../engine/character.py) | 373 | Personnages, races, classes, stats, niveaux, XP |
 | [inventory.py](../../engine/inventory.py) | 631 | Items, équipement, armures, weapons, slots, attunement |
 | [spells.py](../../engine/spells.py) | 557 | Slots, cantrips scaling, catalogue ~20 sorts |
-| [conditions.py](../../engine/conditions.py) | 219 | 15 conditions SRD, durées, interactions |
+| [conditions.py](../../engine/conditions.py) | 325 | 17 conditions SRD (+ SURPRISED, CONCENTRATING), durées, interactions |
 | [combat.py](../../engine/combat.py) | 706 | Initiative, attaques, sorts, death saves, trivial resolve |
 | [validators.py](../../engine/validators.py) | 352 | Légalité d'action (combat + exploration) |
 | [starter_gear.py](../../engine/starter_gear.py) | 177 | 15 kits pré-construits (6 classes × 2-3 kits) |
+| [npc_stat_block.py](../../engine/npc_stat_block.py) | 170 | Stat block D&D 5e-style pour NPCs de combat (attacks, signatures, legendary, phases) |
+| [npc_library.py](../../engine/npc_library.py) | 400 | 11 archétypes de combat (minions/elites/generic_boss) avec `get_archetype()` |
 
 ## `dice.py`
 
@@ -136,7 +138,10 @@ Thresholds hardcoded (pas de constantes nommées). Nat 1/20 overrides margin.
 
 ### `ConditionType` enum
 
-15 conditions : BLINDED, CHARMED, DEAFENED, FRIGHTENED, GRAPPLED, INCAPACITATED, INVISIBLE, PARALYZED, PETRIFIED, POISONED, PRONE, RESTRAINED, STUNNED, UNCONSCIOUS, EXHAUSTION.
+17 conditions : BLINDED, CHARMED, DEAFENED, FRIGHTENED, GRAPPLED, INCAPACITATED, INVISIBLE, PARALYZED, PETRIFIED, POISONED, PRONE, RESTRAINED, STUNNED, UNCONSCIOUS, EXHAUSTION, **SURPRISED**, **CONCENTRATING**.
+
+- `SURPRISED` — une créature surprise ne peut ni agir ni réagir pendant son premier tour. Le turn manager la retire via `consume_surprise_if_present()` à la fin de ce tour (helper dédié, pas via `tick_durations` — la "durée" de surprise n'est pas un round complet).
+- `CONCENTRATING` — utilisée par la future couche de sorts. Helpers : `check_concentration_save(combatant, damage)` retourne un `D20CheckResult` sur un CON save DC `max(10, damage // 2)`, et `drop_concentration(combatant)` retire la condition sans toucher aux effets liés (responsabilité de l'appelant).
 
 ### `ActiveCondition`
 
@@ -215,6 +220,48 @@ Le plus gros module. 706 lignes. Couvre initiative, attaques, sorts, death saves
 - Pas de validation des deux-mains / off-hand.
 - `IMPROVISE` toujours valide.
 - `validate_cast_spell` compare `"Self"` en string hardcoded pour décider si target requise.
+
+## `npc_stat_block.py`
+
+Stat block optionnel attaché à un `NPC` via `NPC.stat_block: NPCStatBlock | None`. Les commoners purement narratifs laissent ce champ à `None`. Les NPCs combattables (minion/elite/boss) portent la payload complète.
+
+### Modèles
+
+- `NPCAttack(name, damage_dice, damage_type, to_hit_bonus, range_type, range_value)` — une entrée d'attaque nommée.
+- `SignatureAbility(name, description, usage, uses_remaining, is_reaction, action_cost, effects)` — capacité tactique d'elite/boss.
+- `SignatureAbilityEffect(kind, dice, damage_type, condition_name, condition_duration_rounds, save_ability, save_dc, target_scope)` — effet atomique déterministe résolu par l'engine.
+- `LegendaryAction(name, cost, description, effects)` — action off-turn pour les boss. `cost` ∈ [1, 3].
+- `PhaseTransition(trigger_hp_percent, narrative_cue, unlock_signatures, attack_bonus, save_bonus, triggered)` — seuil HP (1-99) qui débloque une nouvelle phase.
+- `NPCStatBlock(tier, archetype, multiattack_count, attacks, signature_abilities, legendary_actions, legendary_points_per_round, phases, behavior_profile, aggression_threshold)`.
+
+### Enums
+
+- `NPCTier` : MINION, ELITE, BOSS.
+- `BehaviorProfile` : AGGRESSIVE, DEFENSIVE, SUPPORT, TACTICAL (utilisé par les AI minion/elite scripted ; les bosses ignorent ce profile).
+- `TargetScope` (Literal) : `single`, `zone`, `all_enemies`, `all_allies_in_zone`, `self`.
+
+## `npc_library.py`
+
+Librairie précalculée de 11 archétypes de combat. `get_archetype(name)` retourne une **nouvelle instance** à chaque appel (pas de shared state — utile pour `uses_remaining` et `phases[].triggered`).
+
+- **Minions (1 attack, 0 signature, 0 legendary)** : `commoner`, `guard`, `bandit`, `cultist`.
+- **Elites (2 attacks, 1 signature)** : `soldier` (Shield Wall), `captain` (Rally), `brute` (Reckless Charge), `mage` (Counterspell), `assassin` (Death Strike), `shaman` (Spirit Guardians).
+- **Boss fallback** : `generic_boss` (multiattack 3, 3 signatures, 3 legendary actions, 2 phases HP, 3 legendary points/round). Utilisé par le hydration layer quand l'arc generator n'a pas produit de stat block custom pour le villain.
+
+`list_archetypes()` retourne la liste triée, `ARCHETYPE_BUILDERS` expose le dict builder. `KeyError` si l'archétype est inconnu — les appelants doivent guarder ou catch.
+
+Les archétypes narratifs (voir [`engine/npc_archetypes.py`](../../engine/npc_archetypes.py)) sont orthogonaux : ils décrivent la personnalité et le dialogue RP, pas les stats de combat.
+
+## Combat zones (modèle `world/`)
+
+Positionnement abstrait par **zones nommées** plutôt qu'une grille 5-pieds. `Location.combat_zones: list[Zone]` porte le graphe (voir [`world/combat_zone.py`](../../world/combat_zone.py)). Chaque `Zone` a un `name`, une `description`, une liste `adjacent_zone_names`, et des `tags: list[ZoneTag]`.
+
+- `ZoneTag` : `COVER` (+2 AC vs ranged), `DIFFICULT_TERRAIN` (coût de mouvement doublé), `ELEVATED` (advantage sur attaques à distance depuis la zone), `HAZARD` (1d4 dégâts en entrant), `OBSCURED` (disadvantage sur attaques ciblant la zone).
+- Le validator Pydantic de `Location` vérifie à la construction : pas de noms de zones dupliqués, pas d'auto-adjacence, chaque voisin existe, et **l'adjacence est symétrique** (si A liste B, alors B liste A).
+- Helpers : `Location.has_combat_zones()`, `get_zone(name)`, `are_adjacent(a, b)`.
+- `combat_zones=[]` est le défaut ; les locations existantes sans combat fonctionnent comme avant.
+
+L'intégration côté combat (tracking `Combatant.current_zone`, mouvement zone-à-zone, opportunity attacks) est portée par les tâches 22 et 24 du chantier combat — non câblée ici.
 
 ## Dépendances inter-modules
 

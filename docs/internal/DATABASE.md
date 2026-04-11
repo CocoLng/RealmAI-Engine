@@ -47,17 +47,22 @@ interaction_count, combat_state_json (TEXT), language
 id, campaign_id, name, race, char_class, level,
 ability_scores (JSON), hp, max_hp, ac, disposition, is_alive,
 description, personality, location_name,
-aliases (JSON), secrets (JSON), knowledge (JSON), dialogue_history (JSON)
+aliases (JSON), secrets (JSON), knowledge (JSON), dialogue_history (JSON),
+stat_block_json (TEXT nullable)
 ```
-`NPCRepository.update()` persiste tous les champs, y compris `aliases/secrets/knowledge/dialogue_history`.
+`NPCRepository.update()` persiste tous les champs, y compris `aliases/secrets/knowledge/dialogue_history` et `stat_block_json`.
+
+`stat_block_json` est la sérialisation Pydantic (`model_dump_json`) d'un `NPCStatBlock` — `NULL` pour les commoners purement narratifs, non-NULL pour les minions/elites/boss. Le mapper `npc_from_db` reconstruit le modèle via `NPCStatBlock.model_validate_json` quand le champ est présent.
 
 #### `locations`
 ```
 id, campaign_id, name, description,
 connections (JSON), npcs_present (JSON),
 items_available (JSON), item_descriptions (JSON),
-state_flags (JSON), unlocked_exits (JSON)
+state_flags (JSON), unlocked_exits (JSON), combat_zones (JSON)
 ```
+
+`combat_zones` est une liste JSON de `Zone` sérialisés (`name`, `description`, `adjacent_zone_names`, `tags`). Vide `[]` pour les locations sans combat. Le graphe d'adjacence est re-validé à la reconstruction via le `model_validator` de `Location`.
 
 #### `quests`
 ```

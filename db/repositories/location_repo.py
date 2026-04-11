@@ -55,6 +55,7 @@ class LocationRepository:
         row.state_flags = location.state_flags  # type: ignore[assignment]
         row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
         row.generated = location.generated
+        row.combat_zones = [z.model_dump() for z in location.combat_zones]  # type: ignore[assignment]
 
     def upsert(self, location: Location, campaign_id: str) -> None:
         """Insert the location, or update it in place if a row with the same
@@ -82,6 +83,7 @@ class LocationRepository:
         row.state_flags = location.state_flags  # type: ignore[assignment]
         row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
         row.generated = location.generated
+        row.combat_zones = [z.model_dump() for z in location.combat_zones]  # type: ignore[assignment]
 
     def delete(self, name: str, campaign_id: str) -> None:
         """Delete a location by name within a campaign."""

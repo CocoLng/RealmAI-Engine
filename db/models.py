@@ -49,6 +49,7 @@ class NPCRow(Base):
     secrets: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     knowledge: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     dialogue_history: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    stat_block_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class LocationRow(Base):
@@ -71,6 +72,7 @@ class LocationRow(Base):
     state_flags: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
     unlocked_exits: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     generated: Mapped[bool] = mapped_column(default=True, nullable=False)
+    combat_zones: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
 
 
 class QuestRow(Base):

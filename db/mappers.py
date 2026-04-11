@@ -8,8 +8,10 @@ from datetime import datetime
 
 from engine.character import AbilityScores, Character, CharacterClass, Race
 from engine.inventory import Inventory
+from engine.npc_stat_block import NPCStatBlock
 from engine.spells import SpellcasterState
 from world.campaign import Campaign
+from world.combat_zone import Zone
 from world.location import Location
 from world.npc import NPC, DialogueExchange, NPCDisposition
 from world.quest import Quest, QuestObjective, QuestStatus
@@ -90,6 +92,7 @@ def npc_to_db(npc: NPC, campaign_id: str) -> NPCRow:
         secrets=list(npc.secrets),
         knowledge=list(npc.knowledge),
         dialogue_history=[exch.model_dump() for exch in npc.dialogue_history],
+        stat_block_json=npc.stat_block.model_dump_json() if npc.stat_block else None,
     )
 
 
@@ -117,6 +120,11 @@ def npc_from_db(row: NPCRow) -> NPC:
         ]
         if row.dialogue_history
         else [],
+        stat_block=(
+            NPCStatBlock.model_validate_json(row.stat_block_json)
+            if row.stat_block_json
+            else None
+        ),
     )
 
 
@@ -139,6 +147,7 @@ def location_to_db(location: Location, campaign_id: str) -> LocationRow:
         state_flags=location.state_flags,
         unlocked_exits=location.unlocked_exits,
         generated=location.generated,
+        combat_zones=[z.model_dump() for z in location.combat_zones],
     )
 
 
@@ -158,6 +167,9 @@ def location_from_db(row: LocationRow) -> Location:
         state_flags=dict(row.state_flags) if row.state_flags else {},
         unlocked_exits=list(row.unlocked_exits) if row.unlocked_exits else [],
         generated=bool(row.generated),
+        combat_zones=[Zone.model_validate(z) for z in row.combat_zones]
+        if row.combat_zones
+        else [],
     )
 
 

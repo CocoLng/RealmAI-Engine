@@ -3,22 +3,31 @@
 import pytest
 from pydantic import ValidationError
 
-from engine.character import Ability
+from engine.character import Ability, AbilityScores, CharacterClass, Race, create_character
+from engine.combat import Combatant, CombatSide
 from engine.conditions import (
     ActiveCondition,
     ConditionType,
     apply_condition,
     auto_fails_str_dex_saves,
+    cannot_act_due_to_surprise,
     cannot_move,
+    cannot_react_due_to_surprise,
+    check_concentration_save,
+    consume_surprise_if_present,
+    drop_concentration,
     get_condition,
     get_exhaustion_level,
     grants_advantage_to_attackers,
     has_condition,
     has_disadvantage_on_attacks,
+    is_concentrating,
     is_incapacitated,
+    is_surprised,
     remove_condition,
     tick_durations,
 )
+from engine.inventory import create_inventory
 
 
 # ---------------------------------------------------------------------------
@@ -28,11 +37,13 @@ from engine.conditions import (
 
 class TestConditionType:
     def test_all_conditions_exist(self) -> None:
-        assert len(ConditionType) == 15
+        assert len(ConditionType) == 17
 
     def test_values_are_human_readable(self) -> None:
         assert ConditionType.BLINDED == "Blinded"
         assert ConditionType.UNCONSCIOUS == "Unconscious"
+        assert ConditionType.SURPRISED == "Surprised"
+        assert ConditionType.CONCENTRATING == "Concentrating"
 
 
 # ---------------------------------------------------------------------------
@@ -452,3 +463,149 @@ class TestExhaustionLevel:
             )
         ]
         assert get_exhaustion_level(conditions) == 3
+
+
+# ---------------------------------------------------------------------------
+# SURPRISED condition
+# ---------------------------------------------------------------------------
+
+
+class TestSurprisedCondition:
+    def test_applied_and_detected(self) -> None:
+        conditions: list[ActiveCondition] = []
+        apply_condition(
+            conditions, ActiveCondition(condition_type=ConditionType.SURPRISED)
+        )
+        assert is_surprised(conditions) is True
+        assert has_condition(conditions, ConditionType.SURPRISED) is True
+
+    def test_not_surprised_by_default(self) -> None:
+        assert is_surprised([]) is False
+
+    def test_blocks_action(self) -> None:
+        conditions = [ActiveCondition(condition_type=ConditionType.SURPRISED)]
+        assert cannot_act_due_to_surprise(conditions) is True
+
+    def test_blocks_reaction(self) -> None:
+        conditions = [ActiveCondition(condition_type=ConditionType.SURPRISED)]
+        assert cannot_react_due_to_surprise(conditions) is True
+
+    def test_allows_action_when_not_surprised(self) -> None:
+        assert cannot_act_due_to_surprise([]) is False
+        assert cannot_react_due_to_surprise([]) is False
+
+    def test_consume_removes_condition(self) -> None:
+        conditions = [ActiveCondition(condition_type=ConditionType.SURPRISED)]
+        assert consume_surprise_if_present(conditions) is True
+        assert is_surprised(conditions) is False
+
+    def test_consume_is_idempotent(self) -> None:
+        conditions: list[ActiveCondition] = []
+        assert consume_surprise_if_present(conditions) is False
+        # Second call on empty list is also safe
+        assert consume_surprise_if_present(conditions) is False
+
+    def test_consume_preserves_other_conditions(self) -> None:
+        conditions = [
+            ActiveCondition(condition_type=ConditionType.SURPRISED),
+            ActiveCondition(condition_type=ConditionType.POISONED),
+        ]
+        consume_surprise_if_present(conditions)
+        assert is_surprised(conditions) is False
+        assert has_condition(conditions, ConditionType.POISONED) is True
+
+
+# ---------------------------------------------------------------------------
+# CONCENTRATING condition
+# ---------------------------------------------------------------------------
+
+
+def _make_test_combatant(con_score: int = 14) -> Combatant:
+    """Build a minimal Combatant for concentration tests."""
+    character = create_character(
+        name="TestCaster",
+        race=Race.HUMAN,
+        char_class=CharacterClass.WIZARD,
+        ability_scores=AbilityScores(
+            STR=10, DEX=12, CON=con_score, INT=16, WIS=13, CHA=8
+        ),
+    )
+    return Combatant(
+        name="TestCaster",
+        side=CombatSide.PLAYER,
+        character=character,
+        inventory=create_inventory(),
+    )
+
+
+class TestConcentratingCondition:
+    def test_applied_and_detected(self) -> None:
+        conditions: list[ActiveCondition] = []
+        apply_condition(
+            conditions, ActiveCondition(condition_type=ConditionType.CONCENTRATING)
+        )
+        assert is_concentrating(conditions) is True
+
+    def test_not_concentrating_by_default(self) -> None:
+        assert is_concentrating([]) is False
+
+    def test_check_concentration_save_dc_floor_10(self) -> None:
+        combatant = _make_test_combatant(con_score=14)
+        apply_condition(
+            combatant.conditions,
+            ActiveCondition(condition_type=ConditionType.CONCENTRATING),
+        )
+        # damage=5 → DC should be max(10, 2) = 10
+        result = check_concentration_save(combatant, incoming_damage=5)
+        assert result.dc == 10
+
+    def test_check_concentration_save_dc_half_damage(self) -> None:
+        combatant = _make_test_combatant(con_score=14)
+        apply_condition(
+            combatant.conditions,
+            ActiveCondition(condition_type=ConditionType.CONCENTRATING),
+        )
+        # damage=40 → DC should be 20
+        result = check_concentration_save(combatant, incoming_damage=40)
+        assert result.dc == 20
+
+    def test_check_concentration_save_includes_con_modifier(self) -> None:
+        # CON 18 → +4 modifier. Roll total should be in [5, 24].
+        combatant = _make_test_combatant(con_score=18)
+        apply_condition(
+            combatant.conditions,
+            ActiveCondition(condition_type=ConditionType.CONCENTRATING),
+        )
+        result = check_concentration_save(combatant, incoming_damage=10)
+        assert result.modifier == 4
+        assert 5 <= result.total <= 24
+
+    def test_check_concentration_save_negative_modifier(self) -> None:
+        # CON 8 → −1 modifier.
+        combatant = _make_test_combatant(con_score=8)
+        apply_condition(
+            combatant.conditions,
+            ActiveCondition(condition_type=ConditionType.CONCENTRATING),
+        )
+        result = check_concentration_save(combatant, incoming_damage=10)
+        assert result.modifier == -1
+
+    def test_check_concentration_save_raises_if_not_concentrating(self) -> None:
+        combatant = _make_test_combatant()
+        with pytest.raises(ValueError, match="not concentrating"):
+            check_concentration_save(combatant, incoming_damage=10)
+
+    def test_drop_concentration_removes(self) -> None:
+        combatant = _make_test_combatant()
+        apply_condition(
+            combatant.conditions,
+            ActiveCondition(condition_type=ConditionType.CONCENTRATING),
+        )
+        drop_concentration(combatant)
+        assert is_concentrating(combatant.conditions) is False
+
+    def test_drop_concentration_idempotent(self) -> None:
+        combatant = _make_test_combatant()
+        # Not concentrating — should be a silent no-op
+        drop_concentration(combatant)
+        assert is_concentrating(combatant.conditions) is False
