@@ -1619,3 +1619,181 @@ def test_pipeline_exploration_rejected_in_combat_except_info_actions() -> None:
     )
     assert not pipeline._validate(talk).is_valid
     assert pipeline._validate(look).is_valid
+
+
+def test_pipeline_detects_attack_trigger_and_bootstraps() -> None:
+    """ATTACK on combat-worthy NPC bootstraps combat and stores pending embed."""
+    from unittest.mock import MagicMock, patch
+    from engine.combat import CombatState, Combatant, CombatSide
+    from engine.combat_trigger import CombatTrigger, CombatTriggerKind, InitiativeSide
+    from engine.character import CharacterClass, Race, AbilityScores, create_character
+    from engine.inventory import Inventory
+
+    scores = AbilityScores(STR=16, DEX=14, CON=14, INT=10, WIS=12, CHA=8)
+    char = create_character("Héros", Race.HUMAN, CharacterClass.FIGHTER, scores)
+    goblin_char = create_character("Goblin", Race.HALFLING, CharacterClass.ROGUE,
+                                   AbilityScores(STR=8, DEX=12, CON=10, INT=8, WIS=8, CHA=8))
+    hero = Combatant(name="Héros", side=CombatSide.PLAYER, character=char, inventory=Inventory())
+    goblin = Combatant(name="Goblin", side=CombatSide.ENEMY, character=goblin_char, inventory=Inventory())
+    bootstrapped_state = CombatState(combatants=[hero, goblin], current_turn_index=0, is_active=True)
+
+    fake_trigger = CombatTrigger(
+        kind=CombatTriggerKind.PLAYER_ATTACK,
+        aggressor_name="Héros",
+        enemy_names=["Goblin"],
+        surprise_side=InitiativeSide.BOTH_READY,
+        narrative_hint="Héros attaque Goblin.",
+    )
+
+    session = MagicMock()
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(), narrator=MagicMock(),
+        location=None, npcs={}, actor_name="Héros",
+        combat_state=None, session=session,
+    )
+    action = InterpretedAction(
+        action_type=ActionType.ATTACK, actor_name="Héros",
+        target_name="Goblin", raw_input="j'attaque le goblin",
+    )
+
+    with (
+        patch("bot.action_pipeline.detect_combat_trigger", return_value=fake_trigger),
+        patch("bot.action_pipeline.enter_combat", return_value=bootstrapped_state),
+        patch("bot.action_pipeline.start_combat", return_value=bootstrapped_state),
+    ):
+        pipeline._validate(action)
+
+    assert pipeline.combat_state is not None
+    assert pipeline.combat_state.is_active
+    assert pipeline._pending_combat_start_embed is not None
+    assert pipeline._pending_combat_start_embed[1] is fake_trigger
+
+
+def test_pipeline_detects_lethal_intent_and_bootstraps() -> None:
+    """IMPROVISE with is_lethal_intent=True on combat-worthy NPC bootstraps combat."""
+    from unittest.mock import MagicMock, patch
+    from engine.combat import CombatState, Combatant, CombatSide
+    from engine.combat_trigger import CombatTrigger, CombatTriggerKind, InitiativeSide
+    from engine.character import CharacterClass, Race, AbilityScores, create_character
+    from engine.inventory import Inventory
+
+    scores = AbilityScores(STR=16, DEX=14, CON=14, INT=10, WIS=12, CHA=8)
+    char = create_character("Héros", Race.HUMAN, CharacterClass.FIGHTER, scores)
+    goblin_char = create_character("Goblin", Race.HALFLING, CharacterClass.ROGUE,
+                                   AbilityScores(STR=8, DEX=12, CON=10, INT=8, WIS=8, CHA=8))
+    hero = Combatant(name="Héros", side=CombatSide.PLAYER, character=char, inventory=Inventory())
+    goblin = Combatant(name="Goblin", side=CombatSide.ENEMY, character=goblin_char, inventory=Inventory())
+    bootstrapped_state = CombatState(combatants=[hero, goblin], current_turn_index=0, is_active=True)
+
+    fake_trigger = CombatTrigger(
+        kind=CombatTriggerKind.LETHAL_INTENT,
+        aggressor_name="Héros",
+        enemy_names=["Goblin"],
+        surprise_side=InitiativeSide.PLAYERS,
+        narrative_hint="Héros dégaine contre Goblin.",
+    )
+
+    session = MagicMock()
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(), narrator=MagicMock(),
+        location=None, npcs={}, actor_name="Héros",
+        combat_state=None, session=session,
+    )
+    # Simulate Task 40 flag: lethal intent on an IMPROVISE action
+    action = InterpretedAction(
+        action_type=ActionType.IMPROVISE, actor_name="Héros",
+        target_name="Goblin", raw_input="je lui enfonce ma lame",
+    )
+    object.__setattr__(action, "is_lethal_intent", True)  # forward-compatibility shim (Task 40)
+
+    with (
+        patch("bot.action_pipeline.detect_combat_trigger", return_value=fake_trigger),
+        patch("bot.action_pipeline.enter_combat", return_value=bootstrapped_state),
+        patch("bot.action_pipeline.start_combat", return_value=bootstrapped_state),
+    ):
+        pipeline._validate(action)
+
+    assert pipeline.combat_state is not None
+    assert pipeline.combat_state.is_active
+    assert pipeline._pending_combat_start_embed is not None
+
+
+def test_pipeline_no_bootstrap_on_neutral_action() -> None:
+    """A LOOK action with no session never triggers detect_combat_trigger."""
+    from unittest.mock import MagicMock
+
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(), narrator=MagicMock(),
+        location=None, npcs={}, actor_name="Héros",
+        combat_state=None, session=None,  # no session — detect_combat_trigger skipped
+    )
+    action = InterpretedAction(
+        action_type=ActionType.LOOK, actor_name="Héros", raw_input="je regarde autour",
+    )
+    result = pipeline._validate(action)
+
+    assert result.is_valid
+    assert pipeline.combat_state is None
+    assert pipeline._pending_combat_start_embed is None
+
+
+def test_pipeline_trivial_kill_still_works_for_commoner() -> None:
+    """ATTACK on a neutral commoner (low HP/AC, no stat block) resolves trivially."""
+    from unittest.mock import MagicMock
+
+    scores = AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10)
+    commoner = NPC(
+        name="Paysan",
+        race=Race.HUMAN,
+        ability_scores=scores,
+        disposition=NPCDisposition.NEUTRAL,
+        hp=4,
+        max_hp=4,
+        ac=10,
+        stat_block=None,
+    )
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(), narrator=MagicMock(),
+        location=None, npcs={"Paysan": commoner}, actor_name="Héros",
+        combat_state=None, session=None,
+    )
+    action = InterpretedAction(
+        action_type=ActionType.ATTACK, actor_name="Héros",
+        target_name="Paysan", raw_input="j'attaque le paysan",
+    )
+    result = pipeline._validate(action)
+
+    assert result.is_valid
+    assert pipeline.combat_state is None  # trivial kill, no full combat
+
+
+def test_pipeline_trivial_kill_blocked_for_villain() -> None:
+    """ATTACK on a HOSTILE NPC without an active session returns is_valid=False."""
+    from unittest.mock import MagicMock
+
+    # HOSTILE disposition → _should_trivial_resolve returns False
+    # No session → detect_combat_trigger not called → falls to trivial kill check → blocked
+    scores = AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10)
+    boss = NPC(
+        name="Bandit Chef",
+        race=Race.HUMAN,
+        ability_scores=scores,
+        disposition=NPCDisposition.HOSTILE,
+        hp=4,
+        max_hp=4,
+        ac=10,
+        stat_block=None,
+    )
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(), narrator=MagicMock(),
+        location=None, npcs={"Bandit Chef": boss}, actor_name="Héros",
+        combat_state=None, session=None,
+    )
+    action = InterpretedAction(
+        action_type=ActionType.ATTACK, actor_name="Héros",
+        target_name="Bandit Chef", raw_input="j'attaque le bandit",
+    )
+    result = pipeline._validate(action)
+
+    assert not result.is_valid  # hostile NPC → not trivially defeatable → needs full combat
+    assert pipeline.combat_state is None
