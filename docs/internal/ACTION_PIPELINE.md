@@ -87,15 +87,32 @@ Checks :
 
 `validate_action()` applique un garde `SURPRISED` en amont : un combatant surpris ne peut rien faire ce tour (belt-and-suspenders — le turn manager skipe déjà les surpris, mais le validator le renforce). Les types d'action inconnus sont rejetés avec un message clair au lieu de lever une `KeyError`. `validate_attack()` vérifie dans l'ordre : budget action (action déjà utilisée = refus), existence et vie de la cible, absence de tir allié (`CombatSide` identique = refus), arme équipée, puis contrôle de portée par zone (`current_zone`) — une arme de mêlée ne peut pas toucher un combatant dans une zone différente, mais une arme de jet ou à distance (`SIMPLE_RANGED`/`MARTIAL_RANGED`, propriété `THROWN`) passe toutes les zones. `validate_cast_spell()` vérifie maintenant le budget action economy selon le `casting_time` du sort (`ACTION`, `BONUS_ACTION`, `REACTION`). `validate_move_in_combat()` (nouvelle fonction) vérifie les conditions bloquantes (`cannot_move`) et le mouvement restant (`movement_remaining_feet > 0`) avant d'autoriser un déplacement de zone.
 
+### Dispatch pipeline (Task 31)
+
+`_validate()` applique la logique suivante **dans l'ordre** :
+
+1. **MOVE → FLEE en combat actif** : si un combat est actif et l'action est `MOVE`, l'action est silencieusement convertie en `FLEE`. La destination (`target_name`) est sauvegardée dans `_pending_flee_destination` pour être consommée par le résolveur de fuite. Le dispatcher continue vers les validateurs combat.
+2. **Détection de trigger & bootstrap** : si aucun combat actif, `detect_combat_trigger(action, session)` est appelé. S'il retourne un `CombatTrigger`, `enter_combat(session, trigger)` assemble le `CombatState` party-wide, puis `start_combat(combatants, trigger)` roule l'initiative et applique les conditions `SURPRISED` 5e. Le `CombatState` résultant est posé sur `self.combat_state` et sur `session.combat_state`. Un tuple `(combat_state, trigger)` est aussi stocké dans `_pending_combat_start_embed` pour que l'appelant (`ActionHandlerCog`) poste l'embed de début de combat avant la narration.
+3. **Dispatch combat** : si un combat est actif, les actions `EXPLORATION_ACTION_TYPES` passent par `validate_exploration_action(eng_action, combat_state=self.combat_state)` (la plupart seront refusées sauf `LOOK` et `QUESTION`). Les autres actions passent par `validate_action(eng_action, self.combat_state)`.
+4. **Chemin exploration / trivial kill** : si aucun combat actif, les actions exploration passent par `validate_exploration_action(eng_action, combat_state=None)`. Une `ATTACK` hors combat sur un NPC est testée contre `_should_trivial_resolve(npc)` — si trivial, `_trivial_kill()` est appelé et `ValidationResult(is_valid=True)` est retourné directement. Sinon, une erreur `"'attack' nécessite un combat actif."` est retournée.
+
+### Champs de pipeline ajoutés (Task 31)
+
+| Champ | Type | Usage |
+|---|---|---|
+| `_pending_flee_destination` | `str \| None` | Zone cible d'un MOVE auto-converti en FLEE ; consommé par `_resolve_flee` |
+| `_pending_combat_start_embed` | `tuple[CombatState, CombatTrigger] \| None` | Lu par `ActionHandlerCog` pour poster l'embed de début de combat |
+| `_pending_dice_embeds` | `list[Any]` | Résultats de jets de dés à afficher (task 60) ; produit par `_resolve_flee` et les résolveurs futurs |
+
 ### Cas spéciaux (Lots)
 
-- **Lot C — Combat bootstrap** : si `ATTACK` hors combat sur un PNJ existant, crée un `CombatState` à la volée (joueur surprise ⇒ joueur initie). Implémenté dans l'action_pipeline directement (pas dans validators).
+- **Lot C — Combat bootstrap** : via `detect_combat_trigger` + `enter_combat` + `start_combat` (Task 31). Les NPCs combat-worthies (`stat_block` non nul, `disposition == HOSTILE`, ou `max_hp >= 10` / `ac > 12`) déclenchent un combat party-wide avec initiative et surprise 5e. Les NPCs faibles/pacifiques tombent dans le Lot E.
 - **Lot E — Trivial resolve** : si PNJ pacifique (`disposition ≥ NEUTRAL`) et fragile (`max_hp < TRIVIAL_RESOLVE_HP_THRESHOLD`, =10), appelle `engine.combat.trivial_resolve()` qui résout l'attaque en one-shot sans démarrer un `CombatState` complet. Flip l'état `is_alive=False` du PNJ.
 - **Hostile witnessing** : si un PNJ ami voit un kill gratuit, il passe `HOSTILE` (logique de propagation simpliste, voir `bot/action_pipeline.py`).
 
-### Détection de trigger combat (Phase 2 — `bot/combat_entry.py`)
+### Détection de trigger combat (`bot/combat_entry.py`)
 
-Le module `bot.combat_entry` (`detect_combat_trigger` + `enter_combat`) est le point d'entrée party-wide du combat 5e. Il est **pas encore câblé** dans le dispatch de la pipeline — c'est le scope de la task 31 — mais le moteur est prêt :
+`detect_combat_trigger(action, session)` est appelé par `_validate` pour toute action hors combat. Il retourne un `CombatTrigger | None` selon :
 
 | Déclencheur | `CombatTriggerKind` | Surprise | Source |
 |---|---|---|---|

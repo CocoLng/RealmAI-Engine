@@ -52,7 +52,8 @@ from ai.scene_context import SceneContext, build_scene_context
 from bot.llm_retry import retry_llm_call
 from bot.persistence import persist_session
 from engine.character import Character
-from engine.combat import CombatState, TrivialResolveResult, trivial_resolve
+from engine.combat import CombatState, TrivialResolveResult, start_combat, trivial_resolve
+from bot.combat_entry import CombatTrigger, detect_combat_trigger, enter_combat
 from engine.conditions import (
     ActiveCondition,
     ConditionType,
@@ -211,6 +212,21 @@ class ActionPipeline:
     db_factory: Callable[[], Any] | None = None
 
     _trivial_kill_mechanics: str | None = field(default=None, init=False)
+
+    _pending_flee_destination: str | None = field(default=None, init=False)
+    """Destination zone stored when MOVE is auto-converted to FLEE in combat.
+    Consumed by _resolve_flee after a successful full-party escape."""
+
+    _pending_combat_start_embed: "tuple[CombatState, CombatTrigger] | None" = field(
+        default=None, init=False,
+    )
+    """Stored by _validate when a new combat is bootstrapped. The caller
+    (ActionHandlerCog) reads this after _validate returns and posts the
+    combat-start embed before narration."""
+
+    _pending_dice_embeds: list[Any] = field(default_factory=list, init=False)
+    """Dice roll results to display as embeds (task 60). Populated by
+    _resolve_flee and future combat resolvers. Consumed by the caller."""
 
     # ------------------------------------------------------------------
     # Public API
@@ -522,7 +538,14 @@ class ActionPipeline:
         )
 
     def _validate(self, action: InterpretedAction) -> ValidationResult:
-        """Convert InterpretedAction → Action and dispatch to the right validator."""
+        """Convert InterpretedAction → Action and dispatch to the right validator.
+
+        Dispatch logic (in order):
+        1. If combat active AND action is MOVE → auto-convert to FLEE, store destination.
+        2. If no combat → try detect_combat_trigger; bootstrap if trigger found.
+        3. If combat active → combat validators (validate_action or validate_exploration_action).
+        4. If no combat → exploration validators, or trivial-kill check, or error.
+        """
         eng_action = Action(
             actor_name=action.actor_name,
             action_type=action.action_type,
@@ -531,43 +554,71 @@ class ActionPipeline:
             spell_name=action.spell_name,
             item_name=action.item_name,
         )
-        if action.action_type in EXPLORATION_ACTION_TYPES:
-            # Pass combat_state so MOVE/TALK/SEARCH/INTERACT/PICKUP are
-            # rejected while a combat is active (Phase 0 safety net).
-            return validate_exploration_action(
-                eng_action, combat_state=self.combat_state,
-            )
 
-        # Lot C: bootstrap a combat encounter when a player attacks an NPC
-        # who is present in the scene but not yet in any combat state.
+        # --- 1. Auto-convert MOVE → FLEE in active combat ---
         if (
-            action.action_type == ActionType.ATTACK
-            and self.combat_state is None
-            and action.target_name is not None
-            and action.target_name in self.npcs
-            and self.session is not None
+            eng_action.action_type == ActionType.MOVE
+            and self.combat_state is not None
+            and self.combat_state.is_active
         ):
-            target_npc = self.npcs[action.target_name]
+            logger.info(
+                "MOVE auto-converted to FLEE campaign=%s actor=%s destination=%s",
+                self.campaign_id, action.actor_name, eng_action.target_name,
+            )
+            self._pending_flee_destination = eng_action.target_name
+            eng_action = eng_action.model_copy(
+                update={"action_type": ActionType.FLEE, "target_name": None},
+            )
+            # Fall through to combat dispatch below
+
+        # --- 2. If no combat, try to detect a trigger and bootstrap ---
+        if self.combat_state is None or not self.combat_state.is_active:
+            trigger: CombatTrigger | None = None
+            if self.session is not None:
+                trigger = detect_combat_trigger(action, self.session)
+
+            if trigger is not None:
+                logger.info(
+                    "COMBAT bootstrapped kind=%s campaign=%s aggressor=%s enemies=%s",
+                    trigger.kind, self.campaign_id,
+                    trigger.aggressor_name, trigger.enemy_names,
+                )
+                # Build party-wide CombatState, roll initiative, apply surprise
+                pre_state = enter_combat(self.session, trigger)  # type: ignore[arg-type]
+                self.combat_state = start_combat(pre_state.combatants, trigger=trigger)
+                self.session.combat_state = self.combat_state  # type: ignore[union-attr]
+                self._pending_combat_start_embed = (self.combat_state, trigger)
+                # Fall through to combat dispatch below
+
+        # --- 3. Dispatch to the right validator ---
+        if self.combat_state is not None and self.combat_state.is_active:
+            if eng_action.action_type in EXPLORATION_ACTION_TYPES:
+                return validate_exploration_action(
+                    eng_action, combat_state=self.combat_state,
+                )
+            return validate_action(eng_action, self.combat_state)
+
+        # --- 4. No combat — exploration path or trivial kill ---
+        if eng_action.action_type in EXPLORATION_ACTION_TYPES:
+            return validate_exploration_action(eng_action, combat_state=None)
+
+        # Combat action requested with no active combat → check trivial kill
+        if (
+            eng_action.action_type == ActionType.ATTACK
+            and eng_action.target_name is not None
+            and self.npcs.get(eng_action.target_name) is not None
+        ):
+            target_npc = self.npcs[eng_action.target_name]
             if self._should_trivial_resolve(target_npc):
                 self._trivial_kill(target_npc)
-                # Skip the combat-state validation below — the action is
-                # already fully resolved.
                 return ValidationResult(is_valid=True)
-            self.combat_state = self._bootstrap_combat_against(target_npc)
-            self.session.combat_state = self.combat_state
-            logger.info(
-                "COMBAT bootstrapped from_action campaign=%s attacker=%s target=%s",
-                self.campaign_id, self.actor_name, target_npc.name,
-            )
 
-        if self.combat_state is None:
-            return ValidationResult(
-                is_valid=False,
-                error_message=(
-                    f"'{action.action_type.value}' requires combat but no combat state"
-                ),
-            )
-        return validate_action(eng_action, self.combat_state)
+        return ValidationResult(
+            is_valid=False,
+            error_message=(
+                f"'{eng_action.action_type.value}' nécessite un combat actif."
+            ),
+        )
 
     def _should_trivial_resolve(self, npc: NPC) -> bool:
         """Decide whether an attack on ``npc`` skips the combat round system.
@@ -769,29 +820,6 @@ class ActionPipeline:
         loc_name = location.name if location is not None else "lieu inconnu"
         with path.open("a", encoding="utf-8") as fh:
             fh.write(f"- {killer.name} a tué {victim.name} dans {loc_name}.\n")
-
-    def _bootstrap_combat_against(self, target_npc: NPC) -> CombatState:
-        """Build a fresh CombatState with the attacker first (surprise).
-
-        All session PCs participate. The attacking PC is placed at index 0
-        so they act before the target NPC, then the remaining PCs, then the
-        NPC. Initiative is not rolled — the attacker's surprise stands in
-        for an initiative roll for this MVP.
-        """
-        from bot.cogs.combat import build_npc_combatant, build_pc_combatants
-
-        assert self.session is not None
-        pcs = build_pc_combatants(self.session)
-        attacker = [c for c in pcs if c.name == self.actor_name]
-        others = [c for c in pcs if c.name != self.actor_name]
-        enemy = build_npc_combatant(target_npc)
-        ordered = attacker + others + [enemy]
-        return CombatState(
-            combatants=ordered,
-            round_number=1,
-            current_turn_index=0,
-            is_active=True,
-        )
 
     async def _resolve_mechanics(
         self, action: InterpretedAction,
