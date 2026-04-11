@@ -32,6 +32,7 @@ from engine.validators import (
     validate_attack,
     validate_cast_spell,
     validate_defend,
+    validate_disengage,
     validate_exploration_action,
     validate_flee,
     validate_move_in_combat,
@@ -1198,3 +1199,33 @@ def test_validate_exploration_allows_look_in_combat(
     )
     result = validate_exploration_action(action, combat_state=state)
     assert result.is_valid
+
+
+def test_validate_defend_rejects_if_action_already_used(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.action_budget.action_used = True
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.DEFEND,
+    )
+    result = validate_defend(action, state)
+    assert not result.is_valid
+    assert "Action" in (result.error_message or "")
+
+
+def test_validate_disengage_rejects_if_action_already_used(
+    fighter_combatant: Combatant,
+    enemy_combatant: Combatant,
+) -> None:
+    fighter_combatant.action_budget.action_used = True
+    state = _make_state(fighter_combatant, enemy_combatant)
+    action = Action(
+        actor_name=fighter_combatant.name,
+        action_type=ActionType.DISENGAGE,
+    )
+    result = validate_disengage(action, state)
+    assert not result.is_valid
+    assert "Action" in (result.error_message or "")

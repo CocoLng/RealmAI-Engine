@@ -375,23 +375,36 @@ def validate_cast_spell(action: Action, state: CombatState) -> ValidationResult:
 
 
 def validate_defend(action: Action, state: CombatState) -> ValidationResult:
-    """Validate a defend action. Just common checks."""
+    """Validate a defend action. Common checks + action budget."""
     common = _validate_common(action, state)
     if common is not None:
         return common
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None
+    if actor.action_budget.action_used:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà utilisé son Action ce tour.",
+        )
     return ValidationResult(is_valid=True)
 
 
 def validate_disengage(action: Action, state: CombatState) -> ValidationResult:
     """Validate the Disengage action.
 
-    Common checks only for now; task 30 will tighten this (e.g. verify
-    the Action slot isn't already spent). Disengage suppresses OOA for
+    Common checks + action budget. Disengage suppresses OOA for
     the rest of the turn — see :func:`engine.combat.disengage`.
     """
     common = _validate_common(action, state)
     if common is not None:
         return common
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None
+    if actor.action_budget.action_used:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà utilisé son Action ce tour.",
+        )
     return ValidationResult(is_valid=True)
 
 
