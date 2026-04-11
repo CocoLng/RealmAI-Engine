@@ -29,6 +29,12 @@ Canon faithfulness (critical):
 - If the "State changes" section mentions an NPC responding to the player, describe ONLY the framing: body language, atmosphere, emotional tone, and pacing. Do NOT include any spoken words or dialogue — the NPC's speech will be displayed separately. Focus on what surrounds the speech act, not the speech itself.
 - If "State changes" contains a "Reveals:" line, you MAY weave the revealed information into the surrounding narration so the player notices it, but do not invent additional reveals beyond what's listed.
 
+Beat awareness:
+- When a "Current story beat" section is present in the context, be aware of the narrative purpose of this scene. Let it subtly color your descriptions without explicitly stating the beat title.
+- When "Environment state" flags are present (e.g., "breach open", "mechanism balanced"), reflect these in your descriptions. Do NOT describe a breach as closed if the state says it's open.
+- When the outcome facts mention a beat completion ("A breach opens", "The door swings open"), describe this as a significant narrative moment — the world is changing around the character.
+- When "State changes" mentions new exits being unlocked, work this into the description naturally (e.g., "Beyond the crumbling wall, a passage reveals itself...").
+
 Output schema (the only valid format):
 {"narrative": "<your 2-4 sentence description>", "tone": "<dramatic|tense|humorous|somber>"}
 
