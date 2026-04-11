@@ -9,6 +9,24 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class CompletionTrigger(BaseModel):
+    """Deterministic condition for beat completion."""
+
+    type: Literal["interact", "defeat", "talk", "arrive", "search", "pickup"]
+    target: str
+
+
+class BeatEffects(BaseModel):
+    """World mutations applied when a beat is completed."""
+
+    unlock_exits: list[str] = Field(default_factory=list)
+    add_npcs: list[str] = Field(default_factory=list)
+    remove_items: list[str] = Field(default_factory=list)
+    add_items: list[str] = Field(default_factory=list)
+    state_flags: dict[str, bool] = Field(default_factory=dict)
+    narrative_hint: str = ""
+
+
 class StoryBeat(BaseModel):
     """One narrative step in the campaign arc."""
 
@@ -20,6 +38,8 @@ class StoryBeat(BaseModel):
     encounter_type: Literal["social", "combat", "exploration", "puzzle", "boss"]
     encounter_subtype: str | None = None
     is_twist: bool = False
+    completion_trigger: CompletionTrigger | None = None
+    on_complete: BeatEffects = Field(default_factory=BeatEffects)
 
 
 class StoryArc(BaseModel):

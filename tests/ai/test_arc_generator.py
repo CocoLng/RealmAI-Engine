@@ -9,7 +9,7 @@ from ai.arc_generator import ArcGenerator
 from ai.client import OllamaClient
 from engine.arc_recipes import ArcRecipe, Archetype, BeatType, Tone, VillainArchetype
 from tests.ai.conftest import CHAT_URL, make_ollama_response
-from world.story_arc import StoryArc
+from world.story_arc import StoryArc, StoryBeat
 
 
 def _make_arc_data(beat_count: int = 10) -> dict:
@@ -184,3 +184,67 @@ def test_build_user_message_with_recipe_no_villain(
     msg = generator._build_user_message_with_recipe("dark fantasy", 4, recipe)
 
     assert "au choix" in msg
+
+
+class TestBeatCompletionModels:
+    """Tests for CompletionTrigger and BeatEffects on StoryBeat."""
+
+    def test_story_beat_with_completion_trigger(self):
+        from world.story_arc import CompletionTrigger, BeatEffects
+
+        beat = StoryBeat(
+            beat_number=1,
+            title="The Wall That Sighs",
+            description="Balance the mechanism.",
+            location_hint="The bone barrier",
+            npc_names=["Barnabé"],
+            encounter_type="puzzle",
+            completion_trigger=CompletionTrigger(
+                type="interact",
+                target="Le levier de l'Échiquier",
+            ),
+            on_complete=BeatEffects(
+                unlock_exits=["La cour intérieure"],
+                state_flags={"breach_open": True},
+                narrative_hint="A breach opens in the bone wall.",
+            ),
+        )
+        assert beat.completion_trigger is not None
+        assert beat.completion_trigger.type == "interact"
+        assert beat.completion_trigger.target == "Le levier de l'Échiquier"
+        assert beat.on_complete.unlock_exits == ["La cour intérieure"]
+        assert beat.on_complete.state_flags == {"breach_open": True}
+
+    def test_story_beat_without_trigger_defaults_none(self):
+        beat = StoryBeat(
+            beat_number=1,
+            title="Arrival",
+            description="Arrive at the village.",
+            location_hint="Village entrance",
+            npc_names=[],
+            encounter_type="exploration",
+        )
+        assert beat.completion_trigger is None
+        assert beat.on_complete.unlock_exits == []
+
+    def test_completion_trigger_types(self):
+        from world.story_arc import CompletionTrigger
+
+        for t in ("interact", "defeat", "talk", "arrive", "search", "pickup"):
+            trigger = CompletionTrigger(type=t, target="some target")
+            assert trigger.type == t
+
+    def test_beat_effects_serialization(self):
+        from world.story_arc import BeatEffects
+
+        effects = BeatEffects(
+            unlock_exits=["Exit A"],
+            add_npcs=["Guard"],
+            remove_items=["Key"],
+            add_items=["Reward"],
+            state_flags={"door_open": True},
+            narrative_hint="The door swings open.",
+        )
+        data = effects.model_dump()
+        restored = BeatEffects.model_validate(data)
+        assert restored == effects
