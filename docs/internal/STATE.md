@@ -1,4 +1,4 @@
-# État actuel du code (snapshot 2026-04-09)
+# État actuel du code (snapshot 2026-04-11)
 
 Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou non commencé**. Basé sur le code présent au commit `7c0f9a0`.
 
@@ -41,7 +41,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ Validators (combat + exploration)
 
 ### AI / LLM
-- ✅ Interpreter (14 ActionType, fallback déterministe)
+- ✅ Interpreter (15 ActionType incl. QUESTION, fallback déterministe)
 - ✅ Narrator (JSON strict, tone classification, canon faithfulness)
 - ✅ NPC Agent (dialogue + disposition delta + revealed info)
 - ✅ NPC Generator (fiches lazily à la 1ʳᵉ rencontre)
@@ -78,15 +78,20 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
   - ✅ Force-launch — créateur peut forcer le lancement, excluant joueurs non-ready
   - ✅ Launch immersion — purge channel, countdown 3-2-1, opening crawl embed
 - ✅ 8 views Discord (character create, starter gear, combat, target select, spell select, clarification, start onboarding, force launch)
-- ✅ 7 embeds (narrative + opening crawl, progress, scene, beat, character, combat, inventory)
+- ✅ 8 embeds (narrative + opening crawl, progress, scene, beat, character, combat, inventory, état/state)
 - ✅ Channel manager avec permissions + archives
 - ✅ i18n statique FR/EN (labels)
 - ✅ Scene hydration (promotion PNJ string → rows DB)
 - ✅ Story bible logger Markdown append-only
 - ✅ Beat advancement fuzzy match (Lot D)
+- ✅ Beat completion triggers (déterministe + fallback LLM)
+- ✅ Environment state persistence (state_flags, unlocked_exits sur Location)
+- ✅ QUESTION action type avec embed d'état bleu
+- ✅ Arc generator produit completion_trigger et on_complete par beat
+- ✅ Scene context inclut beat info et state flags pour le narrator
 
 ### Testing
-- ✅ ~1 260 tests unitaires
+- ✅ ~1 530 tests unitaires
 - ✅ ScenarioRunner end-to-end (8 scénarios)
 - ✅ MCP Discord server (7 tools)
 - ✅ TesterBot pour live Discord
@@ -147,10 +152,11 @@ Un joueur peut aujourd'hui :
    - `@Realm j'attaque le gobelin avec mon épée`
    - `@Realm je vais vers la forêt`
 6. Voir son combat résolu mécaniquement avec embed narratif + effects footer.
-7. Voir les beats d'arc avancer quand il atteint les lieux attendus.
+7. Voir les beats d'arc avancer quand il résout les objectifs (puzzle, combat, dialogue) ou atteint les lieux attendus.
 8. Recevoir une clarification view si l'entité est ambiguë.
-9. `/save` et plus tard `/resume`.
-10. `/end_campaign` pour archiver le salon.
+9. Poser des questions méta (`@Realm qu'est-ce que je vois ?`) et recevoir un embed d'état bleu avec items, PNJ, sorties et objectif.
+10. `/save` et plus tard `/resume`.
+11. `/end_campaign` pour archiver le salon.
 
 Tout ce qui est hors de ce happy path est possible mais **susceptible** de casser, principalement à cause des gaps listés dans [ISSUES.md](ISSUES.md).
 

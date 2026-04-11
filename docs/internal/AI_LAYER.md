@@ -40,6 +40,8 @@ Wrapper `httpx` autour d'`/api/chat`. Une méthode principale : `chat_json(model
 | `NPCSheet` | NPC Generator | `personality`, `description`, `secrets`, `knowledge` |
 | `MechanicsOutcome` | action_pipeline | `summary`, `player_intent`, `outcome_facts`, `public_effects` |
 | `PublicEffects` | engine/bot | `hp_delta`, `items_gained/lost`, `gold_delta`, `location_change`, `xp_gained`, `level_up` |
+| `CompletionTrigger` | ArcGenerator (dans StoryBeat) | `type` (interact/defeat/talk/arrive/search/pickup), `target` |
+| `BeatEffects` | ArcGenerator (dans StoryBeat) | `unlock_exits`, `add_npcs`, `remove_items`, `add_items`, `state_flags`, `narrative_hint` |
 
 `PublicEffects.to_footer_text()` rend un one-liner pour embed footer. **Aucune donnée sensible** (pas de disposition, pas de rolls cachés).
 
@@ -49,7 +51,7 @@ Wrapper `httpx` autour d'`/api/chat`. Une méthode principale : `chat_json(model
 
 **Entrée** : `interpret(player_text, actor_name, scene_context: SceneContext, language)`
 
-**Prompt** : `system_interpreter.txt` définit 14 ActionType valides et règles de classification (combat vs exploration, confidence scoring, règles de résolution contextuelle par rapport à `scene_context`).
+**Prompt** : `system_interpreter.txt` définit 15 ActionType valides (dont `QUESTION` pour les questions méta sur l'état du jeu) et règles de classification (combat vs exploration, confidence scoring, règles de résolution contextuelle par rapport à `scene_context`).
 
 **Sortie** : `InterpretedAction` validé. Fallback déterministe si parse fail :
 - En combat → `DEFEND`
@@ -136,6 +138,7 @@ Contraintes enforced par prompt uniquement (pas code) :
 - 10-15 beats, dernier = `encounter_type=boss`
 - **Pas de mentions mécaniques** (HP, dés, dégâts)
 - Contenu narratif en français (ou langue demandée)
+- Chaque beat inclut un `completion_trigger` (type + target) et un `on_complete` (BeatEffects : unlock_exits, state_flags, narrative_hint)
 
 ⚠ `StoryArc.campaign_id` initialisé à `""` — le caller doit le remplir.
 
@@ -174,13 +177,13 @@ SceneContext(
 
 | Fichier | Contenu |
 |---|---|
-| `system_interpreter.txt` | 14 ActionType, règles de classification, confidence scoring |
-| `system_narrator.txt` | Rôle MJ, canon faithfulness, dialogue verbatim, tiers d'outcome |
+| `system_interpreter.txt` | 15 ActionType (incl. QUESTION), règles de classification, confidence scoring |
+| `system_narrator.txt` | Rôle MJ, canon faithfulness, dialogue verbatim, tiers d'outcome, beat awareness |
 | `system_npc_agent.txt` | Agency PNJ, règles knowledge/secrets, mécanique disposition |
 | `system_npc_generator.txt` | Génération de fiches PNJ, personnalité spécifique |
 | `system_world_generator.txt` | Générateur de locations, descriptions d'items explicites, aliases NPC |
 | `system_quest_generator.txt` | Design de quêtes contextuelles |
-| `system_arc_generator.txt` | Arc de campagne, structure dramatique, contenu FR |
+| `system_arc_generator.txt` | Arc de campagne, structure dramatique, completion triggers, beat effects, contenu FR |
 | `system_story_director.txt` | Analyse de cohérence, hooks, priorité |
 
 ## Retry et résilience (`bot/llm_retry.py`)

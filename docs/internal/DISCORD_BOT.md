@@ -84,6 +84,7 @@ Slash commands `/look`, `/search`, `/talk`, `/move` — **deprecated** en faveur
 4. Instancie `ActionPipeline(session, interpreter, narrator, npc_agent, entity_resolver, …)`.
 5. Exécute `pipeline.run(player_text, actor_name, progress_callback)`.
 6. Dispatch selon retour : `ActionPipelineResult` → embed narratif ; `AmbiguityResult` → `ClarificationView` ; `UnknownEntityResult` → refus in-character.
+   - `_render_success` route vers `build_state_embed` (bleu, 0x4A90D9) pour les actions `QUESTION`, affichant items/PNJs/sorties/beat inline.
 7. Log dans `story_bible`, persiste `exchanges`, check `advance_beat_if_ready()`, déclenche Story Director tous les 20 tours.
 
 ### `test_bridge.py` — `TestBridgeCog`
@@ -121,6 +122,7 @@ Toutes les couleurs sont pilotées par le `tone` renvoyé par le Narrator.
 | `character_embed.py` | Fiche perso complète |
 | `combat_embed.py` | Round, current turn, combatants HP |
 | `inventory_embed.py` | Équipement + backpack + gold |
+| `state_embed.py` | Embed d'état bleu (0x4A90D9) pour les actions QUESTION : items, PNJs, sorties, objectif de beat actif |
 
 Les titres de scène utilisent un emoji thématique choisi par keywords bilingues FR/EN (donjon/dungeon, château/castle, forêt/forest, etc.).
 
