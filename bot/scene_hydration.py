@@ -265,7 +265,7 @@ def describe_scene_for_narrator(
             if active:
                 lines.append("## Environment state\n" + ", ".join(active))
 
-    if session.story_arc is not None:
+    if getattr(session, "story_arc", None) is not None:
         arc = session.story_arc
         beat = arc.beats[arc.current_beat_index]
         lines.append(f"## Current story beat\n{beat.title} — {beat.description}")

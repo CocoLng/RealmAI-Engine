@@ -351,7 +351,7 @@ class ActionPipeline:
             )
         elif (
             self.session is not None
-            and self.session.story_arc is not None
+            and getattr(self.session, "story_arc", None) is not None
             and interpreted.action_type not in (
                 ActionType.QUESTION, ActionType.LOOK,
             )
@@ -904,7 +904,7 @@ class ActionPipeline:
         self, action: InterpretedAction,
     ) -> bool:
         """Check if the action satisfies the current beat's completion trigger."""
-        if self.session is None or self.session.story_arc is None:
+        if self.session is None or getattr(self.session, "story_arc", None) is None:
             return False
         arc = self.session.story_arc
         if arc.current_beat_index >= len(arc.beats):
