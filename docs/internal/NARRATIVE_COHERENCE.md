@@ -15,6 +15,8 @@ Le principe : **le code est seul propriétaire de la vérité mécanique et fact
 | Nom, description, exits d'une location | `Location` | `ai.world_generator` (une fois) puis immuable |
 | Items d'une location | `Location.items_available` + `item_descriptions` | `world_generator` (avec validation stricte) |
 | État d'arc | `StoryArc.current_beat_index` | `session.advance_beat_if_ready()` |
+| State flags location | `Location.state_flags` | `action_pipeline._apply_beat_effects()` |
+| Sorties débloquées | `Location.unlocked_exits` | `action_pipeline._apply_beat_effects()` |
 | Mort d'un PNJ | `NPC.is_alive` | `engine.combat.trivial_resolve()` ou apply_damage |
 
 ### Protection dans les prompts
@@ -83,33 +85,34 @@ StoryBeat(
     location_hint: str,           # nom approximatif de la location attendue
     npc_names: list[str],
     encounter_type: Literal["social", "combat", "exploration", "puzzle", "boss"],
+    encounter_subtype: str | None,
     is_twist: bool,
+    completion_trigger: CompletionTrigger | None,  # condition de complétion
+    on_complete: BeatEffects,                       # mutations monde à appliquer
 )
 ```
 
 L'arc est généré **une fois** à la création de la campagne, avec `think=True` (mode raisonnement étendu de Qwen 3.5) pour la cohérence narrative.
 
-### Avancement (Lot D)
+### Avancement
 
-Appelé après chaque tour dans [bot/game_session.py](../../bot/game_session.py) :
+Deux mécanismes, par priorité :
 
-```python
-def advance_beat_if_ready(self) -> bool:
-    next_beat = self.story_arc.beats[self.story_arc.current_beat_index + 1]
-    ratio = difflib.SequenceMatcher(
-        None,
-        self.current_location.name.lower(),
-        next_beat.location_hint.lower(),
-    ).ratio()
-    if ratio >= 0.7:
-        self.story_arc.current_beat_index += 1
-        return True
-    return False
-```
+**1. Trigger déterministe** (dans `action_pipeline._check_beat_completion()`) :
+- Chaque beat possède un `CompletionTrigger(type, target)` optionnel, généré par l'arc generator.
+- Après chaque résolution de mécanique, le pipeline compare `action_type` + `target_name` contre le trigger (fuzzy match ≥ 0.6).
+- Si match → `_apply_beat_effects(beat.on_complete)` mute la `Location` (unlock exits, add/remove items/NPCs, set state_flags) → `advance_beat()`.
 
-Si un nouveau beat est atteint → post d'un `beat_embed` (titre, description, encounter_type, twist).
+**2. Fallback LLM** (dans `action_pipeline`) :
+- Si le trigger ne match pas mais que le joueur est au bon lieu et fait une action non-triviale, un appel rapide au modèle 4b (`qwen3.5:4b`, temperature 0.1) juge si l'action résout créativement l'objectif.
+- Seuil : `completed == true AND confidence ≥ 0.85`.
+- Le code reste l'arbitre final.
 
-Le seuil de matching est défini par `_BEAT_MATCH_THRESHOLD` (constante nommée dans `game_session.py`). Pour garantir que les noms correspondent, les `location_hint` de l'arc sont passés au `WorldGenerator` via le paramètre `location_hints`. Le prompt système et le message utilisateur instruisent le LLM de réutiliser ces noms canoniques exactement, ce qui rend le fuzzy match fiable.
+**3. Fallback location (hérité Lot D)** (dans `game_session.advance_beat_if_ready()`) :
+- Fuzzy match `current_location.name` vs `next_beat.location_hint`, seuil 0.7.
+- Sert de filet pour les beats de type `arrive` sans trigger explicite.
+
+Si un nouveau beat est atteint → post d'un `beat_embed` + persist arc.
 
 ## 4. Story Director — coherence check périodique
 

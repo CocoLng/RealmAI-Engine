@@ -16,6 +16,7 @@ Défini dans [db/database.py](../../db/database.py).
 - **Migrations versionnées** via `PRAGMA user_version`. Chaque version correspond à une fonction `_migrate_vN_to_vN+1(raw)` exécutée dans une transaction avec rollback automatique en cas d'échec.
   - **V0→V1** : colonnes historiques (`combat_state_json`, `language`, `aliases`, `secrets`, `knowledge`, `dialogue_history`, `item_descriptions`). Gardes d'existence conservées pour compatibilité avec les BDD existantes.
   - **V1→V2** : extraction de `current_beat_index` en colonne dédiée sur `story_arcs` (auparavant enfoui dans le blob JSON).
+  - **V2→V3** : colonnes `state_flags` (JSON) et `unlocked_exits` (JSON) sur `locations`. State flags track l'état mutable de l'environnement (puzzles résolus, mécanismes activés). Unlocked exits stocke les sorties débloquées par complétion de beats.
 - Pattern d'ajout de migration : créer `_migrate_vN_to_vN+1(raw)` et l'ajouter à la liste `_MIGRATIONS`. Le système exécute automatiquement les migrations manquantes au startup.
 
 ## Schéma — 10 tables
@@ -54,7 +55,8 @@ aliases (JSON), secrets (JSON), knowledge (JSON), dialogue_history (JSON)
 ```
 id, campaign_id, name, description,
 connections (JSON), npcs_present (JSON),
-items_available (JSON), item_descriptions (JSON)
+items_available (JSON), item_descriptions (JSON),
+state_flags (JSON), unlocked_exits (JSON)
 ```
 
 #### `quests`
@@ -126,8 +128,11 @@ Méthode `kill()` → set `is_alive=False`, `hp=0`.
 ```python
 Location(name, description,
          connections: list[str], npcs_present: list[str],
-         items_available: list[str], item_descriptions: dict[str, str])
+         items_available: list[str], item_descriptions: dict[str, str],
+         state_flags: dict[str, bool], unlocked_exits: list[str])
 ```
+`state_flags` : état mutable (ex: `{"breach_open": true}`). `unlocked_exits` : sorties débloquées dynamiquement par les `BeatEffects`, distinctes des `connections` toujours disponibles.
+
 ⚠ `npcs_present` est `list[str]` — résolu en vrais PNJs par `scene_hydration.hydrate_scene()`.
 
 ### `Quest` ([world/quest.py](../../world/quest.py))
@@ -150,8 +155,19 @@ StoryArc(campaign_id, theme, premise,
 StoryBeat(beat_number (1-20), title, description,
           location_hint, npc_names: list[str],
           encounter_type: Literal["social","combat","exploration","puzzle","boss"],
-          is_twist: bool)
+          encounter_subtype: str | None, is_twist: bool,
+          completion_trigger: CompletionTrigger | None,
+          on_complete: BeatEffects)
+
+CompletionTrigger(type: Literal["interact","defeat","talk","arrive","search","pickup"],
+                  target: str)
+
+BeatEffects(unlock_exits: list[str], add_npcs: list[str],
+            remove_items: list[str], add_items: list[str],
+            state_flags: dict[str, bool], narrative_hint: str)
 ```
+`completion_trigger` définit la condition déterministe de complétion du beat. `on_complete` décrit les mutations à appliquer sur la `Location` quand le beat est complété.
+
 Helper : `advance_beat(arc)` retourne une nouvelle arc avec `current_beat_index+1` (idempotent à la fin).
 
 ## Mappers ([db/mappers.py](../../db/mappers.py))
