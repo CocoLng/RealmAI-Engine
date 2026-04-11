@@ -248,3 +248,19 @@ class TestBeatCompletionModels:
         data = effects.model_dump()
         restored = BeatEffects.model_validate(data)
         assert restored == effects
+
+    def test_generated_beats_have_completion_triggers(self, httpx_mock, generator):
+        """Beats should include completion_trigger and on_complete."""
+        arc_data = _make_arc_data()
+        for beat in arc_data["beats"]:
+            beat["completion_trigger"] = {"type": "interact", "target": "some object"}
+            beat["on_complete"] = {
+                "unlock_exits": ["Next Area"],
+                "state_flags": {"puzzle_solved": True},
+                "narrative_hint": "Something changes.",
+            }
+        httpx_mock.add_response(json=make_ollama_response(arc_data))
+        arc = generator.generate("test theme", 1)
+        for beat in arc.beats:
+            assert beat.completion_trigger is not None
+            assert beat.on_complete.unlock_exits == ["Next Area"]

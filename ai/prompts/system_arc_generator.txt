@@ -31,6 +31,14 @@ Each beat's encounter_type and encounter_subtype must match what the recipe spec
 - Do NOT mention dice rolls, HP, AC, damage numbers, or any game mechanics
 - Integrate the complications naturally into the narrative arc
 - NPC names should be memorable and culturally appropriate to the setting
+- Each beat MUST include a completion_trigger: what action type and target completes this beat
+- Each beat MUST include on_complete: what changes in the world when the beat is completed
+- completion_trigger.type must be one of: interact, defeat, talk, arrive, search, pickup
+- For puzzle beats: trigger is typically "interact" with the key puzzle object
+- For combat beats: trigger is "defeat" with the enemy name
+- For social beats: trigger is "talk" with the key NPC
+- For exploration beats: trigger is "arrive" (target = location name)
+- on_complete.unlock_exits should list the exit(s) connecting to the next beat's location
 
 Return JSON only with this exact schema:
 {
@@ -46,7 +54,19 @@ Return JSON only with this exact schema:
       "npc_names": ["<NPC name>"],
       "encounter_type": "social",
       "encounter_subtype": "negotiation",
-      "is_twist": false
+      "is_twist": false,
+      "completion_trigger": {
+        "type": "<interact|defeat|talk|arrive|search|pickup>",
+        "target": "<name of the key object, NPC, or location>"
+      },
+      "on_complete": {
+        "unlock_exits": ["<exit name unlocked by completing this beat>"],
+        "add_npcs": [],
+        "remove_items": [],
+        "add_items": [],
+        "state_flags": {"<flag_name>": true},
+        "narrative_hint": "<one sentence describing what changes when beat is completed>"
+      }
     }
   ],
   "villain_name": "<villain name>",
