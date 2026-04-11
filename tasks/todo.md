@@ -1,5 +1,7 @@
 # TODO — RealmAI-Engine
 
+Commit at the end of a phase, do not co author claude.
+
 ## Chantier en cours : Système de Combat D&D 5e
 
 Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.md` pour les fiches détaillées.
