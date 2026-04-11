@@ -1780,3 +1780,151 @@ def test_pipeline_trivial_kill_blocked_for_villain() -> None:
 
     assert not result.is_valid  # hostile NPC → not trivially defeatable → needs full combat
     assert pipeline.combat_state is None
+
+
+# ---------------------------------------------------------------------------
+# Task 32 — Flee resolution
+# ---------------------------------------------------------------------------
+
+
+def _make_active_pipeline_with_hero() -> "tuple[ActionPipeline, Any]":
+    """Helper: pipeline with active CombatState (hero DEX 14 vs goblin)."""
+    from unittest.mock import MagicMock
+    from engine.combat import CombatSide, CombatState, Combatant
+    from engine.character import CharacterClass, Race, AbilityScores, create_character
+    from engine.inventory import Inventory
+
+    scores = AbilityScores(STR=10, DEX=14, CON=10, INT=10, WIS=10, CHA=10)
+    char = create_character("Héros", Race.HUMAN, CharacterClass.FIGHTER, scores)
+    goblin_char = create_character(
+        "Goblin", Race.HALFLING, CharacterClass.ROGUE,
+        AbilityScores(STR=8, DEX=12, CON=10, INT=8, WIS=8, CHA=8),
+    )
+    hero = Combatant(name="Héros", side=CombatSide.PLAYER, character=char, inventory=Inventory())
+    goblin = Combatant(name="Goblin", side=CombatSide.ENEMY, character=goblin_char, inventory=Inventory())
+    state = CombatState(combatants=[hero, goblin], current_turn_index=0, is_active=True)
+    pipeline = ActionPipeline(
+        interpreter=MagicMock(), narrator=MagicMock(),
+        location=None, npcs={}, actor_name="Héros", combat_state=state,
+    )
+    return pipeline, hero
+
+
+async def test_flee_success_marks_combatant_fled() -> None:
+    """Successful DEX check marks the combatant as fled; action not consumed."""
+    from unittest.mock import patch
+    from engine.dice import D20CheckResult, RollOutcome
+
+    pipeline, hero = _make_active_pipeline_with_hero()
+    action = InterpretedAction(
+        action_type=ActionType.FLEE, actor_name="Héros", raw_input="je fuis",
+    )
+    fake_check = D20CheckResult(
+        expression="1d20+2", rolls=[18], modifier=2, total=20, dc=12,
+        outcome=RollOutcome.SUCCESS, margin=8,
+    )
+    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+        await pipeline._resolve_flee(action)
+
+    assert hero.fled is True
+    assert hero.action_budget.action_used is False
+
+
+async def test_flee_failure_consumes_action_stays_in_combat() -> None:
+    """Failed DEX check: action consumed, combatant stays in combat."""
+    from unittest.mock import patch
+    from engine.dice import D20CheckResult, RollOutcome
+
+    pipeline, hero = _make_active_pipeline_with_hero()
+    action = InterpretedAction(
+        action_type=ActionType.FLEE, actor_name="Héros", raw_input="je fuis",
+    )
+    fake_check = D20CheckResult(
+        expression="1d20+2", rolls=[4], modifier=2, total=6, dc=12,
+        outcome=RollOutcome.FAILURE, margin=-6,
+    )
+    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+        await pipeline._resolve_flee(action)
+
+    assert hero.fled is False
+    assert hero.action_budget.action_used is True
+    assert pipeline.combat_state is not None
+    assert pipeline.combat_state.is_active
+
+
+async def test_flee_with_all_pcs_fled_ends_combat() -> None:
+    """When the only PC flees successfully, combat ends with CombatEndReason.FLED."""
+    from unittest.mock import patch
+    from engine.dice import D20CheckResult, RollOutcome
+    from engine.combat import CombatEndReason
+
+    pipeline, hero = _make_active_pipeline_with_hero()
+    action = InterpretedAction(
+        action_type=ActionType.FLEE, actor_name="Héros", raw_input="je fuis",
+    )
+    fake_check = D20CheckResult(
+        expression="1d20+2", rolls=[18], modifier=2, total=20, dc=12,
+        outcome=RollOutcome.SUCCESS, margin=8,
+    )
+    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+        await pipeline._resolve_flee(action)
+
+    assert hero.fled is True
+    assert pipeline.combat_state is not None
+    assert not pipeline.combat_state.is_active
+    assert pipeline.combat_state.end_reason == CombatEndReason.FLED
+
+
+async def test_flee_dice_embed_added_to_pending() -> None:
+    """After _resolve_flee, a ('flee_check', result, actor) tuple is in _pending_dice_embeds."""
+    from unittest.mock import patch
+    from engine.dice import D20CheckResult, RollOutcome
+
+    pipeline, _ = _make_active_pipeline_with_hero()
+    action = InterpretedAction(
+        action_type=ActionType.FLEE, actor_name="Héros", raw_input="je fuis",
+    )
+    fake_check = D20CheckResult(
+        expression="1d20+2", rolls=[10], modifier=2, total=12, dc=12,
+        outcome=RollOutcome.NEAR_SUCCESS, margin=0,
+    )
+    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+        await pipeline._resolve_flee(action)
+
+    assert len(pipeline._pending_dice_embeds) == 1
+    label, result_obj, actor = pipeline._pending_dice_embeds[0]
+    assert label == "flee_check"
+    assert actor == "Héros"
+
+
+async def test_flee_applies_stored_destination_on_full_escape() -> None:
+    """On full escape, change_location is called with the stored destination."""
+    from unittest.mock import patch, AsyncMock, MagicMock
+    from engine.dice import D20CheckResult, RollOutcome
+    from engine.combat import CombatEndReason
+
+    pipeline, hero = _make_active_pipeline_with_hero()
+    pipeline._pending_flee_destination = "forêt"
+    pipeline.db_factory = MagicMock()
+    pipeline.session = MagicMock()
+
+    fake_location = MagicMock()
+    fake_location.name = "forêt"
+
+    action = InterpretedAction(
+        action_type=ActionType.FLEE, actor_name="Héros", raw_input="je fuis",
+    )
+    fake_check = D20CheckResult(
+        expression="1d20+2", rolls=[18], modifier=2, total=20, dc=12,
+        outcome=RollOutcome.SUCCESS, margin=8,
+    )
+    with (
+        patch("bot.action_pipeline.roll_check", return_value=fake_check),
+        patch("bot.world_navigation.change_location", new=AsyncMock(return_value=fake_location)),
+    ):
+        outcome = await pipeline._resolve_flee(action)
+
+    assert "forêt" in outcome.summary
+    assert pipeline.combat_state is not None
+    assert not pipeline.combat_state.is_active
+    assert pipeline.combat_state.end_reason == CombatEndReason.FLED

@@ -51,8 +51,16 @@ from ai.narrator import Narrator
 from ai.scene_context import SceneContext, build_scene_context
 from bot.llm_retry import retry_llm_call
 from bot.persistence import persist_session
-from engine.character import Character
-from engine.combat import CombatState, TrivialResolveResult, start_combat, trivial_resolve
+from engine.character import Character, compute_modifier
+from engine.combat import (
+    CombatEndReason,
+    CombatState,
+    TrivialResolveResult,
+    check_combat_end,
+    start_combat,
+    trivial_resolve,
+)
+from engine.dice import RollOutcome, roll_check
 from bot.combat_entry import CombatTrigger, detect_combat_trigger, enter_combat
 from engine.conditions import (
     ActiveCondition,
@@ -845,6 +853,9 @@ class ActionPipeline:
 
         at = action.action_type
 
+        if at == ActionType.FLEE:
+            return await self._resolve_flee(action)
+
         if at == ActionType.LOOK:
             loc = self.location
             summary = (
@@ -957,6 +968,84 @@ class ActionPipeline:
         return MechanicsOutcome(
             summary=f"{action.actor_name} performs {at.value}.",
             player_intent=intent,
+        )
+
+    async def _resolve_flee(self, action: InterpretedAction) -> MechanicsOutcome:
+        """Roll DEX check (Acrobatics) DC 12 to escape combat.
+
+        Success: combatant marked fled=True, removed from turn rotation.
+        Failure: action_used=True, combatant stays in combat.
+        When all alive PCs have fled, ends combat with CombatEndReason.FLED
+        and applies the stored flee destination (from MOVE auto-conversion).
+        """
+        assert self.combat_state is not None
+        combatant = next(
+            (c for c in self.combat_state.combatants if c.name == action.actor_name),
+            None,
+        )
+        if combatant is None:
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} n'est pas en combat.",
+                player_intent=self._build_player_intent(action),
+            )
+
+        dex_score = combatant.character.ability_scores.DEX
+        dex_mod = compute_modifier(dex_score)
+        expression = f"1d20+{dex_mod}" if dex_mod >= 0 else f"1d20{dex_mod}"
+        check = roll_check(expression, dc=12)
+        intent = self._build_player_intent(action)
+
+        if check.outcome in (
+            RollOutcome.NEAR_SUCCESS,
+            RollOutcome.SUCCESS,
+            RollOutcome.CRITICAL_SUCCESS,
+        ):
+            combatant.fled = True
+            outcome_desc = (
+                f"{action.actor_name} réussit à fuir "
+                f"(DEX {check.total} vs DC 12) et s'échappe du combat."
+            )
+        else:
+            combatant.action_budget.action_used = True
+            outcome_desc = (
+                f"{action.actor_name} échoue à fuir "
+                f"(DEX {check.total} vs DC 12) et reste bloqué en combat."
+            )
+
+        # Store dice roll for the caller to display as an embed (task 60)
+        self._pending_dice_embeds.append(("flee_check", check, action.actor_name))
+
+        # Check if combat ends (all alive PCs have fled)
+        end = check_combat_end(self.combat_state)
+        if end == CombatEndReason.FLED:
+            self.combat_state.is_active = False
+            self.combat_state.end_reason = end
+            destination_name: str | None = None
+            if self._pending_flee_destination and self.session and self.db_factory:
+                from bot.world_navigation import LocationChangeError, change_location
+                try:
+                    dest = await change_location(
+                        self.session,
+                        self._pending_flee_destination,
+                        db_factory=self.db_factory,
+                    )
+                    destination_name = dest.name
+                    outcome_desc += f" Le groupe s'échappe vers {dest.name}."
+                except LocationChangeError:
+                    pass
+            return MechanicsOutcome(
+                summary=outcome_desc,
+                player_intent=intent,
+                outcome_facts=outcome_desc,
+                public_effects=PublicEffects(location_change=destination_name)
+                if destination_name
+                else PublicEffects(),
+            )
+
+        return MechanicsOutcome(
+            summary=outcome_desc,
+            player_intent=intent,
+            outcome_facts=outcome_desc,
         )
 
     # ------------------------------------------------------------------

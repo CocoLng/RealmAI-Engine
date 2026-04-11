@@ -752,3 +752,67 @@ class TestTrivialResolve:
         npc.kill()
         assert npc.is_alive is False
         assert npc.hp == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 32 — advance_turn skip fled + check_combat_end FLED
+# ---------------------------------------------------------------------------
+
+
+class TestFledCombatant:
+    """Tests for fled-combatant handling in advance_turn and check_combat_end."""
+
+    def test_advance_turn_skips_fled_combatant(
+        self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """advance_turn skips combatants that have fled."""
+        from engine.combat import CombatState
+
+        scores = AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10)
+        scores = apply_racial_bonuses(scores, Race.ELF)
+        char3 = create_character("Rôdeur", Race.ELF, CharacterClass.ROGUE, scores)
+        ranger = Combatant(
+            name="Rôdeur",
+            side=CombatSide.PLAYER,
+            character=char3,
+            inventory=create_inventory(),
+        )
+        ranger.fled = True
+
+        # Build state manually: fighter(0) → ranger(1, fled) → goblin(2)
+        state = CombatState(
+            combatants=[fighter, ranger, goblin],
+            current_turn_index=0,
+            is_active=True,
+        )
+        new_state = advance_turn(state)
+        # Should skip fled ranger (index 1) and land on goblin (index 2)
+        assert new_state.combatants[new_state.current_turn_index].name == goblin.name
+
+    def test_check_combat_end_returns_fled_when_all_pcs_fled(
+        self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FLED returned when all PCs have fled (alive) and enemies still standing."""
+        from engine.combat import CombatEndReason, CombatState, check_combat_end
+
+        fighter.fled = True
+        state = CombatState(
+            combatants=[fighter, goblin],
+            current_turn_index=0,
+            is_active=True,
+        )
+        assert check_combat_end(state) == CombatEndReason.FLED
+
+    def test_check_combat_end_returns_defeat_when_all_pcs_dead_none_fled(
+        self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DEFEAT returned when all PCs are dead (not fled) and enemies still standing."""
+        from engine.combat import CombatEndReason, CombatState, check_combat_end
+
+        fighter.is_alive = False
+        state = CombatState(
+            combatants=[fighter, goblin],
+            current_turn_index=0,
+            is_active=True,
+        )
+        assert check_combat_end(state) == CombatEndReason.DEFEAT
