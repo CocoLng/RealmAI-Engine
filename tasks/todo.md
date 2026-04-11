@@ -24,9 +24,9 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 24 — Zone movement + opportunity attacks
 
 ### Phase 3 — Validation & pipeline
-- [ ] Task 30 — Validateurs de combat stricts
-- [ ] Task 31 — ActionPipeline : dispatch combat-aware + auto-convert MOVE→FLEE
-- [ ] Task 32 — Résolution de FLEE (check DEX)
+- [x] Task 30 — Validateurs de combat stricts
+- [x] Task 31 — ActionPipeline : dispatch combat-aware + auto-convert MOVE→FLEE
+- [x] Task 32 — Résolution de FLEE (check DEX)
 
 ### Phase 4 — Interprète & générateurs LLM (parallèle)
 - [ ] Task 40 — Interprète : détection d'intention létale
