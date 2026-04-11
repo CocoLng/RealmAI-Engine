@@ -275,3 +275,117 @@ def test_build_user_message_includes_all_hints(
     assert "Atmosphere suggestion: cozy but tense" in msg
     assert "Story context for this location: A secret meeting takes place." in msg
     assert "at least 2 NPCs" in msg
+
+
+# ---------------------------------------------------------------------------
+# Exit aliases (new in the exploration/movement fix)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_populates_exit_aliases(
+    httpx_mock: HTTPXMock, generator: WorldGenerator,
+) -> None:
+    """LLM-provided exit_aliases are forwarded to the Location."""
+    response_data = {
+        "name": "Salle des échos",
+        "description": "Une salle circulaire.",
+        "connections": ["Couloir du nord", "Sortie sud"],
+        "exit_aliases": {
+            "Couloir du nord": ["nord", "couloir", "corridor"],
+            "Sortie sud": ["sud", "sortir", "dehors"],
+        },
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="A haunted ruin.",
+        location_type="hall",
+    )
+
+    assert result.exit_aliases == {
+        "Couloir du nord": ["nord", "couloir", "corridor"],
+        "Sortie sud": ["sud", "sortir", "dehors"],
+    }
+
+
+def test_generate_drops_exit_aliases_for_unknown_connections(
+    httpx_mock: HTTPXMock, generator: WorldGenerator,
+) -> None:
+    """Aliases whose key is NOT in connections are dropped (anti-leak)."""
+    response_data = {
+        "name": "La Crypte",
+        "description": "...",
+        "connections": ["Entrée"],
+        "exit_aliases": {
+            "Entrée": ["porte", "entrée"],
+            "Passage secret": ["secret", "caché"],  # not in connections
+        },
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(campaign_context="...", location_type="crypt")
+
+    assert "Entrée" in result.exit_aliases
+    assert "Passage secret" not in result.exit_aliases
+
+
+def test_generate_missing_exit_aliases_defaults_empty(
+    httpx_mock: HTTPXMock, generator: WorldGenerator,
+) -> None:
+    """Backward compat: LLM responses without exit_aliases still work."""
+    response_data = {
+        "name": "Le Vieux Pont",
+        "description": "Un pont de pierre.",
+        "connections": ["Village"],
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(campaign_context="...", location_type="bridge")
+
+    assert result.exit_aliases == {}
+
+
+def test_generate_required_connections_force_injected_if_missing(
+    httpx_mock: HTTPXMock, generator: WorldGenerator,
+) -> None:
+    """Safety net: if the LLM forgets a required connection, we force-inject it."""
+    response_data = {
+        "name": "Nouveau lieu",
+        "description": "Une place.",
+        "connections": ["Autre endroit"],  # LLM forgot the required back-link
+        "exit_aliases": {},
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="...",
+        location_type="connected_area",
+        required_connections=["Parent Village"],
+    )
+
+    assert "Parent Village" in result.connections
+    assert "Autre endroit" in result.connections
+
+
+def test_build_user_message_includes_required_connections(
+    generator: WorldGenerator,
+) -> None:
+    """_build_user_message surfaces required_connections to the LLM."""
+    msg = generator._build_user_message(
+        campaign_context="Context.",
+        location_type="area",
+        location_name=None,
+        required_connections=["Parent Village", "Old Well"],
+    )
+
+    assert "Required connections to preserve" in msg
+    assert "Parent Village" in msg
+    assert "Old Well" in msg

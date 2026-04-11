@@ -48,11 +48,40 @@ class LocationRepository:
             raise ValueError(msg)
         row.description = location.description
         row.connections = location.connections  # type: ignore[assignment]
+        row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
         row.npcs_present = location.npcs_present  # type: ignore[assignment]
         row.items_available = location.items_available  # type: ignore[assignment]
         row.item_descriptions = location.item_descriptions  # type: ignore[assignment]
         row.state_flags = location.state_flags  # type: ignore[assignment]
         row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
+        row.generated = location.generated
+
+    def upsert(self, location: Location, campaign_id: str) -> None:
+        """Insert the location, or update it in place if a row with the same
+        (campaign_id, name) already exists.
+
+        Used by the stubbing logic in ``bot/world_navigation.py`` where we need
+        to create a placeholder row for every connection without worrying
+        about whether another code path has already created it.
+        """
+        stmt = select(LocationRow).where(
+            LocationRow.campaign_id == campaign_id,
+            LocationRow.name == location.name,
+        )
+        row = self._session.execute(stmt).scalar_one_or_none()
+        if row is None:
+            self._session.add(location_to_db(location, campaign_id))
+            return
+        # Row exists — update fields in place.
+        row.description = location.description
+        row.connections = location.connections  # type: ignore[assignment]
+        row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
+        row.npcs_present = location.npcs_present  # type: ignore[assignment]
+        row.items_available = location.items_available  # type: ignore[assignment]
+        row.item_descriptions = location.item_descriptions  # type: ignore[assignment]
+        row.state_flags = location.state_flags  # type: ignore[assignment]
+        row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
+        row.generated = location.generated
 
     def delete(self, name: str, campaign_id: str) -> None:
         """Delete a location by name within a campaign."""

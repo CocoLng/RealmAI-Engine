@@ -24,7 +24,7 @@ from engine.character import (
 )
 from engine.validators import ActionType
 from world.location import Location
-from world.npc import NPC
+from world.npc import NPC, NPCDisposition
 from world.story_arc import StoryArc, StoryBeat, CompletionTrigger, BeatEffects
 
 
@@ -633,7 +633,94 @@ def _make_session_with_arc(location, story_arc):
     session.language = "fr"
     session.combat_state = None
     session.inventory = None
+    # Disable agents/generators that would otherwise be MagicMocks and
+    # short-circuit the _resolve_talk path down the cheap no-agent branch.
+    session.npc_agent = None
+    session.npc_generator = None
     return session
+
+
+@dataclass
+class StubNPCAgent:
+    """A minimal NPC agent that returns a canned NPCResponse. Used to
+    exercise the TALK-quality beat gate without calling a real LLM."""
+
+    revealed: list[str] = field(default_factory=list)
+    disposition_delta: int = 0
+    dialogue: str = "..."
+
+    def respond(self, npc, player_input, context_prompt, language="fr"):
+        from ai.models import NPCResponse
+        return NPCResponse(
+            dialogue=self.dialogue,
+            disposition_change=self.disposition_delta,
+            revealed_info=list(self.revealed),
+        )
+
+
+def _kaelen_arc():
+    """Shared arc fixture for the Kaelen interrogation beat."""
+    loc = Location(
+        name="Poste de garde",
+        description="Un poste ruiné.",
+        connections=[],
+        npcs_present=["Kaelen, le Gardien Blessé"],
+    )
+    arc = StoryArc(
+        campaign_id="test",
+        theme="dungeon",
+        premise="A dungeon adventure with many challenges ahead.",
+        beats=[
+            StoryBeat(
+                beat_number=1,
+                title="L'Interrogation du Gardien",
+                description="Questionner Kaelen.",
+                location_hint="Poste de garde",
+                encounter_type="social",
+                completion_trigger=CompletionTrigger(
+                    type="talk",
+                    target="Kaelen, le Gardien Blessé",
+                ),
+            ),
+            *[
+                StoryBeat(
+                    beat_number=i + 2,
+                    title=f"Beat {i + 2}",
+                    description=f"Desc {i + 2}",
+                    location_hint=f"Area {i + 2}",
+                    encounter_type="exploration",
+                )
+                for i in range(9)
+            ],
+        ],
+        villain_name="X",
+        villain_motivation="Y.",
+    )
+    return loc, arc
+
+
+def _kaelen_npcs() -> dict[str, NPC]:
+    scores = AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10)
+    return {
+        "Kaelen, le Gardien Blessé": NPC(
+            name="Kaelen, le Gardien Blessé",
+            race=Race.HUMAN,
+            ability_scores=scores,
+            hp=10, max_hp=10, ac=10,
+            description="Un garde blessé.",
+            personality="Méfiant.",
+            location_name="Poste de garde",
+        ),
+        "Kaelen": NPC(
+            name="Kaelen",
+            race=Race.HUMAN,
+            ability_scores=scores,
+            hp=10, max_hp=10, ac=10,
+            description="Un garde blessé.",
+            personality="Méfiant.",
+            location_name="Poste de garde",
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -767,3 +854,632 @@ class TestBeatCompletion:
         # Location should have been mutated
         assert "Inner Court" in loc.unlocked_exits
         assert loc.state_flags.get("breach_open") is True
+
+    @pytest.mark.asyncio
+    async def test_talk_trigger_matches_short_vs_long_target(self):
+        """Regression — observed 2026-04-11: the beat trigger was
+        `talk on "Kaelen, le Gardien Blessé"` and the resolved action
+        target was also the canonical long name, but short-vs-long fuzzy
+        matching fell below the 0.6 threshold in an earlier bug. The
+        substring pass must catch this case now. Also verifies that a
+        productive conversation (reveals > 0, disposition stable) is
+        enough to advance the beat."""
+        loc, arc = _kaelen_arc()
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.TALK,
+                actor_name="Hero",
+                target_name="Kaelen",  # short form
+                raw_input="je parle à Kaelen",
+                confidence=0.95,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="Kaelen répond.", tone="tense")],
+        )
+        npcs = _kaelen_npcs()
+        session = _make_session_with_arc(loc, arc)
+        session.npcs = npcs
+        # Productive conversation: one reveal, disposition unchanged.
+        session.npc_agent = StubNPCAgent(
+            revealed=["the lever is behind the altar"],
+            disposition_delta=0,
+            dialogue="Kaelen parle.",
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, loc, npcs, actor_name="Hero",
+        )
+        pipeline.session = session
+
+        result = await pipeline.process("je parle à Kaelen")
+        assert isinstance(result, ActionPipelineResult)
+        assert result.new_beat is not None
+        assert result.new_beat.beat_number == 2  # advanced via trigger
+
+    @pytest.mark.asyncio
+    async def test_talk_beat_blocked_when_npc_reveals_nothing(self):
+        """Quality gate — if the NPC stonewalled the player (0 reveals),
+        the beat must NOT advance even though the action targeted the
+        right NPC. Observed 2026-04-11: the player was pushed to the
+        next beat without any information being shared."""
+        loc, arc = _kaelen_arc()
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.TALK,
+                actor_name="Hero",
+                target_name="Kaelen",
+                raw_input="bonjour",
+                confidence=0.95,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="Kaelen reste silencieux.", tone="tense")],
+        )
+        npcs = _kaelen_npcs()
+        session = _make_session_with_arc(loc, arc)
+        session.npcs = npcs
+        # NPC stonewalls: no reveals, neutral disposition shift.
+        session.npc_agent = StubNPCAgent(
+            revealed=[],
+            disposition_delta=0,
+            dialogue="...",
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, loc, npcs, actor_name="Hero",
+        )
+        pipeline.session = session
+
+        result = await pipeline.process("bonjour")
+        assert isinstance(result, ActionPipelineResult)
+        assert result.new_beat is None  # beat did NOT advance
+
+    @pytest.mark.asyncio
+    async def test_talk_beat_blocked_when_disposition_regressed(self):
+        """Quality gate — even if the NPC technically shared something,
+        a negative disposition shift (NPC got more hostile) means the
+        conversation went poorly and the beat must NOT advance. This
+        matches the exact failure in the 2026-04-11 log where Kaelen
+        produced disposition_change=-1 revealed=1 and the beat
+        advanced anyway."""
+        loc, arc = _kaelen_arc()
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.TALK,
+                actor_name="Hero",
+                target_name="Kaelen",
+                raw_input="qu'est-ce que tu caches ?",
+                confidence=0.95,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="Kaelen recule.", tone="tense")],
+        )
+        npcs = _kaelen_npcs()
+        session = _make_session_with_arc(loc, arc)
+        session.npcs = npcs
+        session.npc_agent = StubNPCAgent(
+            revealed=["vague hint about the ruins"],
+            disposition_delta=-1,  # NPC got more hostile
+            dialogue="Recule...",
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, loc, npcs, actor_name="Hero",
+        )
+        pipeline.session = session
+
+        result = await pipeline.process("qu'est-ce que tu caches ?")
+        assert isinstance(result, ActionPipelineResult)
+        assert result.new_beat is None  # beat did NOT advance
+
+    @pytest.mark.asyncio
+    async def test_standard_action_does_not_trigger_llm_fallback(self):
+        """Regression — the LLM creative-completion fallback must NOT fire
+        for standard (non-IMPROVISE) actions, even if the beat has a
+        trigger that failed to match. Observed 2026-04-11: saying hi to
+        an NPC advanced the interrogation beat at confidence 0.95 via
+        an over-permissive LLM fallback."""
+        loc = Location(
+            name="Place",
+            description="Une place.",
+            connections=[],
+            npcs_present=["Garde Principal"],
+        )
+        arc = StoryArc(
+            campaign_id="test",
+            theme="dungeon",
+            premise="A dungeon adventure with many challenges ahead.",
+            beats=[
+                StoryBeat(
+                    beat_number=1,
+                    title="Interroger le garde",
+                    description="Extraire des informations du garde.",
+                    location_hint="Place",
+                    encounter_type="social",
+                    completion_trigger=CompletionTrigger(
+                        type="interact",  # <-- strict: requires INTERACT
+                        target="Levier caché",
+                    ),
+                ),
+                *[
+                    StoryBeat(
+                        beat_number=i + 2,
+                        title=f"Beat {i + 2}",
+                        description=f"Desc {i + 2}",
+                        location_hint=f"Area {i + 2}",
+                        encounter_type="exploration",
+                    )
+                    for i in range(9)
+                ],
+            ],
+            villain_name="X",
+            villain_motivation="Y.",
+        )
+        # Player does a TALK action — totally unrelated to the INTERACT
+        # trigger. The fallback MUST not fire for TALK.
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.TALK,
+                actor_name="Hero",
+                target_name="Garde Principal",
+                raw_input="bonjour garde",
+                talk_topic="bonjour",
+                confidence=0.95,
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="Le garde grogne.", tone="tense")],
+        )
+        npcs = {
+            "Garde Principal": NPC(
+                name="Garde Principal",
+                race=Race.HUMAN,
+                ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+                hp=10, max_hp=10, ac=10,
+                location_name="Place",
+            ),
+        }
+        session = _make_session_with_arc(loc, arc)
+        session.npcs = npcs
+        pipeline = _make_pipeline(
+            interp, narrator, loc, npcs,
+            actor_name="Hero",
+        )
+        pipeline.session = session
+
+        # Spy on the LLM fallback — it must NEVER be called for TALK.
+        from unittest.mock import AsyncMock, patch
+        spy_judge = AsyncMock(return_value={"completed": True, "confidence": 1.0})
+        with patch.object(pipeline, "_llm_beat_fallback", spy_judge):
+            result = await pipeline.process("bonjour garde")
+
+        spy_judge.assert_not_called()
+        assert isinstance(result, ActionPipelineResult)
+        assert result.new_beat is None  # beat did NOT advance
+
+
+# ---------------------------------------------------------------------------
+# Task 00 — Phase 0 bugfix: villain/combat-beat NPCs must not be trivially killed
+# ---------------------------------------------------------------------------
+
+
+def _weak_npc(name: str, disposition: NPCDisposition = NPCDisposition.NEUTRAL) -> NPC:
+    """Build a commoner-style NPC (the shape scene_hydration produces today).
+
+    HP/AC/disposition mirror bot/scene_hydration.py: hp=max_hp=4, ac=10,
+    NEUTRAL — which is precisely what trivially_defeatable accepts.
+    """
+    scores = AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10)
+    return NPC(
+        name=name,
+        race=Race.HUMAN,
+        ability_scores=scores,
+        hp=4,
+        max_hp=4,
+        ac=10,
+        disposition=disposition,
+        description="(hydrated placeholder)",
+        location_name="Antre du méchant",
+    )
+
+
+def _arc_with_villain(
+    villain_name: str,
+    current_beat_encounter: str = "social",
+    current_beat_npcs: list[str] | None = None,
+) -> StoryArc:
+    """Build a StoryArc with a named villain and a configurable first beat."""
+    beats = [
+        StoryBeat(
+            beat_number=1,
+            title="Première épreuve",
+            description="La scène actuelle — type paramétrable par le test.",
+            location_hint="Antre du méchant",
+            npc_names=current_beat_npcs or [],
+            encounter_type=current_beat_encounter,  # type: ignore[arg-type]
+        ),
+        *[
+            StoryBeat(
+                beat_number=i + 2,
+                title=f"Beat {i + 2}",
+                description=f"Desc {i + 2}",
+                location_hint=f"Area {i + 2}",
+                encounter_type="exploration",
+            )
+            for i in range(9)
+        ],
+    ]
+    return StoryArc(
+        campaign_id="test-villain",
+        theme="dungeon",
+        premise="A dungeon adventure with a clearly named villain.",
+        beats=beats,
+        villain_name=villain_name,
+        villain_motivation="Dominer le royaume.",
+    )
+
+
+class TestTrivialResolveGuards:
+    """Phase 0 — Task 00: _should_trivial_resolve must refuse story-critical NPCs.
+
+    Covers the regression observed in the Mageta campaign where `(Attack)
+    j'attaque vellus` one-shot the villain because scene_hydration had
+    placed him in the scene with commoner-style stats (hp=4, ac=10,
+    NEUTRAL) — all three of which pass the existing trivial-resolve filter.
+    """
+
+    def test_trivial_resolve_blocked_for_villain_by_name(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """An NPC whose name matches session.story_arc.villain_name is
+        never trivially resolvable, even with weak stats on a social beat."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        villain = _weak_npc("Vellus le Mentisseur")
+        arc = _arc_with_villain(
+            villain_name="Vellus le Mentisseur",
+            current_beat_encounter="social",
+            current_beat_npcs=[],  # not in beat list — only the name match matters
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {villain.name: villain},
+            actor_name="Hero",
+        )
+        pipeline.session = _make_session_with_arc(cathedral, arc)
+
+        assert pipeline._should_trivial_resolve(villain) is False
+
+    def test_trivial_resolve_blocked_for_combat_beat_npc(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """Any NPC listed in the current beat's npc_names with
+        encounter_type=='combat' or 'boss' is also protected, regardless
+        of name. Covers the case where a minion in a combat beat was
+        hydrated with weak stats."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        minion = _weak_npc("Spadassin encapuchonné")
+        arc = _arc_with_villain(
+            villain_name="Quelqu'un d'autre",
+            current_beat_encounter="combat",
+            current_beat_npcs=["Spadassin encapuchonné"],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {minion.name: minion},
+            actor_name="Hero",
+        )
+        pipeline.session = _make_session_with_arc(cathedral, arc)
+
+        assert pipeline._should_trivial_resolve(minion) is False
+
+    def test_trivial_resolve_blocked_for_boss_beat_npc(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """encounter_type == 'boss' triggers the same protection as 'combat'."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        boss_minion = _weak_npc("Garde du corps")
+        arc = _arc_with_villain(
+            villain_name="Un autre",
+            current_beat_encounter="boss",
+            current_beat_npcs=["Garde du corps"],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {boss_minion.name: boss_minion},
+            actor_name="Hero",
+        )
+        pipeline.session = _make_session_with_arc(cathedral, arc)
+
+        assert pipeline._should_trivial_resolve(boss_minion) is False
+
+    def test_trivial_resolve_allowed_for_neutral_commoner_in_social_beat(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """Non-regression: a weak NEUTRAL commoner who isn't the villain
+        and isn't named in a combat beat must still be trivially resolvable."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        commoner = _weak_npc("Vieille mendiante")
+        arc = _arc_with_villain(
+            villain_name="Un Méchant",
+            current_beat_encounter="social",
+            current_beat_npcs=["Quelqu'un d'autre"],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {commoner.name: commoner},
+            actor_name="Hero",
+        )
+        pipeline.session = _make_session_with_arc(cathedral, arc)
+
+        assert pipeline._should_trivial_resolve(commoner) is True
+
+    def test_trivial_resolve_unchanged_without_session(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """Pipelines constructed without a session (legacy tests, simple
+        callers) must still reach the original disposition/stats checks."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        commoner = _weak_npc("Commoner sans histoire")
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {commoner.name: commoner},
+            actor_name="Hero",
+        )
+        # Explicitly no session set — must not crash, must defer to
+        # disposition + is_trivially_defeatable and let the commoner die.
+        assert pipeline.session is None
+        assert pipeline._should_trivial_resolve(commoner) is True
+
+    def test_trivial_resolve_blocked_via_full_validate(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """Integration: calling _validate with an ATTACK against the
+        villain must route through _bootstrap_combat_against (setting
+        combat_state) instead of _trivial_kill. Verified by spying on
+        _trivial_kill and asserting combat_state gets populated."""
+        from unittest.mock import patch
+
+        villain = _weak_npc("Vellus le Mentisseur")
+        location = Location(
+            name="Antre du méchant",
+            description="Un repaire sombre.",
+            connections=[],
+            npcs_present=["Vellus le Mentisseur"],
+        )
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        arc = _arc_with_villain(
+            villain_name="Vellus le Mentisseur",
+            current_beat_encounter="social",
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, location, {villain.name: villain},
+            actor_name="Hero",
+        )
+        pipeline.session = _make_session_with_arc(location, arc)
+
+        attack_action = InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name="Hero",
+            target_name="Vellus le Mentisseur",
+            raw_input="j'attaque Vellus",
+            weapon_name="Longsword",
+            confidence=0.95,
+        )
+
+        # Spy on _trivial_kill — it must NEVER be called on the villain.
+        # We keep _bootstrap_combat_against intact and just assert it gets
+        # reached (combat_state set).
+        with patch.object(pipeline, "_trivial_kill") as trivial_spy:
+            pipeline._validate(attack_action)
+            trivial_spy.assert_not_called()
+
+        # combat_state is populated by _validate on the bootstrap path.
+        assert pipeline.combat_state is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 01 — Phase 0 bugfix: MOVE rejected while a combat is active
+# ---------------------------------------------------------------------------
+
+
+class TestExplorationBlockedInCombat:
+    """Phase 0 — Task 01: ActionPipeline._validate must forward
+    self.combat_state to validate_exploration_action so that MOVE/TALK/etc.
+    are refused during an active combat."""
+
+    def test_pipeline_rejects_move_when_combat_active(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """End-to-end through _validate: a MOVE while combat_state is
+        active returns is_valid=False with a clear in-game message."""
+        from engine.combat import (
+            CombatSide,
+            CombatState,
+            Combatant as EngineCombatant,
+        )
+        from engine.inventory import (
+            DamageType,
+            EquipmentSlot,
+            Inventory,
+            Weapon,
+            WeaponCategory,
+        )
+
+        # Build a minimal active CombatState with the hero inside.
+        scores = AbilityScores(STR=14, DEX=10, CON=12, INT=10, WIS=10, CHA=10)
+        hero_char = create_character(
+            "Hero", Race.HUMAN, CharacterClass.FIGHTER, scores,
+        )
+        longsword = Weapon(
+            name="Longsword",
+            damage_dice="1d8",
+            damage_type=DamageType.SLASHING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+            weight=3.0,
+        )
+        hero_combatant = EngineCombatant(
+            name="Hero",
+            side=CombatSide.PLAYER,
+            character=hero_char,
+            inventory=Inventory(
+                items=[],
+                equipped={EquipmentSlot.MAIN_HAND: longsword},
+                gold=0,
+            ),
+        )
+        # A dummy enemy — combat needs >= 2 combatants.
+        goblin_scores = AbilityScores(STR=8, DEX=12, CON=10, INT=8, WIS=8, CHA=8)
+        goblin_char = create_character(
+            "Goblin", Race.HALFLING, CharacterClass.ROGUE, goblin_scores,
+        )
+        goblin_combatant = EngineCombatant(
+            name="Goblin",
+            side=CombatSide.ENEMY,
+            character=goblin_char,
+            inventory=Inventory(items=[], equipped={}, gold=0),
+        )
+        active_state = CombatState(
+            combatants=[hero_combatant, goblin_combatant],
+            round_number=1,
+            current_turn_index=0,
+        )
+
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {},
+            actor_name="Hero",
+        )
+        pipeline.combat_state = active_state
+
+        move_action = InterpretedAction(
+            action_type=ActionType.MOVE,
+            actor_name="Hero",
+            target_name="Ruelle nord",
+            raw_input="je vais dans la ruelle",
+            confidence=0.9,
+        )
+        result = pipeline._validate(move_action)
+
+        assert result.is_valid is False
+        assert result.error_message is not None
+        assert "combat" in result.error_message.lower()
+        assert "Flee" in result.error_message
+
+    def test_pipeline_allows_look_when_combat_active(
+        self,
+        cathedral: Location,
+    ) -> None:
+        """Non-regression: LOOK is still allowed off-turn in active combat."""
+        from engine.combat import (
+            CombatSide,
+            CombatState,
+            Combatant as EngineCombatant,
+        )
+        from engine.inventory import Inventory
+
+        scores = AbilityScores(STR=14, DEX=10, CON=12, INT=10, WIS=10, CHA=10)
+        hero_char = create_character(
+            "Hero", Race.HUMAN, CharacterClass.FIGHTER, scores,
+        )
+        hero_combatant = EngineCombatant(
+            name="Hero",
+            side=CombatSide.PLAYER,
+            character=hero_char,
+            inventory=Inventory(items=[], equipped={}, gold=0),
+        )
+        goblin_scores = AbilityScores(STR=8, DEX=12, CON=10, INT=8, WIS=8, CHA=8)
+        goblin_char = create_character(
+            "Goblin", Race.HALFLING, CharacterClass.ROGUE, goblin_scores,
+        )
+        goblin_combatant = EngineCombatant(
+            name="Goblin",
+            side=CombatSide.ENEMY,
+            character=goblin_char,
+            inventory=Inventory(items=[], equipped={}, gold=0),
+        )
+        active_state = CombatState(
+            combatants=[hero_combatant, goblin_combatant],
+            round_number=1,
+            current_turn_index=0,
+        )
+
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK,
+                actor_name="Hero",
+                raw_input="placeholder",
+                confidence=1.0,
+            ),
+        )
+        narrator = FakeNarrator()
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {},
+            actor_name="Hero",
+        )
+        pipeline.combat_state = active_state
+
+        look_action = InterpretedAction(
+            action_type=ActionType.LOOK,
+            actor_name="Hero",
+            raw_input="je regarde",
+            confidence=0.95,
+        )
+        result = pipeline._validate(look_action)
+        assert result.is_valid is True

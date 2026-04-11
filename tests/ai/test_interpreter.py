@@ -225,6 +225,60 @@ def test_interpret_move_action(
     assert result.target_name == "Intérieur de la cathédrale"
 
 
+def test_interpret_move_recovers_missing_target_via_visible_exit(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """Regression — observed 2026-04-11 in logs: the 4B model returned
+    action=Move with target_name=None. The Python safety net must recover
+    the destination by matching the raw input against visible_exits."""
+    response_data = {
+        "action_type": "Move",
+        "actor_name": "Aldric",
+        "target_name": None,  # <-- 4B model dropped it
+        "confidence": 0.95,
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = interpreter.interpret(
+        player_text="je vais dans l'intérieur de la cathédrale",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+    assert result.action_type == ActionType.MOVE
+    # The helper normalised the raw input and picked the canonical exit.
+    assert result.target_name == "Intérieur de la cathédrale"
+
+
+def test_interpret_move_recovery_returns_raw_text_when_no_match(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """When the recovery helper cannot uniquely match any exit, it
+    returns the raw player text so the downstream entity resolver can
+    try again with the full alias set."""
+    response_data = {
+        "action_type": "Move",
+        "actor_name": "Aldric",
+        "target_name": None,
+        "confidence": 0.8,
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = interpreter.interpret(
+        player_text="je vais sur la lune",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+    assert result.action_type == ActionType.MOVE
+    # Target_name should not remain None — it must at least carry the raw
+    # text so the entity resolver produces a proper UnknownEntityResult
+    # instead of a generic "missing target_name" failure.
+    assert result.target_name == "je vais sur la lune"
+
+
 def test_interpret_search_action(
     httpx_mock: HTTPXMock,
     interpreter: Interpreter,

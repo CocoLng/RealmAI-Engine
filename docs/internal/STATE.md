@@ -23,7 +23,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 | B | Entity resolution | 🟢 Done | Lemmes FR + fuzzy + fallback LLM, 35 tests verts |
 | C | Combat initiation | 🟢 Done | Bootstrap `CombatState` depuis attaque free-text |
 | D | Story progression | 🟢 Done | Avancement de beat par fuzzy match location (0.7) |
-| E | Trivial NPC death | 🟢 Done | One-shot resolve pour PNJs faibles/pacifiques |
+| E | Trivial NPC death | 🟢 Done | One-shot resolve pour PNJs faibles/pacifiques (durci en chantier combat Phase 0 Task 00 : villain + beats combat/boss jamais trivial-resolus) |
 | F | Narrator JSON | 🟢 Done | Prompt durci, `LLMParseError` avec dump auto dans `logs/narrator_failures/` |
 
 ## Fonctionnalités implémentées
@@ -38,7 +38,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ Combat (initiative, attaques, crits, death saves, sorts avec saves)
 - ✅ Trivial resolve (Lot E)
 - ✅ Starter kits (15 kits sur 6 classes)
-- ✅ Validators (combat + exploration)
+- ✅ Validators (combat + exploration ; exploration bloque MOVE/TALK/SEARCH/INTERACT/PICKUP en combat actif depuis Phase 0 Task 01)
 
 ### AI / LLM
 - ✅ Interpreter (15 ActionType incl. QUESTION, fallback déterministe)

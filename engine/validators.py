@@ -61,6 +61,17 @@ EXPLORATION_ACTION_TYPES: frozenset[ActionType] = frozenset({
 })
 
 
+# Exploration actions still permitted while a CombatState is active.
+# MOVE, TALK, SEARCH, INTERACT and PICKUP are refused so a player cannot
+# walk out of combat with ``(Move) j'explore le couloir`` — they must use
+# Flee (combat path) or wait for the encounter to end.
+_EXPLORATION_ALLOWED_IN_COMBAT: frozenset[ActionType] = frozenset({
+    ActionType.LOOK,
+    ActionType.QUESTION,
+    ActionType.IMPROVISE,
+})
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -334,13 +345,23 @@ def validate_use_item(action: Action, state: CombatState) -> ValidationResult:
 # ---------------------------------------------------------------------------
 
 
-def validate_exploration_action(action: Action) -> ValidationResult:
+def validate_exploration_action(
+    action: Action,
+    combat_state: CombatState | None = None,
+) -> ValidationResult:
     """Validate a non-combat action against its own rules.
 
     Entity resolution (does the NPC exist, is the exit reachable, etc.) is
     handled by the EntityResolver before this function is called. This
     validator only checks that the action carries the fields its type
     requires.
+
+    If ``combat_state`` is provided and is currently active, most
+    exploration actions are refused: only informational/catch-all actions
+    (LOOK, QUESTION, IMPROVISE) remain permitted off-turn. Players must use
+    Flee (combat path) to escape — MOVE/TALK/SEARCH/INTERACT/PICKUP are
+    blocked with a clear in-game message. This is the Phase 0 safety net;
+    finer-grained action economy lives in the combat validators.
 
     Combat action types are rejected — route them through validate_action().
     """
@@ -351,6 +372,17 @@ def validate_exploration_action(action: Action) -> ValidationResult:
                 f"'{action.action_type.value}' is not an exploration action"
             ),
         )
+
+    if combat_state is not None and combat_state.is_active:
+        if action.action_type not in _EXPLORATION_ALLOWED_IN_COMBAT:
+            return ValidationResult(
+                is_valid=False,
+                error_message=(
+                    f"Impossible de faire '{action.action_type.value}' "
+                    "en plein combat. Utilisez Flee pour tenter de fuir, "
+                    "ou attendez votre tour."
+                ),
+            )
 
     if action.action_type in (
         ActionType.LOOK,

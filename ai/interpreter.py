@@ -91,6 +91,20 @@ class Interpreter:
             logger.warning("Interpreter: failed to build InterpretedAction: %s", exc)
             return self._fallback(player_text, actor_name, scene_context)
 
+        # Safety net — the 4B model sometimes classifies Move correctly but
+        # drops the target_name. Recover by matching the raw input against
+        # the visible exits (and their aliases, passed through SceneContext
+        # via the resolver later). Falling through with target_name=None
+        # would trigger an in-character refusal and leave the player stuck.
+        if action.action_type == ActionType.MOVE and not action.target_name:
+            recovered = _recover_move_target(player_text, scene_context)
+            if recovered is not None:
+                logger.info(
+                    "INTERPRET move target recovered raw=%r → %r",
+                    player_text, recovered,
+                )
+                action = action.model_copy(update={"target_name": recovered})
+
         logger.info(
             "INTERPRET result action=%s target=%s confidence=%.2f",
             action.action_type.value, action.target_name, action.confidence,
@@ -245,3 +259,36 @@ class Interpreter:
         lines.append(player_text)
 
         return "\n".join(lines)
+
+
+def _recover_move_target(
+    player_text: str, scene_context: SceneContext,
+) -> str | None:
+    """Recover a Move destination when the LLM returned action=Move but
+    target_name=None.
+
+    Matches the raw player text against ``scene_context.visible_exits`` with
+    the same alias-aware matcher used by the entity resolver, so this works
+    even if the player said "dehors" while the canonical exit is
+    "L'extérieur des remparts…". Returns the canonical exit name on a
+    unique match, otherwise returns the raw player text so the downstream
+    resolver can produce its normal ambiguity / unknown flow.
+    """
+    if not scene_context.visible_exits:
+        return None
+
+    # Lazy import to avoid a circular dependency with entity_resolver.
+    from ai.entity_resolver import _match_candidates_v2
+
+    text = (player_text or "").strip()
+    if not text:
+        return None
+
+    matches = _match_candidates_v2(text, list(scene_context.visible_exits))
+    if len(matches) == 1:
+        return matches[0]
+    # Multi-match or no match — let the downstream resolver handle it with
+    # a proper disambiguation or unknown-entity flow. We only return the
+    # raw text so MOVE gets a chance at the entity resolver instead of
+    # short-circuiting as an unknown entity with an empty target.
+    return text

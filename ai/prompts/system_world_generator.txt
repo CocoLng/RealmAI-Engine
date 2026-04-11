@@ -19,6 +19,9 @@ Return JSON only:
   "name": "<location name>",
   "description": "<2-4 sentence atmospheric description>",
   "connections": ["<connected location 1>", "<connected location 2>"],
+  "exit_aliases": {
+    "<exact connection name from connections>": ["<short alias 1>", "<short alias 2>", "..."]
+  },
   "npcs_present": ["<NPC name 1>"],
   "npc_details": [
     {
@@ -36,8 +39,20 @@ Rules:
 - If the user message includes "Canonical location names from the story arc",
   you MUST use those exact names for the generated location name (when one matches)
   and for connections. Never rename, translate, or paraphrase a canonical name.
+- If the user message includes "Required connections to preserve",
+  those exact names MUST appear verbatim in the `connections` output
+  (they represent back-links to already-known locations). You may add other
+  connections alongside them, but the required ones are non-negotiable.
 - name should be specific and evocative (e.g. "The Broken Crown Tavern" not "A tavern")
 - connections is a list of location names (0-4 entries)
+- For EVERY entry in connections, add an entry in exit_aliases with the same
+  exact name as key. The value is a list of 2-5 SHORT aliases that a player
+  might plausibly say to refer to this exit: directions ("nord", "dehors",
+  "sortir"), archetypes ("taverne", "forêt", "temple"), short nicknames
+  ("remparts", "donjon"), or articles/prepositions removed. Example for
+  "L'extérieur des remparts du village, près des anciens abattoirs":
+  ["remparts", "dehors", "extérieur", "abattoirs", "sortir"].
+  Keep each alias to 1-3 words, lowercase, no punctuation.
 - npcs_present and items_available can be empty lists
 - For EVERY item in items_available, add an entry in item_descriptions with the
   same exact name as key. The description is canon truth: it must be specific

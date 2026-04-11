@@ -1,84 +1,12 @@
 # Anomalies, bugs et points d'amelioration
 
-Snapshot 2026-04-09. Classement par severite.
+Classement par severite.
 
-**Legende** : 🔴 bloquant · 🟠 eleve · 🟡 moyen · 🟢 mineur · ✅ resolu
+**Legende** : 🔴 bloquant · 🟠 eleve · 🟡 moyen · 🟢 mineur 
 
 ---
 
-## ✅ Resolus
-
-### B2. Runaway thinking mode Qwen 3.5 ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : Restructuration en chaine 2-phases (brainstorm → generate) pour les 4 modules thinking (arc, world, quest, story_director). Ajout du param `thinking_budget` per-call dans `chat_json()`. Fallback graceful si le brainstorm echoue. Prompts brainstorm dedies crees dans `ai/prompts/`.
-
-### H1. `NPCRepository.update()` perd des champs ✅
-**Statut** : Deja resolu — `npc_repo.py:58-73` mappe tous les champs (aliases, secrets, knowledge, dialogue_history).
-
-### H2. Disposition PNJ non persistee si caller oublie ✅
-**Statut** : Deja resolu — disposition appliquee dans `action_pipeline.py:856-868` et persistee via `npc_repo.update()` + `commit()`.
-
-### H3. Story Director ne s'auto-declenche pas ✅ (partiel)
-**Statut** : Partiellement resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : `record_turn_and_maybe_check` ajoute dans `action_handler.py` (etait deja wire dans combat.py et exploration.py). Le trigger existe via `story_bible_logger.py`.
-**Reste** : verifier que `interaction_count` est incremente correctement dans tous les flows.
-
-### H4. Silent-fail si `SemanticMemory` indisponible ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : Ajout de `ai_warnings: list[str]` sur `GameSession`. Warning affiche dans le salon de campagne au lancement (`session.py` et `campaign_launcher.py`).
-
-### H5. `WorldGenerator` filtre silencieusement les `item_descriptions` invalides ✅
-**Statut** : Deja resolu — `world_generator.py:69-74` log un WARNING avec la liste des cles filtrees.
-
-### H7. Quest generator sans parametre langue ✅
-**Statut** : Deja resolu — `quest_generator.py:32` a deja `language: str = "fr"` avec `language_instruction()`.
-
-### M1. Mutation vs copie inconsistante dans `engine/` ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : `inventory.py` converti du pattern immutable (`model_copy`) vers mutation in-place, alignant avec character.py, combat.py, spells.py. 6 fonctions converties, ~40 call sites mis a jour.
-
-### M3. Pas d'index SQL sur requetes frequentes ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : Index composites ajoutes — `(campaign_id, interaction_number)` sur ExchangeRow, `(campaign_id, start_interaction)` sur SummaryRow.
-
-### M7. Trivial kill par heuristique `max_hp < 10` ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : Helper `is_trivially_defeatable(npc)` verifie HP < seuil AND AC <= 12 AND pas de conditions defensives. Constantes nommees `TRIVIAL_RESOLVE_HP_THRESHOLD` et `TRIVIAL_RESOLVE_AC_THRESHOLD`.
-
-### M8. Concentration non interrompue au cast ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : `cast_spell()` log et casse l'ancienne concentration avant d'en set une nouvelle.
-
-### M10. Emoji de scene par keyword anglais ✅
-**Statut** : Deja resolu — `scene_embed.py` a deja un mapping bilingue FR/EN dans `_TYPE_EMOJI`.
-
-### M11. `NPCSheet` generation sans validation non-vide ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : Validation non-vide pour `secrets` et `knowledge` apres generation LLM. Fallbacks generiques si vide.
-
-### L1. Dead code ✅
-**Statut** : Deja resolu — `compute_ac`, `save_ability`, `save_dc` deja supprimes.
-
-### L2. Constantes magiques dispersees ✅ (partiel)
-**Statut** : Partiellement resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : `_CARRYING_CAPACITY_MULTIPLIER = 15.0` extraite dans `inventory.py`.
-**Reste** : les autres constantes (cantrip scale, token budgets) sont deja dans des constantes nommees.
-
-### L3. Remove condition raise ValueError ✅
-**Statut** : Deja resolu — `remove_condition()` retourne la liste inchangee avec warning (pas de ValueError).
-
-### L4. `ExhaustionLevel` hardcode a 6 ✅
-**Statut** : Deja resolu — `MAX_EXHAUSTION_LEVEL = 6` deja extrait comme constante.
-
-### L6. `starter_gear.apply_starter_kit` : auto-equip restant ✅
-**Statut** : Resolu — `fix/issues-batch-2026-04-09`
-**Fix applique** : Commentaires step-by-step clarifiants la logique auto-equip.
-
-### L8. `confidence` d'`InterpretedAction` non valide ✅
-**Statut** : Deja resolu — `Field(ge=0.0, le=1.0)` dans `ai/models.py:20`.
-
-### L10. Empty scene handling ✅
-**Statut** : Deja resolu — `build_scene_context(location=None)` gere proprement dans `ai/scene_context.py:49`.
+NE PAS ECRIRE D'ISSUE SI CETTE DERNIERE EST RESOLUE, ce document sert a noter les problemes connus et leur statut de resolution. Si un point est resolu il ne doit pas rester dans cette liste, quand on en résoud un on doit supprimer la ligne correspondante.
 
 ---
 

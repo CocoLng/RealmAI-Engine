@@ -348,6 +348,77 @@ class TestLocationRepository:
         assert loaded.state_flags == {"puzzle_solved": True}
         assert loaded.unlocked_exits == ["Secret Exit"]
 
+    def test_exit_aliases_and_generated_flag_persist(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        """exit_aliases and the generated flag round-trip through the DB."""
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        loc = Location(
+            name="Carrefour",
+            description="Un carrefour brumeux.",
+            connections=["Sentier nord", "Route sud"],
+            exit_aliases={
+                "Sentier nord": ["nord", "sentier"],
+                "Route sud": ["sud", "route"],
+            },
+            generated=True,
+        )
+        repo.save(loc, sample_campaign.id)
+        db_session.commit()
+
+        loaded = repo.get_by_name("Carrefour", sample_campaign.id)
+        assert loaded is not None
+        assert loaded.exit_aliases == {
+            "Sentier nord": ["nord", "sentier"],
+            "Route sud": ["sud", "route"],
+        }
+        assert loaded.generated is True
+
+    def test_upsert_inserts_when_missing(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        loc = Location(name="Stub", description="", generated=False)
+        repo.upsert(loc, sample_campaign.id)
+        db_session.commit()
+
+        loaded = repo.get_by_name("Stub", sample_campaign.id)
+        assert loaded is not None
+        assert loaded.generated is False
+
+    def test_upsert_is_idempotent(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        """Calling upsert twice with the same name updates the row in place
+        instead of raising on the (campaign_id, name) unique constraint."""
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        loc = Location(name="Place", description="First", generated=False)
+        repo.upsert(loc, sample_campaign.id)
+        db_session.commit()
+
+        # Second call: same name, different content + marking as generated.
+        updated = Location(
+            name="Place",
+            description="Fully hydrated",
+            connections=["Ailleurs"],
+            exit_aliases={"Ailleurs": ["autre", "loin"]},
+            generated=True,
+        )
+        repo.upsert(updated, sample_campaign.id)
+        db_session.commit()
+
+        loaded = repo.get_by_name("Place", sample_campaign.id)
+        assert loaded is not None
+        assert loaded.description == "Fully hydrated"
+        assert loaded.generated is True
+        assert loaded.connections == ["Ailleurs"]
+        assert loaded.exit_aliases == {"Ailleurs": ["autre", "loin"]}
+        # Only one row should exist.
+        assert len(repo.list_by_campaign(sample_campaign.id)) == 1
+
 
 # ---------------------------------------------------------------------------
 # QuestRepository

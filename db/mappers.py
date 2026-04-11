@@ -132,11 +132,13 @@ def location_to_db(location: Location, campaign_id: str) -> LocationRow:
         name=location.name,
         description=location.description,
         connections=location.connections,
+        exit_aliases=location.exit_aliases,
         npcs_present=location.npcs_present,
         items_available=location.items_available,
         item_descriptions=location.item_descriptions,
         state_flags=location.state_flags,
         unlocked_exits=location.unlocked_exits,
+        generated=location.generated,
     )
 
 
@@ -146,11 +148,16 @@ def location_from_db(row: LocationRow) -> Location:
         name=row.name,
         description=row.description,
         connections=list(row.connections) if row.connections else [],
+        exit_aliases={
+            str(k): [str(a) for a in v]
+            for k, v in (row.exit_aliases or {}).items()
+        },
         npcs_present=list(row.npcs_present) if row.npcs_present else [],
         items_available=list(row.items_available) if row.items_available else [],
         item_descriptions=dict(row.item_descriptions) if row.item_descriptions else {},
         state_flags=dict(row.state_flags) if row.state_flags else {},
         unlocked_exits=list(row.unlocked_exits) if row.unlocked_exits else [],
+        generated=bool(row.generated),
     )
 
 

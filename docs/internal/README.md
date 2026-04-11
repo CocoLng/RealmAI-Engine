@@ -29,3 +29,15 @@ Documentation technique à jour (snapshot 2026-04-09) décrivant ce qui est **r�
 - **Chemins** cliquables : `[file](../../path)` style markdown.
 - Sévérités dans ISSUES.md : 🔴 bloquant · 🟠 élevé · 🟡 moyen · 🟢 mineur.
 - Tout ce qui est marqué « TODO » / « non implémenté » est vrai au snapshot et pointe vers le fichier concerné.
+
+## Règle de mise à jour
+
+Ces docs sont la **synthèse de ce qui est implémenté**. Toute tâche d'un chantier `tasks/*/` qui modifie un comportement, une API publique, un flux, ou un modèle data **doit mettre à jour les fichiers concernés ici**, avec des additions **concises** :
+
+- Paragraphe court (3-8 phrases) ou ligne de table — pas de dissertation.
+- Référencer le code (`bot/file.py:line`) plutôt que le dupliquer.
+- Corriger les sections obsolètes plutôt que d'ajouter une section "Legacy".
+- Mettre à jour `STATE.md` quand un item bascule d'état.
+- Retirer les bugs résolus de `ISSUES.md`.
+
+Les chantiers en cours listent leurs obligations d'update dans leur propre README (ex : [tasks/combat/README.md](../../tasks/combat/README.md) section "Documentation").

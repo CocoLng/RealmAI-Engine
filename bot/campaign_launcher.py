@@ -743,8 +743,19 @@ class CampaignLauncher:
             if self.current_location:
                 from db.repositories import LocationRepository, CampaignRepository
 
-                LocationRepository(db_session).save(
-                    self.current_location, self.campaign.id,
+                loc_repo = LocationRepository(db_session)
+                loc_repo.save(self.current_location, self.campaign.id)
+                # Pre-instantiate stubs for every connection of the starting
+                # location so the LLM "knows" them (they exist in the DB and
+                # show up in /query prompts). Stubs are hydrated lazily on
+                # first visit via ``bot.world_navigation.change_location``.
+                from bot.world_navigation import create_exit_stubs
+
+                create_exit_stubs(
+                    loc_repo,
+                    self.current_location.connections,
+                    parent_name=self.current_location.name,
+                    campaign_id=self.campaign.id,
                 )
                 CampaignRepository(db_session).update(self.campaign)
 

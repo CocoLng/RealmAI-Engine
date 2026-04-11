@@ -333,7 +333,7 @@ class ActionPipeline:
         if (
             self.session is not None
             and interpreted.action_type != ActionType.QUESTION
-            and self._check_beat_completion(interpreted)
+            and self._check_beat_completion(interpreted, outcome)
         ):
             beat_completed = True
             arc = self.session.story_arc
@@ -352,9 +352,15 @@ class ActionPipeline:
         elif (
             self.session is not None
             and getattr(self.session, "story_arc", None) is not None
-            and interpreted.action_type not in (
-                ActionType.QUESTION, ActionType.LOOK,
-            )
+            # Only IMPROVISE is eligible for creative-completion fallback.
+            # Standard actions (TALK, ATTACK, PICKUP, MOVE, …) have
+            # direct triggers via _check_beat_completion. If the direct
+            # match failed, the beat is NOT done — we must not let the
+            # 4B judge second-guess standard actions, otherwise players
+            # skip ahead without narrative justification (observed
+            # 2026-04-11: saying hi to an NPC advanced the interrogation
+            # beat at confidence 0.95 via the LLM fallback).
+            and interpreted.action_type == ActionType.IMPROVISE
         ):
             arc = self.session.story_arc
             beat = arc.beats[arc.current_beat_index]
@@ -526,7 +532,11 @@ class ActionPipeline:
             item_name=action.item_name,
         )
         if action.action_type in EXPLORATION_ACTION_TYPES:
-            return validate_exploration_action(eng_action)
+            # Pass combat_state so MOVE/TALK/SEARCH/INTERACT/PICKUP are
+            # rejected while a combat is active (Phase 0 safety net).
+            return validate_exploration_action(
+                eng_action, combat_state=self.combat_state,
+            )
 
         # Lot C: bootstrap a combat encounter when a player attacks an NPC
         # who is present in the scene but not yet in any combat state.
@@ -564,12 +574,33 @@ class ActionPipeline:
 
         Trivial resolution applies to peaceful, defenseless NPCs that an
         adventurer would obviously overpower in one swing. We deliberately
-        exclude HOSTILE / UNFRIENDLY NPCs (they fight back) and anything
-        that :func:`is_trivially_defeatable` rejects (HP, AC, or defensive
-        conditions).
+        exclude HOSTILE / UNFRIENDLY NPCs (they fight back), story-critical
+        NPCs (villain, combat-beat foes — even if currently hydrated with
+        commoner stats), and anything that :func:`is_trivially_defeatable`
+        rejects (HP, AC, or defensive conditions).
         """
         if not npc.is_alive:
             return False
+
+        # Story-critical NPCs are never trivially resolved, even if they were
+        # hydrated with weak stats (commoner-style). They must go through the
+        # full combat system once it's bootstrapped — otherwise a villain
+        # could be one-shot via `_trivial_kill` simply because scene
+        # hydration gave them hp=4/ac=10. See tasks/combat/00_bugfix_*.
+        story_arc = getattr(self.session, "story_arc", None) if self.session is not None else None
+        if story_arc is not None:
+            if npc.name == story_arc.villain_name:
+                return False
+            beats = getattr(story_arc, "beats", None)
+            current_index = getattr(story_arc, "current_beat_index", 0)
+            if beats and 0 <= current_index < len(beats):
+                current_beat = beats[current_index]
+                if (
+                    current_beat.encounter_type in ("combat", "boss")
+                    and npc.name in current_beat.npc_names
+                ):
+                    return False
+
         if npc.disposition in (
             NPCDisposition.HOSTILE,
             NPCDisposition.UNFRIENDLY,
@@ -901,9 +932,19 @@ class ActionPipeline:
     # ------------------------------------------------------------------
 
     def _check_beat_completion(
-        self, action: InterpretedAction,
+        self,
+        action: InterpretedAction,
+        outcome: MechanicsOutcome | None = None,
     ) -> bool:
-        """Check if the action satisfies the current beat's completion trigger."""
+        """Check if the action satisfies the current beat's completion trigger.
+
+        For most trigger types (interact, defeat, arrive, pickup, search)
+        the action itself is atomic: doing it at all means the objective
+        is met. **TALK is different** — addressing the right NPC does not
+        automatically mean the conversation was productive. If the NPC
+        refused to share anything or pushed back, the beat must NOT
+        advance. That gate is applied here via ``outcome`` when provided.
+        """
         if self.session is None or getattr(self.session, "story_arc", None) is None:
             return False
         arc = self.session.story_arc
@@ -926,15 +967,49 @@ class ActionPipeline:
         if action.action_type not in allowed:
             return False
 
+        target_matches = False
         if trigger.target and action.target_name:
             from bot.game_session import _normalize_location
-            ratio = difflib.SequenceMatcher(
-                None,
-                _normalize_location(action.target_name),
-                _normalize_location(trigger.target),
-            ).ratio()
-            return ratio >= 0.6
-        return False
+            norm_target = _normalize_location(action.target_name)
+            norm_trigger = _normalize_location(trigger.target)
+            # Substring inclusion — robust to short-vs-long mismatches
+            # (e.g. action target "Kaelen" vs trigger target "Kaelen, le
+            # Gardien Blessé"). Without this, difflib.ratio() rejects the
+            # pair and the LLM fallback starts guessing.
+            if norm_target and norm_trigger:
+                if norm_target in norm_trigger or norm_trigger in norm_target:
+                    target_matches = True
+            if not target_matches:
+                ratio = difflib.SequenceMatcher(
+                    None, norm_target, norm_trigger,
+                ).ratio()
+                target_matches = ratio >= 0.6
+        if not target_matches:
+            return False
+
+        # Quality gate for TALK triggers — the conversation must have
+        # actually produced something. A dialogue that revealed nothing
+        # (NPC stonewalled the player) or made the NPC more hostile
+        # (disposition_change < 0) does NOT complete the beat, even when
+        # the player addressed the right character. Observed 2026-04-11:
+        # the player talked to the guard, the NPC agent returned
+        # disposition_change=-1 with a cold reveal, and the beat
+        # advanced anyway — leaving the player confused.
+        if trigger.type == "talk" and outcome is not None:
+            if outcome.talk_reveals_count <= 0:
+                logger.info(
+                    "BEAT talk-gate blocked campaign=%s reason=no-reveals",
+                    self.campaign_id,
+                )
+                return False
+            if outcome.talk_disposition_change < 0:
+                logger.info(
+                    "BEAT talk-gate blocked campaign=%s reason=disposition-regressed delta=%d",
+                    self.campaign_id, outcome.talk_disposition_change,
+                )
+                return False
+
+        return True
 
     def _apply_beat_effects(self, effects: BeatEffects) -> str:
         """Apply beat completion effects to the current location.
@@ -1162,6 +1237,8 @@ class ActionPipeline:
             outcome_facts="\n".join(facts_lines),
             npc_name=npc.name,
             npc_dialogue=response.dialogue,
+            talk_reveals_count=len(response.revealed_info),
+            talk_disposition_change=int(response.disposition_change),
         )
 
     def _resolve_pickup(self, action: InterpretedAction) -> str:

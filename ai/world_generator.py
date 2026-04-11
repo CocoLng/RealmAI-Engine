@@ -37,6 +37,7 @@ class WorldGenerator:
         atmosphere: str | None = None,
         beat_context: str | None = None,
         npc_count_hint: int | None = None,
+        required_connections: list[str] | None = None,
     ) -> Location:
         """Generate a new location for the campaign.
 
@@ -53,13 +54,16 @@ class WorldGenerator:
                 this location, giving the LLM narrative direction.
             npc_count_hint: Optional minimum number of NPCs the location
                 should contain.
+            required_connections: Names that MUST appear verbatim in the
+                output ``connections`` list — used to guarantee bidirectional
+                links when hydrating a stub back toward its parent location.
 
         Returns:
             A Location ready to be saved.
         """
         user_content = self._build_user_message(
             campaign_context, location_type, location_name, location_hints,
-            atmosphere, beat_context, npc_count_hint,
+            atmosphere, beat_context, npc_count_hint, required_connections,
         )
         lang_prefix = language_instruction(language)
         system_prompt = lang_prefix + _SYSTEM_PROMPT
@@ -88,17 +92,49 @@ class WorldGenerator:
                 filtered_keys,
             )
 
+        # --- Connections with mandatory back-links ---
+        connections = list(data.get("connections", []))
+        if required_connections:
+            for req in required_connections:
+                if req and req not in connections:
+                    logger.warning(
+                        "WORLD required connection %r missing from LLM output, "
+                        "force-inserting", req,
+                    )
+                    connections.append(req)
+
+        # --- Exit alias filtering (same pattern as item_descriptions) ---
+        raw_exit_aliases = data.get("exit_aliases") or {}
+        exit_aliases: dict[str, list[str]] = {}
+        for key, value in raw_exit_aliases.items():
+            if key not in connections:
+                continue
+            if not isinstance(value, list):
+                continue
+            cleaned = [str(a).strip() for a in value if str(a).strip()]
+            if cleaned:
+                exit_aliases[str(key)] = cleaned
+        orphan_keys = set(raw_exit_aliases.keys()) - set(exit_aliases.keys())
+        if orphan_keys:
+            logger.warning(
+                "Filtered %d exit_aliases not in connections: %s",
+                len(orphan_keys),
+                orphan_keys,
+            )
+
         location = Location(
             name=str(data["name"]),
             description=str(data["description"]),
-            connections=list(data.get("connections", [])),
+            connections=connections,
+            exit_aliases=exit_aliases,
             npcs_present=list(data.get("npcs_present", [])),
             items_available=items_available,
             item_descriptions=item_descriptions,
         )
         logger.info(
-            "WORLD name=%r type=%s connections=%d",
-            location.name, location_type, len(location.connections),
+            "WORLD name=%r type=%s connections=%d aliases=%d",
+            location.name, location_type,
+            len(location.connections), len(location.exit_aliases),
         )
         return location
 
@@ -111,6 +147,7 @@ class WorldGenerator:
         atmosphere: str | None = None,
         beat_context: str | None = None,
         npc_count_hint: int | None = None,
+        required_connections: list[str] | None = None,
     ) -> str:
         """Build the user message for the LLM prompt.
 
@@ -122,6 +159,8 @@ class WorldGenerator:
             atmosphere: Optional atmosphere/mood suggestion.
             beat_context: Optional story arc beat text for this location.
             npc_count_hint: Optional minimum NPC count.
+            required_connections: Names that MUST appear verbatim in the
+                output connections list.
 
         Returns:
             Formatted user message string.
@@ -136,6 +175,15 @@ class WorldGenerator:
                 "You MUST reuse these exact names when they match the location "
                 "you are generating or when listing connections. Do NOT invent "
                 "alternative names for locations that already appear in this list."
+            )
+        if required_connections:
+            req_list = ", ".join(f'"{name}"' for name in required_connections)
+            parts.append(
+                f"Required connections to preserve: {req_list}\n"
+                "These names MUST appear verbatim in the `connections` list "
+                "you return — they are back-links to already-known locations. "
+                "Add other connections alongside them if relevant, but never "
+                "omit or rename these."
             )
         if atmosphere:
             parts.append(f"Atmosphere suggestion: {atmosphere}")

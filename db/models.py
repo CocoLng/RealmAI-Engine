@@ -64,11 +64,13 @@ class LocationRow(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(String, default="")
     connections: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    exit_aliases: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
     npcs_present: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     items_available: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     item_descriptions: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
     state_flags: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
     unlocked_exits: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    generated: Mapped[bool] = mapped_column(default=True, nullable=False)
 
 
 class QuestRow(Base):

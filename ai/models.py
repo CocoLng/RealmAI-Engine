@@ -69,6 +69,14 @@ class MechanicsOutcome(BaseModel):
     public_effects: "PublicEffects" = Field(default_factory=lambda: PublicEffects())
     npc_name: str | None = None
     npc_dialogue: str | None = None
+    # Structured TALK metadata — used by beat completion to gate TALK
+    # triggers on the actual outcome of the conversation, not just the
+    # fact that the player addressed the right NPC. ``talk_reveals_count``
+    # is the number of entries in ``NPCResponse.revealed_info`` (the NPC
+    # actually shared something); ``talk_disposition_change`` is the
+    # NPC's mood shift (-N if the conversation went badly).
+    talk_reveals_count: int = 0
+    talk_disposition_change: int = 0
 
 
 class PublicEffects(BaseModel):

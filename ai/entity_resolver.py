@@ -410,7 +410,13 @@ def _resolve_exit(
         )
 
     all_exits = list(location.connections) + list(location.unlocked_exits)
-    matches = _match_candidates(raw, all_exits)
+    # Exit aliases let short player phrasings ("dehors", "remparts") match long
+    # canonical connection names. unlocked_exits have no alias support.
+    matches = _match_candidates_v2(
+        raw,
+        all_exits,
+        aliases_by_candidate=location.exit_aliases,
+    )
     if not matches:
         return ResolutionResult(
             status="unknown",

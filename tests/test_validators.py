@@ -738,6 +738,151 @@ class TestValidateExplorationDispatch:
 
 
 # ---------------------------------------------------------------------------
+# Task 01 — Phase 0 bugfix: block exploration actions during active combat
+# ---------------------------------------------------------------------------
+
+
+def _active_combat(
+    fighter: Combatant, goblin: Combatant,
+) -> CombatState:
+    """Build a minimal active CombatState. The fighter is on turn 0."""
+    return CombatState(
+        combatants=[fighter, goblin],
+        round_number=1,
+        current_turn_index=0,
+    )
+
+
+class TestExplorationDuringCombat:
+    """Phase 0 — Task 01: validate_exploration_action must refuse MOVE,
+    TALK, SEARCH, INTERACT and PICKUP while a combat is active.
+
+    Only LOOK, QUESTION and IMPROVISE remain permitted — they are read-only
+    / catch-all actions that don't break the combat flow. This is a minimal
+    safety net; the combat-side action economy (who can do what, when) is
+    enforced later by validate_action + the dedicated combat validators.
+    """
+
+    def test_move_blocked_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.MOVE,
+            target_name="corridor des illusions",
+        )
+        result = validate_exploration_action(action, combat_state=state)
+        assert not result.is_valid
+        assert "combat" in (result.error_message or "").lower()
+        assert "Flee" in (result.error_message or "")
+
+    def test_talk_blocked_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.TALK,
+            target_name="Père Aldric",
+        )
+        result = validate_exploration_action(action, combat_state=state)
+        assert not result.is_valid
+        assert "combat" in (result.error_message or "").lower()
+
+    def test_search_blocked_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(actor_name="Arden", action_type=ActionType.SEARCH)
+        result = validate_exploration_action(action, combat_state=state)
+        assert not result.is_valid
+        assert "combat" in (result.error_message or "").lower()
+
+    def test_interact_blocked_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.INTERACT,
+            target_name="levier",
+        )
+        result = validate_exploration_action(action, combat_state=state)
+        assert not result.is_valid
+        assert "combat" in (result.error_message or "").lower()
+
+    def test_pickup_blocked_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.PICKUP,
+            item_name="Healing Potion",
+        )
+        result = validate_exploration_action(action, combat_state=state)
+        assert not result.is_valid
+        assert "combat" in (result.error_message or "").lower()
+
+    def test_look_allowed_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(actor_name="Arden", action_type=ActionType.LOOK)
+        result = validate_exploration_action(action, combat_state=state)
+        assert result.is_valid
+        assert result.error_message is None
+
+    def test_question_allowed_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(actor_name="Arden", action_type=ActionType.QUESTION)
+        result = validate_exploration_action(action, combat_state=state)
+        assert result.is_valid
+
+    def test_improvise_allowed_during_active_combat(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        state = _active_combat(fighter_combatant, goblin_combatant)
+        action = Action(actor_name="Arden", action_type=ActionType.IMPROVISE)
+        result = validate_exploration_action(action, combat_state=state)
+        assert result.is_valid
+
+    def test_exploration_unchanged_without_combat_state(self) -> None:
+        """Non-regression: calling the validator without combat_state
+        must behave exactly as before Phase 0."""
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.MOVE,
+            target_name="corridor",
+        )
+        result = validate_exploration_action(action)
+        assert result.is_valid
+
+    def test_exploration_unchanged_with_inactive_combat_state(
+        self, fighter_combatant: Combatant, goblin_combatant: Combatant,
+    ) -> None:
+        """A CombatState in the `is_active=False` terminal state must
+        not block exploration actions — the combat is over, movement is
+        legal again."""
+        state = CombatState(
+            combatants=[fighter_combatant, goblin_combatant],
+            round_number=1,
+            current_turn_index=0,
+            is_active=False,
+        )
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.MOVE,
+            target_name="corridor",
+        )
+        result = validate_exploration_action(action, combat_state=state)
+        assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
 # Concentration conflict info logging (M9)
 # ---------------------------------------------------------------------------
 

@@ -339,6 +339,75 @@ class TestResolveMove:
         )
         assert res.status == "unknown"
 
+    def test_exit_resolved_via_alias(
+        self, present_npcs: dict[str, NPC],
+    ) -> None:
+        """Aliases let short player phrasings match long canonical names.
+
+        This is the primary failure mode this feature fixes: world generation
+        produces verbose connection names like "L'extérieur des remparts du
+        village…" and the player says "dehors", "remparts" or "sortir".
+        """
+        loc = Location(
+            name="Salle des échos",
+            description="Une salle circulaire.",
+            connections=[
+                "L'extérieur des remparts du village, près des anciens abattoirs",
+                "L'antichambre du donjon souterrain",
+            ],
+            exit_aliases={
+                "L'extérieur des remparts du village, près des anciens abattoirs": [
+                    "remparts", "dehors", "extérieur", "abattoirs", "sortir",
+                ],
+                "L'antichambre du donjon souterrain": [
+                    "donjon", "antichambre", "souterrain",
+                ],
+            },
+        )
+
+        for player_phrase, expected in [
+            ("dehors", "L'extérieur des remparts du village, près des anciens abattoirs"),
+            ("remparts", "L'extérieur des remparts du village, près des anciens abattoirs"),
+            ("donjon", "L'antichambre du donjon souterrain"),
+        ]:
+            action = InterpretedAction(
+                action_type=ActionType.MOVE,
+                actor_name="Arden",
+                target_name=player_phrase,
+                raw_input=f"je vais {player_phrase}",
+            )
+            res = EntityResolver.resolve(
+                action, location=loc, npcs=present_npcs,
+            )
+            assert res.status == "resolved", (
+                f"phrase {player_phrase!r} should have resolved via aliases, "
+                f"got {res.status}: {res.reason}"
+            )
+            assert res.resolved_entity == expected
+
+    def test_exit_no_alias_still_works_for_long_query(
+        self, present_npcs: dict[str, NPC],
+    ) -> None:
+        """Regression guard: resolution still falls back to name matching
+        when the player happens to type (most of) the canonical name."""
+        loc = Location(
+            name="Place",
+            description="A square.",
+            connections=["Intérieur de la cathédrale"],
+            exit_aliases={},
+        )
+        action = InterpretedAction(
+            action_type=ActionType.MOVE,
+            actor_name="Arden",
+            target_name="Intérieur de la cathédrale",
+            raw_input="je vais dans la cathédrale",
+        )
+        res = EntityResolver.resolve(
+            action, location=loc, npcs=present_npcs,
+        )
+        assert res.status == "resolved"
+        assert res.resolved_entity == "Intérieur de la cathédrale"
+
 
 # ---------------------------------------------------------------------------
 # SEARCH / INTERACT — object resolution
