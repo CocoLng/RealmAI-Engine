@@ -584,7 +584,11 @@ class ActionPipeline:
                     trigger.aggressor_name, trigger.enemy_names,
                 )
                 # Build party-wide CombatState, roll initiative, apply surprise
-                pre_state = enter_combat(self.session, trigger)  # type: ignore[arg-type]
+                try:
+                    pre_state = enter_combat(self.session, trigger)  # type: ignore[arg-type]
+                except ValueError as exc:
+                    logger.warning("Combat bootstrap failed: %s", exc)
+                    return ValidationResult(is_valid=False, error_message=str(exc))
                 self.combat_state = start_combat(pre_state.combatants, trigger=trigger)
                 self.session.combat_state = self.combat_state  # type: ignore[union-attr]
                 self._pending_combat_start_embed = (self.combat_state, trigger)

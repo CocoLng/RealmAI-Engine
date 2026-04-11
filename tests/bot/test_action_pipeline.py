@@ -1528,23 +1528,6 @@ def test_pipeline_autoconverts_move_to_flee_in_active_combat() -> None:
     assert pipeline._pending_flee_destination == "forêt"
 
 
-def test_pipeline_stores_flee_destination() -> None:
-    """_pending_flee_destination stores the original MOVE target_name."""
-    from unittest.mock import MagicMock
-    from ai.models import InterpretedAction
-
-    state, _ = _make_combat_state_with_hero("Héros")
-    pipeline = ActionPipeline(
-        interpreter=MagicMock(), narrator=MagicMock(),
-        location=None, npcs={}, actor_name="Héros", combat_state=state,
-    )
-    action = InterpretedAction(
-        action_type=ActionType.MOVE, actor_name="Héros",
-        target_name="village", raw_input="vers le village",
-    )
-    pipeline._validate(action)
-    assert pipeline._pending_flee_destination == "village"
-
 
 def test_pipeline_dispatches_to_combat_validator_when_active() -> None:
     """When combat is active, an ATTACK action goes through the combat validator."""
