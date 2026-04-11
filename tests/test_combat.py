@@ -816,3 +816,31 @@ class TestFledCombatant:
             is_active=True,
         )
         assert check_combat_end(state) == CombatEndReason.DEFEAT
+
+    def test_check_combat_end_returns_fled_when_one_pc_died_other_fled(
+        self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FLED returned when one PC died and the other fled — not DEFEAT.
+
+        Regression: all(c.fled for c in players) was wrong because dead PCs
+        have fled=False. Must check only alive PCs.
+        """
+        from engine.combat import CombatEndReason, CombatState, check_combat_end
+
+        scores = AbilityScores(STR=10, DEX=14, CON=10, INT=10, WIS=10, CHA=10)
+        scores = apply_racial_bonuses(scores, Race.ELF)
+        char2 = create_character("Rôdeur", Race.ELF, CharacterClass.ROGUE, scores)
+        ranger = Combatant(
+            name="Rôdeur",
+            side=CombatSide.PLAYER,
+            character=char2,
+            inventory=create_inventory(),
+        )
+        fighter.is_alive = False  # PC 1 died
+        ranger.fled = True        # PC 2 successfully fled
+        state = CombatState(
+            combatants=[fighter, ranger, goblin],
+            current_turn_index=0,
+            is_active=True,
+        )
+        assert check_combat_end(state) == CombatEndReason.FLED

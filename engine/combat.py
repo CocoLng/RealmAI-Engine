@@ -432,9 +432,14 @@ def check_combat_end(state: CombatState) -> CombatEndReason | None:
     if not enemies_standing:
         return CombatEndReason.VICTORY
     if not players_standing:
-        # If every PC fled (not died), flag FLED instead of DEFEAT.
-        players = [c for c in state.combatants if c.side == CombatSide.PLAYER]
-        if players and all(c.fled for c in players):
+        # If every *alive* PC fled (not died), flag FLED instead of DEFEAT.
+        # Dead PCs have fled=False, so checking all players would incorrectly
+        # return DEFEAT when some died and the rest successfully fled.
+        alive_pcs = [
+            c for c in state.combatants
+            if c.side == CombatSide.PLAYER and c.is_alive
+        ]
+        if alive_pcs and all(c.fled for c in alive_pcs):
             return CombatEndReason.FLED
         return CombatEndReason.DEFEAT
     return None
