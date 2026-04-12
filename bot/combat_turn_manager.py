@@ -64,6 +64,7 @@ from engine.combat import (
 )
 from ai.narrator_phase import narrate_phase_transition
 from engine.combat_trigger import CombatTrigger
+from engine.inventory import ItemType, Weapon
 from engine.npc_ai.scripted import (
     NPCActionPlan,
     decide_minion_action,
@@ -196,6 +197,18 @@ class TurnManager:
 
             await self._render_pipeline_result(pipeline, result, action)
 
+        # Free actions (EQUIP) re-prompt the same combatant instead of advancing.
+        if (
+            isinstance(result, ActionPipelineResult)
+            and result.is_free_action
+        ):
+            state = self.session.combat_state
+            if state is not None:
+                current = get_current_combatant(state)
+                if current is not None:
+                    await self._prompt_turn(current)
+            return
+
         await self.on_action_resolved()
 
     # ------------------------------------------------------------------
@@ -238,6 +251,14 @@ class TurnManager:
         ]
         spell_names = self._get_castable_spell_names(user_id)
         adjacent_zones = self._get_adjacent_zones(combatant)
+        potion_names = [
+            i.name for i in combatant.inventory.items
+            if i.item_type == ItemType.POTION
+        ]
+        equippable_names = [
+            i.name for i in combatant.inventory.items
+            if isinstance(i, Weapon)
+        ]
 
         view = CombatActionView(
             user_id=user_id,
@@ -246,6 +267,8 @@ class TurnManager:
             spell_names=spell_names,
             adjacent_zone_names=adjacent_zones,
             dispatch_callback=self.dispatch_action,
+            potion_names=potion_names,
+            equippable_names=equippable_names,
         )
         self.current_view = view
 
