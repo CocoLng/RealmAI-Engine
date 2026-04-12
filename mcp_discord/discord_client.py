@@ -17,6 +17,8 @@ class TesterBot(discord.Client):
     Sends !test messages to the game bot channel and reads responses.
     """
 
+    __test__ = False  # pytest: not a test class
+
     def __init__(
         self,
         game_bot_id: int,

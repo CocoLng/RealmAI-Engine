@@ -136,7 +136,7 @@ async def test_launch_continues_if_purge_fails(launcher: CampaignLauncher) -> No
 
 @pytest.mark.asyncio
 async def test_launch_sends_countdown(launcher: CampaignLauncher) -> None:
-    """channel.send is called with countdown text and edit is called on the message."""
+    """channel.send is called with countdown embed and edit is called on the message."""
     countdown_msg = AsyncMock()
 
     call_count = 0
@@ -144,8 +144,8 @@ async def test_launch_sends_countdown(launcher: CampaignLauncher) -> None:
     async def _side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        # First send after purge is the countdown
-        if call_count == 1 and args and "commence dans 3" in str(args[0]):
+        # First send after purge is the countdown embed
+        if call_count == 1:
             return countdown_msg
         return AsyncMock()
 
@@ -154,11 +154,13 @@ async def test_launch_sends_countdown(launcher: CampaignLauncher) -> None:
     with _patch_externals():
         await launcher._launch_campaign()
 
-    # Verify countdown was sent
-    first_call_args = launcher.channel.send.call_args_list[0]
-    assert "commence dans 3" in str(first_call_args)
+    # Verify countdown embed was sent (first call)
+    first_call = launcher.channel.send.call_args_list[0]
+    countdown_embed = first_call.kwargs.get("embed")
+    assert countdown_embed is not None
+    assert "3" in countdown_embed.title
 
-    # Verify edits happened
+    # Verify edits happened (steps 2 → 1)
     assert countdown_msg.edit.call_count == 2
 
 
@@ -172,7 +174,7 @@ async def test_countdown_message_deleted(launcher: CampaignLauncher) -> None:
     async def _side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        if call_count == 1 and args and "commence dans 3" in str(args[0]):
+        if call_count == 1:
             return countdown_msg
         return AsyncMock()
 
@@ -200,7 +202,7 @@ async def test_countdown_failure_does_not_block_launch(launcher: CampaignLaunche
     async def _side_effect(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        if call_count == 1 and args and "commence dans 3" in str(args[0]):
+        if call_count == 1:
             return countdown_msg
         return AsyncMock()
 
@@ -209,7 +211,7 @@ async def test_countdown_failure_does_not_block_launch(launcher: CampaignLaunche
     with _patch_externals():
         await launcher._launch_campaign()
 
-    # Launch completed
+    # Launch completed despite edit/delete failures
     assert launcher.channel.id in launcher.bot.sessions
 
 

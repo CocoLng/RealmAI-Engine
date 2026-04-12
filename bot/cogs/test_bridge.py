@@ -163,6 +163,8 @@ class TestBridge(commands.Cog):
     Only active when TEST_MODE=true. Only accepts commands from TESTER_BOT_ID.
     """
 
+    __test__ = False  # pytest: not a test class
+
     def __init__(self, bot: RealmBot) -> None:
         self.bot = bot
         self.tester_bot_id = int(os.environ.get("TESTER_BOT_ID", "0"))

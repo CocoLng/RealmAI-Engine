@@ -283,5 +283,5 @@ async def test_launch_skips_scene_when_no_current_location(
         for call in launcher.channel.send.call_args_list
         if call.kwargs.get("embed") is not None
     ]
-    # Only the opening narrative embed should have been sent.
-    assert len(embeds_sent) == 1
+    # Countdown embed + opening narrative embed (no scene embed).
+    assert len(embeds_sent) == 2

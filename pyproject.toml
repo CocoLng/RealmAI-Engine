@@ -26,3 +26,16 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests that hit the DB or multiple modules",
+    "scenario: end-to-end scenarios via ScenarioRunner",
+    "slow: tests taking >1s",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:discord.*",
+]
