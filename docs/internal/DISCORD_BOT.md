@@ -62,11 +62,11 @@ Voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md) pour le flux détaillé.
 
 ### `combat.py` — `CombatCog`
 
-Shell minimal introduit en Phase 6 (task 64). Le cog ne fait plus que charger un factory-only attribut exposé aux autres cogs :
+Shell minimal géré par la turn manager. Le cog ne fait plus que charger un factory-only attribut exposé aux autres cogs :
 
 - `build_turn_manager(channel, session) → TurnManager` — crée l'orchestrateur de l'encounter et le rattache à la session.
 
-Toute la logique de tour (prompt PC, brain NPC par tier, timeout 5 min, finalize) vit dans [bot/combat_turn_manager.py](../../bot/combat_turn_manager.py) — voir la section _TurnManager_ plus bas. L'ancien flow (`start_combat_encounter`, `_prompt_turn`, `CombatView`) a été supprimé : incompatible avec Phase 5 (zones, NPC tier AI, legendary actions, phase transitions).
+Toute la logique de tour (prompt PC, brain NPC par tier, timeout 5 min, finalize) vit dans [bot/combat_turn_manager.py](../../bot/combat_turn_manager.py) — voir la section _TurnManager_ plus bas. L'ancien flow (`start_combat_encounter`, `_prompt_turn`, `CombatView`) a été supprimé : incompatible avec le moteur combat multi-ennemi (zones, NPC tier AI, legendary actions, phase transitions).
 
 Les helpers `build_pc_combatants(session)` et `build_npc_combatant(npc)` vivent désormais dans [bot/combat_entry.py](../../bot/combat_entry.py) pour garder un unique point d'entrée combat-bootstrap.
 
@@ -103,7 +103,7 @@ Toutes héritent de `LoggedView(ui.View)` pour un logging uniforme des erreurs.
 |---|---|---|
 | `CharacterCreateView` | Race select → Class select → Align select → Name modal | — |
 | `StarterGearView` | Boutons de kits (2-3) + détails | — |
-| `CombatActionView` | Attaquer / Sort / Défendre / Fuir / Se déplacer — hub PC édité en place (task 63) | — (TurnManager timeout) |
+| `CombatActionView` | Attaquer / Sort / Défendre / Fuir / Se déplacer — hub PC édité en place | — (TurnManager timeout) |
 | `TargetSelectView` | Ephemeral followup après Attaquer / Sort — enemies vivants ≤ 25 | 60 s |
 | `SpellSelectView` | Ephemeral followup après Sort — sorts castables (slots dispo) | 60 s |
 | `ZoneSelectView` | Ephemeral followup après Se déplacer — zones adjacentes | 60 s |
@@ -127,10 +127,10 @@ Toutes les couleurs sont pilotées par le `tone` renvoyé par le Narrator.
 | `scene_embed.py` | Scène : location, PNJs, exits, items (post au launch et après MOVE) |
 | `beat_embed.py` | Annonce d'avancée de beat (Lot D) |
 | `character_embed.py` | Fiche perso complète |
-| `combat_embed.py` | Hub d'état : round, combatant actif, HP bars, conditions FR, zones (task 62) |
-| `combat_start_embed.py` | Bannière « ⚔️ Combat commence » avec ordre d'initiative et surprise 5e (task 61) |
-| `combat_end_embed.py` | Embed de récap fin de combat (task 80) : 4 couleurs (🏆 Victoire/💀 Défaite/🏃 Fuite/🕊️ Trêve), champs optionnels (killed_enemies, killed_pcs, fled_pcs, loot, XP, level_ups, durée). Consommé par `TurnManager._finalize`. |
-| `dice_embed.py` | Jets d20 : `build_attack_roll_embed`, `build_save_check_embed`, `build_damage_roll_embed`, `build_generic_check_embed` — couleurs hit/miss/crit, français (task 60) |
+| `combat_embed.py` | Hub d'état : round, combatant actif, HP bars, conditions FR, zones |
+| `combat_start_embed.py` | Bannière « ⚔️ Combat commence » avec ordre d'initiative et surprise 5e |
+| `combat_end_embed.py` | Embed de récap fin de combat : 4 couleurs (🏆 Victoire/💀 Défaite/🏃 Fuite/🕊️ Trêve), champs optionnels (killed_enemies, killed_pcs, fled_pcs, loot, XP, level_ups, durée). Consommé par `TurnManager._finalize`. |
+| `dice_embed.py` | Jets d20 : `build_attack_roll_embed`, `build_save_check_embed`, `build_damage_roll_embed`, `build_generic_check_embed` — couleurs hit/miss/crit, français |
 | `inventory_embed.py` | Équipement + backpack + gold |
 | `state_embed.py` | Embed d'état bleu (0x4A90D9) pour les actions QUESTION : items, PNJs, sorties, objectif de beat actif |
 
@@ -178,7 +178,7 @@ Méthodes clés :
 
 ## `combat_turn_manager.py` — `TurnManager`
 
-Drive le cycle de vie d'une encounter de combat à l'intérieur d'un canal Discord (Phase 6, task 64). Une instance par combat actif, stockée sur `session.combat_turn_manager` par `ActionHandlerCog` juste après le bootstrap par le pipeline.
+Drive le cycle de vie d'une encounter de combat à l'intérieur d'un canal Discord. Une instance par combat actif, stockée sur `session.combat_turn_manager` par `ActionHandlerCog` juste après le bootstrap par le pipeline.
 
 Responsabilités :
 
@@ -191,9 +191,9 @@ Responsabilités :
    - `BOSS` → `engine.npc_ai.boss_brain.decide_boss_action(tactician=…)` avec `NPCTactician(session.ollama_client)` si disponible, fallback sur `decide_elite_action` sinon.
    Exécute le plan via `execute_action_plan`, poste un `build_attack_roll_embed` pour les attaques, puis appelle `advance_turn` + `on_action_resolved` en récursion jusqu'au prochain PC ou à la fin du combat.
 5. **Dispatch boutons / auto-Dodge** : `dispatch_action(interpreted)` acquiert `session.action_lock`, construit un `ActionPipeline` frais, appelle la méthode publique `pipeline.process_interpreted_action(action)` (bypass interpreter), rend la narration + dice embeds, puis délègue à `on_action_resolved`.
-6. **Cues off-turn** : `_flush_pending_cues` vide `state.pending_legendary_summaries` et `state.pending_phase_narrations` en messages compacts (⚡ / 🔥). La narration enrichie de ces cues sera ajoutée par la Phase 7 task 71.
-7. **Fin de combat** : `_finalize` délègue à `bot.combat_end.finalize_combat(session, end_reason)` (task 80 — idempotent via flag `_finalized` sur `CombatState`), poste le `build_combat_end_embed(summary)`, fige le hub avec le label emoji correspondant, et clear `session.combat_turn_manager`. **Ne nettoie plus `session.combat_state`** : l'état reste posé avec `is_active=False` pour l'historique / tests / inspection ; le reset à `None` arrive à la prochaine entrée en combat via `bot/combat_entry.py`.
-8. **Persistance post-tour** (task 80.7) : `TurnManager` reçoit `db_factory` (via `CombatCog.build_turn_manager`) et appelle `_persist_state` (async, off-thread `persist_session`) après `advance_turn` et après `_finalize`. Les actions PC sont déjà auto-checkpointées par le pipeline ; cet ajout couvre les tours NPC et l'état terminal, garantissant qu'une déconnexion Discord n'efface pas la progression du combat.
+6. **Cues off-turn** : `_flush_pending_cues` vide `state.pending_legendary_summaries` et `state.pending_phase_narrations` en messages compacts (⚡ / 🔥), puis enrichit chaque transition de phase via `narrate_phase_transition`.
+7. **Fin de combat** : `_finalize` délègue à `bot.combat_end.finalize_combat(session, end_reason)` (idempotent via flag `_finalized` sur `CombatState`), poste le `build_combat_end_embed(summary)`, fige le hub avec le label emoji correspondant, et clear `session.combat_turn_manager`. **Ne nettoie plus `session.combat_state`** : l'état reste posé avec `is_active=False` pour l'historique / tests / inspection ; le reset à `None` arrive à la prochaine entrée en combat via `bot/combat_entry.py`.
+8. **Persistance post-tour** : `TurnManager` reçoit `db_factory` (via `CombatCog.build_turn_manager`) et appelle `_persist_state` (async, off-thread `persist_session`) après `advance_turn` et après `_finalize`. Les actions PC sont déjà auto-checkpointées par le pipeline ; cet ajout couvre les tours NPC et l'état terminal, garantissant qu'une déconnexion Discord n'efface pas la progression du combat.
 
 Points d'extension / non-négociables :
 

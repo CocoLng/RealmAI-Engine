@@ -42,7 +42,7 @@ id, name, created_at, player_names (JSON), current_location,
 interaction_count, combat_state_json (TEXT), language
 ```
 
-`combat_state_json` est le dump Pydantic (`CombatState.model_dump_json()`) roundtrip via `bot/persistence.py`. Inclut `combat_id` (UUID généré auto), `end_reason` (CombatEndReason | None), `pending_phase_narrations: list[PhaseTransitionEvent]`, et pour chaque `Combatant` les champs Phase 2 (`stat_block`, `fled`, `current_zone`, `action_budget`, `legendary_points_remaining`, `phase_save_bonus`). Les tests `test_combat_state_roundtrips_with_new_fields` (tests/test_combat_phase2.py) et `test_roundtrip_with_combat_state` (tests/test_mappers.py) couvrent la ronde-trip.
+`combat_state_json` est le dump Pydantic (`CombatState.model_dump_json()`) roundtrip via `bot/persistence.py`. Inclut `combat_id` (UUID généré auto), `end_reason` (CombatEndReason | None), `pending_phase_narrations: list[PhaseTransitionEvent]`, et pour chaque `Combatant` les champs combat (`stat_block`, `fled`, `current_zone`, `action_budget`, `legendary_points_remaining`, `phase_save_bonus`). Les tests `test_combat_state_roundtrips_with_new_fields` (tests/test_combat_phase2.py) et `test_roundtrip_with_combat_state` (tests/test_mappers.py) couvrent la ronde-trip.
 
 #### `npcs`
 ```
@@ -56,7 +56,7 @@ stat_block_json (TEXT nullable)
 
 `stat_block_json` est la sérialisation Pydantic (`model_dump_json`) d'un `NPCStatBlock` — `NULL` pour les commoners purement narratifs, non-NULL pour les minions/elites/boss. Le mapper `npc_from_db` reconstruit le modèle via `NPCStatBlock.model_validate_json` quand le champ est présent.
 
-**Task 43** : `scene_hydration.hydrate_scene()` attache automatiquement le bon `NPCStatBlock` à chaque NPC en fonction du contexte (villain → `arc.villain_stat_block`, role hint → `get_archetype(role)`, beat combat → `guard`, défaut → `commoner`). HP/AC/ability_scores dérivés du tier (minion 8/12, elite 25/14, boss 55/16). Upgrade idempotent : un NPC legacy avec `stat_block=None` qui matche le villain est re-hydraté, préservant `description`/`personality`/`secrets`/`dialogue_history`.
+**Tier dispatch** : `scene_hydration.hydrate_scene()` attache automatiquement le bon `NPCStatBlock` à chaque NPC en fonction du contexte (villain → `arc.villain_stat_block`, role hint → `get_archetype(role)`, beat combat → `guard`, défaut → `commoner`). HP/AC/ability_scores dérivés du tier (minion 8/12, elite 25/14, boss 55/16). Upgrade idempotent : un NPC legacy avec `stat_block=None` qui matche le villain est re-hydraté, préservant `description`/`personality`/`secrets`/`dialogue_history`.
 
 #### `locations`
 ```
@@ -69,9 +69,9 @@ combat_triggers (JSON), npc_roles (JSON)
 
 `combat_zones` est une liste JSON de `Zone` sérialisés (`name`, `description`, `adjacent_zone_names`, `tags`). Vide `[]` pour les locations sans combat. Le graphe d'adjacence est re-validé à la reconstruction via le `model_validator` de `Location`.
 
-`combat_triggers` (Task 41) est un dict JSON keyé par nom d'item/mechanism → `CombatTriggerDef` (`item_name`, `spawn_npcs`, `reveal_narration`, `consumed`). Consommé par `bot.combat_entry` pour déclencher les ambushes via `INTERACT`. Idempotence : `consumed=True` bloque une re-exécution.
+`combat_triggers` est un dict JSON keyé par nom d'item/mechanism → `CombatTriggerDef` (`item_name`, `spawn_npcs`, `reveal_narration`, `consumed`). Consommé par `bot.combat_entry` pour déclencher les ambushes via `INTERACT`. Idempotence : `consumed=True` bloque une re-exécution.
 
-`npc_roles` (Task 43) est un dict JSON `{npc_name: archetype_role}` peuplé par le world generator depuis `npc_details[*].role`. Utilisé par `scene_hydration` pour dispatcher un NPC martial vers son archétype engine (captain, soldier, mage, …).
+`npc_roles` est un dict JSON `{npc_name: archetype_role}` peuplé par le world generator depuis `npc_details[*].role`. Utilisé par `scene_hydration` pour dispatcher un NPC martial vers son archétype engine (captain, soldier, mage, …).
 
 #### `quests`
 ```

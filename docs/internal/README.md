@@ -18,6 +18,7 @@ Documentation technique à jour (snapshot 2026-04-09) décrivant ce qui est **r�
 
 ### Couches techniques
 - [GAME_ENGINE.md](GAME_ENGINE.md) — Moteur de règles déterministe (`engine/`).
+- [COMBAT_SYSTEM.md](COMBAT_SYSTEM.md) — Documentation de référence du système de combat D&D 5e : architecture, modèles data, pipeline, API.
 - [AI_LAYER.md](AI_LAYER.md) — Couche LLM (`ai/`) : Interpreter, Narrator, NPC agent, générateurs.
 - [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md) — Système de mémoire 4 couches (`memory/`).
 - [DATABASE.md](DATABASE.md) — Modèles Pydantic ↔ SQLAlchemy, repositories, mappers (`db/`, `world/`).

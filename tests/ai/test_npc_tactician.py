@@ -1,4 +1,4 @@
-"""Tests for Task 52 — NPCTactician (boss LLM brain).
+"""Tests for NPCTactician (boss LLM brain).
 
 Covers ``ai.npc_tactician.NPCTactician``: prompt assembly, JSON parsing,
 post-validation of references (target, signature, weapon), and error

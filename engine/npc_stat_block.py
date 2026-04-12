@@ -183,8 +183,7 @@ class NPCStatBlock(BaseModel):
     aggression_threshold: int = Field(default=15, ge=1, le=30)
     """DC for social checks before this NPC escalates to hostility."""
     mindless: bool = False
-    """Task 81 — marker for non-sentient creatures (zombies, enraged beasts,
-    elementals, constructs) that cannot be reasoned with. Blocks any TRUCE
-    attempt (``bot.combat_truce.attempt_truce`` refuses automatically).
-    Default ``False`` — sentient NPCs (all current archetypes) stay
-    negotiable."""
+    """Marker for non-sentient creatures (zombies, enraged beasts, elementals,
+    constructs) that cannot be reasoned with. Blocks any TRUCE attempt
+    (``bot.combat_truce.attempt_truce`` refuses automatically). Default
+    ``False`` — sentient NPCs (all current archetypes) stay negotiable."""

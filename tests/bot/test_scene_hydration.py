@@ -128,7 +128,7 @@ def test_hydrate_no_location_is_noop(db_factory) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tier-based hydration dispatch (Task 43)
+# Tier-based hydration dispatch
 # ---------------------------------------------------------------------------
 
 
@@ -629,7 +629,7 @@ def test_describe_scene_no_location():
 
 
 # ---------------------------------------------------------------------------
-# Phase 7 — tasks 70 / 71 — narrator combat context additions
+# Narrator combat context additions
 # ---------------------------------------------------------------------------
 
 

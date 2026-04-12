@@ -447,7 +447,7 @@ def test_combat_scene_summary_serialized(
 
 
 # ---------------------------------------------------------------------------
-# Lethal intent detection (Task 40)
+# Lethal intent detection
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Combat cog — thin shell that owns the TurnManager factory (task 64).
+"""Combat cog — thin shell that owns the TurnManager factory.
 
 The heavy lifting moved to :mod:`bot.combat_turn_manager`. This cog
 exists only so ``bot/bot.py`` can load it via the standard discord.py
@@ -6,10 +6,10 @@ extension mechanism and expose a single factory method the
 :class:`~bot.cogs.action_handler.ActionHandlerCog` calls when a freshly
 bootstrapped combat needs a turn manager attached to the session.
 
-Nothing from the legacy Phase 3 combat loop survives here — the old
+Nothing from the legacy pre-refactor combat loop survives here — the old
 ``start_combat_encounter`` / ``_prompt_turn`` / ``_handle_attack`` flow
-was incompatible with Phase 5 (multi-enemy zones, NPC tier AI, boss
-legendary actions, phase transitions).
+was incompatible with the multi-enemy combat engine (zones, NPC tier AI,
+boss legendary actions, phase transitions).
 """
 
 from __future__ import annotations

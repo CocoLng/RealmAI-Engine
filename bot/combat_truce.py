@@ -1,11 +1,11 @@
-"""Task 81 — Social de-escalation in combat (TRUCE).
+"""Social de-escalation in combat (TRUCE).
 
 Implements the single-check CHA negotiation path that lets a PC end a
 combat peacefully by convincing an enemy to stand down. The check is a
 strict ``1d20 + CHA_mod + proficiency`` vs the target's
 ``NPCStatBlock.aggression_threshold``. Only :class:`~engine.dice.RollOutcome`
 ``SUCCESS`` and ``CRITICAL_SUCCESS`` count — ``NEAR_SUCCESS`` is a
-failure, per the Phase 8 plan (keeps the DC meaningful).
+failure, which keeps the aggression DC meaningful.
 
 This module does **not** finalise the encounter — it only rolls the
 check and marks enemies as fled on success. The pipeline-level caller
@@ -34,8 +34,7 @@ logger = logging.getLogger(__name__)
 _PROFICIENCY_BONUS = 2
 
 # Only these outcomes count as a successful truce. NEAR_SUCCESS
-# deliberately fails so the aggression_threshold DC stays meaningful
-# (see plan § Task 81 — "Succès strict").
+# deliberately fails so the aggression_threshold DC stays meaningful.
 _SUCCESS_OUTCOMES: frozenset[RollOutcome] = frozenset({
     RollOutcome.SUCCESS,
     RollOutcome.CRITICAL_SUCCESS,

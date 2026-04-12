@@ -68,8 +68,9 @@ class CombatEndReason(StrEnum):
     """Why a combat encounter ended.
 
     The reason is set on ``CombatState.end_reason`` when :func:`check_combat_end`
-    detects a terminal condition. Task 32 populates ``FLED`` via flee
-    resolution; task 81 populates ``TRUCE`` via social de-escalation.
+    detects a terminal condition. ``FLED`` is populated by the flee resolver in
+    :mod:`bot.action_pipeline`; ``TRUCE`` is populated by
+    :mod:`bot.combat_truce` on social de-escalation success.
     """
 
     VICTORY = "victory"
@@ -121,22 +122,21 @@ class ActionBudget(BaseModel):
 class PhaseTransitionEvent(BaseModel):
     """Queued narrator cue for a boss-NPC phase transition.
 
-    Task 54 populates this list when an NPC's HP drops past one of its
-    ``PhaseTransition`` thresholds. Task 71 (narrator) consumes the list
-    to weave the phase cue into the next round's narration. Declared
-    here so ``CombatState`` carries the field from day one and later
-    tasks don't need to reshape the model.
+    :func:`engine.combat_phases.check_phase_transition` populates this list
+    when an NPC's HP drops past one of its ``PhaseTransition`` thresholds;
+    the narrator consumes the list to weave the phase cue into the next
+    round's narration.
     """
 
     combatant_name: str = Field(min_length=1)
     phase_index: int = Field(default=0, ge=0)
     narrative_cue: str = ""
     consumed: bool = False
-    """True once the dedicated phase-transition narrator path (task 71) has
-    produced a narration for this event. Orthogonal to the mechanical effect,
-    which is applied in :func:`check_phase_transition` as soon as the HP
-    threshold is crossed. Setting ``consumed=True`` prevents double narration
-    on action retries."""
+    """True once the dedicated phase-transition narrator path has produced a
+    narration for this event. Orthogonal to the mechanical effect, which is
+    applied in :func:`engine.combat_phases.check_phase_transition` as soon as
+    the HP threshold is crossed. Setting ``consumed=True`` prevents double
+    narration on action retries."""
 
 
 class Combatant(BaseModel):
@@ -185,17 +185,17 @@ class CombatState(BaseModel):
     by the TurnManager (task 64) so the player sees what the boss did in
     between everyone else's turns."""
     recent_events: list[str] = Field(default_factory=list)
-    """Short narration-hint strings for the last few mechanical happenings
-    (task 70). The bot appends entries via :func:`record_combat_event` after
-    each combat resolution; the narrator reads the tail of the list to ground
-    its prose. Capped at :data:`RECENT_EVENTS_CAP` to bound serialization size.
-    The engine never reads this list — it is purely for downstream narration."""
+    """Short narration-hint strings for the last few mechanical happenings.
+    The bot appends entries via :func:`record_combat_event` after each combat
+    resolution; the narrator reads the tail of the list to ground its prose.
+    Capped at :data:`RECENT_EVENTS_CAP` to bound serialization size. The engine
+    never reads this list — it is purely for downstream narration."""
 
     _finalized: bool = PrivateAttr(default=False)
-    """Task 80 idempotence guard. Set to ``True`` by
-    :func:`bot.combat_end.finalize_combat` on first run. Subsequent calls
-    short-circuit and return a summary reconstructed from the frozen state
-    without re-applying XP, condition cleanup, or other side effects.
+    """Idempotence guard for :func:`bot.combat_end.finalize_combat`. Set to
+    ``True`` on first run. Subsequent calls short-circuit and return a summary
+    reconstructed from the frozen state without re-applying XP, condition
+    cleanup, or other side effects.
 
     Private attribute (not serialized) because the guard only matters for
     the lifetime of a process — a reloaded ``CombatState`` with
@@ -493,9 +493,9 @@ def check_combat_end(state: CombatState) -> CombatEndReason | None:
 
     Victory when every ENEMY combatant is dead OR has fled; defeat when
     every PC combatant is dead OR has fled. Fled/dead combatants count as
-    out of the fight for both sides. Task 32 (flee resolution) and task
-    81 (truce) may override the result explicitly by setting
-    ``state.end_reason`` before calling :func:`finalize_combat`.
+    out of the fight for both sides. The flee and truce paths may override
+    the result explicitly by setting ``state.end_reason`` before calling
+    :func:`bot.combat_end.finalize_combat`.
     """
     players_standing = [
         c for c in state.combatants

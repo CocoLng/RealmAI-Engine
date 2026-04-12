@@ -50,7 +50,7 @@ Helpers dans [tests/scenarios/conftest.py](../../tests/scenarios/conftest.py) : 
 **Fichiers de scénarios** :
 - `test_campaign_lifecycle.py` — start/save/resume/end + persistance joueur
 - `test_combat_scenarios.py` — bootstrap, attaques, death saves, multi-enemies
-- `test_combat_system_e2e.py` — task 82 : gate de fin du chantier combat. Mageta vs Vellus avec boss stat block complet (phase 2, legendary actions), VICTORY/DEFEAT/TRUCE finalisés via `bot.combat_end.finalize_combat`, idempotence double-finalize, non-régression commoner/TALK hors combat/MOVE bloqué. Fixture `vellus_stat_block` dans `conftest.py`.
+- `test_combat_system_e2e.py` — gate de fin du chantier combat. Mageta vs Vellus avec boss stat block complet (phase 2, legendary actions), VICTORY/DEFEAT/TRUCE finalisés via `bot.combat_end.finalize_combat`, idempotence double-finalize, non-régression commoner/TALK hors combat/MOVE bloqué. Fixture `vellus_stat_block` dans `conftest.py`.
 - `test_edge_cases.py` — actions invalides, items manquants
 - `test_persistence_integrity.py` — save → reload → equality
 - `test_free_text_exploration.py` — exploration sans chemins structurés
@@ -58,7 +58,7 @@ Helpers dans [tests/scenarios/conftest.py](../../tests/scenarios/conftest.py) : 
 - `test_trivial_npc_kill.py` — Lot E : one-shot
 - `test_beat_advance.py` — Lot D : progression d'arc
 
-**Note task 80 — ScenarioRunner** : `_finalize_combat` délègue maintenant à `bot.combat_end.finalize_combat` (même code path que le live bot). `assert_not_in_combat` tolère les deux invariants (`combat_state is None` OU `is_active=False`). `attack(target=...)` no-op gracieusement sur cible morte pour que les boucles `for _ in range(10): await scenario.attack(...)` continuent de fonctionner maintenant que le combat_state est préservé post-finalize.
+**Note ScenarioRunner** : `_finalize_combat` délègue maintenant à `bot.combat_end.finalize_combat` (même code path que le live bot). `assert_not_in_combat` tolère les deux invariants (`combat_state is None` OU `is_active=False`). `attack(target=...)` no-op gracieusement sur cible morte pour que les boucles `for _ in range(10): await scenario.attack(...)` continuent de fonctionner maintenant que le combat_state est préservé post-finalize.
 
 ### 3. Tests live Discord via MCP
 

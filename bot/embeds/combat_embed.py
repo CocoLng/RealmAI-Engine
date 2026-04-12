@@ -1,4 +1,4 @@
-"""Combat state embed builder (task 62 — Phase 5-aware refactor).
+"""Combat state embed builder.
 
 Renders the current :class:`~engine.combat.CombatState` as a Discord embed
 suitable for the TurnManager hub: active combatant marker, zone grouping
@@ -37,7 +37,7 @@ _ICON_ENEMY = "👹"
 _ICON_BOSS = "👑"
 _ICON_ZONE = "📍"
 
-# French translation table for the conditions the Phase 5 engine uses most.
+# French translation table for the conditions the combat engine uses most.
 _CONDITION_FR: dict[ConditionType, str] = {
     ConditionType.BLINDED: "Aveuglé",
     ConditionType.CHARMED: "Charmé",

@@ -10,7 +10,7 @@ This module is the bridge: at campaign launch and after every MOVE, we walk
 ``npcs`` table for the campaign. Already-persisted NPCs are left untouched
 (idempotent).
 
-**Tier dispatch (Task 43)** — Hydrated NPCs are no longer always commoners:
+**Tier dispatch** — Hydrated NPCs are no longer always commoners:
   1. Villain (``arc.villain_name == name``) → custom ``arc.villain_stat_block``
      (or ``generic_boss`` fallback if the arc did not produce one).
   2. Explicit ``role`` hint on ``Location.npc_roles`` matching an archetype

@@ -58,7 +58,7 @@ Wrapper `httpx` autour d'`/api/chat`. Une méthode principale : `chat_json(model
 - En combat → `DEFEND`
 - Hors combat → `IMPROVISE` (echo raw text)
 
-**Détection d'intention létale** (Task 40) : le prompt contient une section "Détection d'intention létale" qui demande au LLM de flaguer `is_lethal_intent=True` quand le joueur exprime explicitement une volonté de blesser une créature nommée/visible ("je poignarde Vellus", "boule de feu sur les bandits"). Les intimidations ("je menace le garde") et attaques d'objets ("j'attaque la porte") restent `False`. Consommé par l'action pipeline pour bootstrap automatique d'un combat même quand `action_type ≠ ATTACK`. Rétro-compatible : legacy JSON sans le champ → default `False`.
+**Détection d'intention létale** : le prompt contient une section "Détection d'intention létale" qui demande au LLM de flaguer `is_lethal_intent=True` quand le joueur exprime explicitement une volonté de blesser une créature nommée/visible ("je poignarde Vellus", "boule de feu sur les bandits"). Les intimidations ("je menace le garde") et attaques d'objets ("j'attaque la porte") restent `False`. Consommé par l'action pipeline pour bootstrap automatique d'un combat même quand `action_type ≠ ATTACK`. Rétro-compatible : legacy JSON sans le champ → default `False`.
 
 **Autre méthode** : `disambiguate_entity(candidates, context)` — fallback LLM utilisé par `EntityResolver` uniquement quand Python a renvoyé 0 candidat (Lot B). `temperature 0.1, num_predict 64`. Ne raise jamais.
 
@@ -82,12 +82,12 @@ narrate(
 - Tiers d'outcome guidant le ton
 - **Canon faithfulness** : description de location et items = absolus
 - **Dialogue verbatim** : tout `<NPCName> says: "..."` dans State changes DOIT être reproduit verbatim
-- **Acting character awareness** : le narrateur doit utiliser race/classe/niveau/arme pour ancrer la prose (task 70).
-- **COMBAT ACTIVE — règles spéciales** (task 70) : quand le contexte contient une section `## COMBAT ACTIVE`, le narrateur doit respecter mécaniquement chaque résultat, narrer tour par tour, terminer sur une invitation au tour suivant, garder les HP NPC vagues, et refuser toute évasion passive du combat.
+- **Acting character awareness** : le narrateur doit utiliser race/classe/niveau/arme pour ancrer la prose.
+- **COMBAT ACTIVE — règles spéciales** : quand le contexte contient une section `## COMBAT ACTIVE`, le narrateur doit respecter mécaniquement chaque résultat, narrer tour par tour, terminer sur une invitation au tour suivant, garder les HP NPC vagues, et refuser toute évasion passive du combat.
 
 **Sortie** : `NarrativeResult(narrative, tone)`. Tone pilote la couleur de l'embed.
 
-### `narrator_phase.py` — `narrate_phase_transition` (task 71)
+### `narrator_phase.py` — `narrate_phase_transition`
 
 **Modèle** : `qwen3.5:9b`, temperature 0.85. **Prompt** : `system_narrator_phase.txt` — prompt court et dédié exigeant 3-5 phrases cinématiques, ton sombre, aucune mécanique chiffrée, fin sur menace implicite.
 
@@ -138,8 +138,8 @@ Construit un user message incluant : context + fiche NPC (perso, race, dispositi
 **Prompt** : `system_world_generator.txt` — force :
 - Chaque item DOIT avoir une description explicite (matériau, époque, condition).
 - NPC aliases : variants de genre/nombre/profession/archétype (2-6 par PNJ).
-- **Combat zones** (Task 41) : 2-4 zones nommées par location-combat avec adjacence symétrique, tags tactiques (`cover`, `difficult_terrain`, `elevated`, `hazard`, `obscured`), vide pour locations paisibles.
-- **Combat triggers** (Task 41) : 0-2 ambushes par location, clé = nom d'item/mechanism, payload = `spawn_npcs` + `reveal_narration`, idempotence via `consumed=False`.
+- **Combat zones** : 2-4 zones nommées par location-combat avec adjacence symétrique, tags tactiques (`cover`, `difficult_terrain`, `elevated`, `hazard`, `obscured`), vide pour locations paisibles.
+- **Combat triggers** : 0-2 ambushes par location, clé = nom d'item/mechanism, payload = `spawn_npcs` + `reveal_narration`, idempotence via `consumed=False`.
 
 **Parser résilient** : le parseur construit d'abord les `Zone` individuellement (drop silencieux des entrées invalides), puis tente la construction du `Location` ; si l'adjacence globale casse (`ValidationError` du `_validate_zones_graph`), fallback sur `combat_zones=[]` sans perdre le reste de l'output.
 
@@ -165,7 +165,7 @@ Contraintes enforced par prompt uniquement (pas code) :
 - **Pas de mentions mécaniques** (HP, dés, dégâts) dans le narratif
 - Contenu narratif en français (ou langue demandée)
 - Chaque beat inclut un `completion_trigger` (type + target) et un `on_complete` (BeatEffects : unlock_exits, state_flags, narrative_hint)
-- **Villain stat block mandatory** (Task 42) : le prompt exige un `villain_stat_block` complet (NPCStatBlock : tier=boss, 2-3 signatures thématiques, 3 legendary_actions costs 1/2/3, 1-2 phases). Casing enums strict : `damage_type` TitleCase (`"Slashing"`), `save_ability` UPPERCASE (`"WIS"`), `target_scope`/`kind` lowercase, `condition_name` TitleCase.
+- **Villain stat block mandatory** : le prompt exige un `villain_stat_block` complet (NPCStatBlock : tier=boss, 2-3 signatures thématiques, 3 legendary_actions costs 1/2/3, 1-2 phases). Casing enums strict : `damage_type` TitleCase (`"Slashing"`), `save_ability` UPPERCASE (`"WIS"`), `target_scope`/`kind` lowercase, `condition_name` TitleCase.
 
 **Parser villain_stat_block** : `_resolve_villain_stat_block` valide séparément avant `StoryArc.model_validate`. En cas de `ValidationError` (casing cassé, champs manquants) ou payload absent, fallback sur `get_archetype('generic_boss')` tagué `archetype="generic_boss:<villain_name>"` pour traçabilité. Un arc généré a donc TOUJOURS un `villain_stat_block != None`.
 
@@ -191,7 +191,7 @@ Contraintes enforced par prompt uniquement (pas code) :
 
 **Prompt** : `system_npc_tactician.txt` — schéma JSON strict, règles « pas de dés, jamais », rappel que `target_name` / `signature_name` / `weapon_name` / `move_to_zone` doivent référencer des entités existantes.
 
-**Sortie** : `TacticalDecision` (Pydantic) — `action_type ∈ {attack, signature, move, dodge, disengage}`, `target_name`, `weapon_name`, `signature_name`, `move_to_zone`, `reasoning` (min 5 chars), `legendary_action_name` (réservé task 53, ignoré en MVP).
+**Sortie** : `TacticalDecision` (Pydantic) — `action_type ∈ {attack, signature, move, dodge, disengage}`, `target_name`, `weapon_name`, `signature_name`, `move_to_zone`, `reasoning` (min 5 chars), `legendary_action_name` (réservé pour une extension future, ignoré en MVP).
 
 **Post-validation** : `NPCTactician._validate_references` vérifie que chaque référence (target, signature, weapon) existe réellement dans le `state` / `stat_block` du boss et raise `ValueError` sinon. C'est ce signal que `engine/npc_ai/boss_brain.py::decide_boss_action` utilise pour retry x2 puis fallback sur `decide_elite_action` (profil AGGRESSIVE) — le boss joue toujours, quitte à jouer bête.
 
@@ -221,8 +221,8 @@ SceneContext(
 | Fichier | Contenu |
 |---|---|
 | `system_interpreter.txt` | 15 ActionType (incl. QUESTION), règles de classification, confidence scoring |
-| `system_narrator.txt` | Rôle MJ, canon faithfulness, dialogue verbatim, tiers d'outcome, beat awareness, **acting character awareness + COMBAT ACTIVE rules** (task 70) |
-| `system_narrator_phase.txt` | Narration cinématique courte (3-5 phrases) pour transitions de phase boss, sortie JSON `{"narration"}` (task 71) |
+| `system_narrator.txt` | Rôle MJ, canon faithfulness, dialogue verbatim, tiers d'outcome, beat awareness, **acting character awareness + COMBAT ACTIVE rules** |
+| `system_narrator_phase.txt` | Narration cinématique courte (3-5 phrases) pour transitions de phase boss, sortie JSON `{"narration"}` |
 | `system_npc_agent.txt` | Agency PNJ, règles knowledge/secrets, mécanique disposition |
 | `system_npc_generator.txt` | Génération de fiches PNJ, personnalité spécifique |
 | `system_world_generator.txt` | Générateur de locations, descriptions d'items explicites, aliases NPC |

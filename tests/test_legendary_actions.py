@@ -1,4 +1,4 @@
-"""Tests for Task 53 — legendary actions off-turn.
+"""Tests for off-turn legendary action resolution.
 
 Covers:
 - ``engine.npc_ai.legendary.maybe_spend_legendary_action`` gating +

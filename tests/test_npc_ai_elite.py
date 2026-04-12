@@ -1,4 +1,4 @@
-"""Tests for Task 51 — elite behavior profiles + signature executor.
+"""Tests for elite behavior profiles + signature executor.
 
 Covers ``engine.npc_ai.elite``:
 - ``decide_elite_action`` dispatcher over AGGRESSIVE / DEFENSIVE / SUPPORT /

@@ -105,8 +105,8 @@ def detect_combat_trigger(
         )
 
     # CASE 2 — interact with a scripted combat trigger on the current location.
-    # Task 41 will populate ``Location.combat_triggers``; the hasattr guard keeps
-    # this path dormant until then without failing.
+    # ``Location.combat_triggers`` may be absent on legacy rows; the hasattr guard
+    # keeps this path dormant until then without failing.
     if action.action_type == ActionType.INTERACT:
         location = session.current_location
         if location is None or not hasattr(location, "combat_triggers"):

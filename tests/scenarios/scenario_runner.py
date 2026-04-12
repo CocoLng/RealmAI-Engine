@@ -498,12 +498,12 @@ class ScenarioRunner:
     ) -> EmbedCapture:
         """Start a combat encounter with the given enemies (engine-direct).
 
-        Phase 6 removed the legacy ``CombatCog.start_combat_encounter``
-        entry point — the runner now assembles the party-wide
-        ``CombatState`` via :func:`engine.combat.start_combat` directly so
-        the scenario suite stays decoupled from the Discord UI layer.
-        Player actions are still driven by the runner's explicit
-        attack/defend/flee helpers.
+        The legacy ``CombatCog.start_combat_encounter`` entry point was
+        removed during the combat refactor — the runner now assembles the
+        party-wide ``CombatState`` via :func:`engine.combat.start_combat`
+        directly so the scenario suite stays decoupled from the Discord
+        UI layer. Player actions are still driven by the runner's
+        explicit attack/defend/flee helpers.
         """
         from bot.combat_entry import build_pc_combatants
         from bot.embeds.combat_embed import build_combat_embed
@@ -553,15 +553,15 @@ class ScenarioRunner:
     ) -> EmbedCapture:
         """Resolve an attack action for a player (engine-direct).
 
-        Bypasses the Phase 6 TurnManager and drives
+        Bypasses the TurnManager and drives
         :func:`engine.combat.resolve_attack` directly so multi-step
         scenarios stay fast. Player weapon lookup is done inline against
         the inventory to avoid any dependency on the combat cog.
 
-        Task 80: returns a no-op capture (instead of raising) when combat
-        is already finalised or when the target is dead — lets
+        Returns a no-op capture (instead of raising) when combat is
+        already finalised or when the target is dead — lets
         ``for _ in range(10): await scenario.attack(...)`` loops keep
-        working without tracking ``combat_state`` manually. The new
+        working without tracking ``combat_state`` manually. The current
         invariant preserves ``combat_state`` with ``is_active=False``,
         so the old "break on combat_state is None" pattern no longer
         short-circuits the loop.
@@ -653,14 +653,14 @@ class ScenarioRunner:
         return None
 
     async def _finalize_combat(self, session: GameSession) -> None:
-        """Delegate to :func:`bot.combat_end.finalize_combat` (task 80).
+        """Delegate to :func:`bot.combat_end.finalize_combat`.
 
-        The Phase 8 refactor moved XP / condition cleanup / summary
-        construction into a single engine entry point. The runner defers
-        to it so scenario tests exercise the same code path as the live
-        Discord flow. ``session.combat_state`` is preserved (new
-        invariant — tests assert via ``assert_not_in_combat`` which
-        tolerates both ``None`` and ``is_active=False``).
+        XP / condition cleanup / summary construction all live in a
+        single engine entry point. The runner defers to it so scenario
+        tests exercise the same code path as the live Discord flow.
+        ``session.combat_state`` is preserved (current invariant — tests
+        assert via ``assert_not_in_combat`` which tolerates both
+        ``None`` and ``is_active=False``).
         """
         if session.combat_state is None:
             return
@@ -920,7 +920,7 @@ class ScenarioRunner:
     def assert_not_in_combat(self) -> None:
         """Assert that no combat is active.
 
-        Task 80 preserves ``combat_state`` after finalize for history —
+        ``combat_state`` is preserved after finalize for history —
         so ``is_active=False`` counts as "not in combat" just like
         ``combat_state is None``.
         """

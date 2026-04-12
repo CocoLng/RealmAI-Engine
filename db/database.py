@@ -101,9 +101,9 @@ def _migrate_v2_to_v3(raw: sqlite3.Connection) -> None:
 def _migrate_v3_to_v4(raw: sqlite3.Connection) -> None:
     """V3 → V4: combat system persistence columns.
 
-    - ``combat_zones`` (Task 22 — never migrated, guarded here for safety).
-    - ``combat_triggers`` (Task 41).
-    - ``npc_roles`` (Task 43).
+    - ``combat_zones`` (never migrated, guarded here for safety).
+    - ``combat_triggers``.
+    - ``npc_roles``.
     """
     _add_column_if_missing(raw, "locations", "combat_zones", "JSON DEFAULT '[]'")
     _add_column_if_missing(raw, "locations", "combat_triggers", "JSON DEFAULT '{}'")

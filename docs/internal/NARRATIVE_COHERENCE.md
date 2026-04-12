@@ -32,7 +32,7 @@ Le principe : **le code est seul propriétaire de la vérité mécanique et fact
 - `WorldGenerator.generate()` filtre silencieusement les `item_descriptions` dont la clé ne correspond à aucun item de `items_available`. Empêche une hallucination du LLM de polluer le canon. ⚠ Silencieux — idéalement logger, voir [ISSUES.md](ISSUES.md).
 - `Narrator` attend un JSON strict `{narrative, tone}`. Sur échec de parse, retry + dump sur disque.
 
-### Contexte narrateur en combat (task 70 / 71)
+### Contexte narrateur en combat
 
 Quand un combat est actif, [bot/scene_hydration.py::describe_scene_for_narrator](../../bot/scene_hydration.py) injecte une section `## COMBAT ACTIVE` dans le contexte passé au narrateur. Elle liste le round courant, le combattant de tour, chaque participant (HP exact pour les PCs, tier vague `indemne / légèrement blessé / gravement blessé / à l'article de la mort` pour les NPCs), la zone, les conditions actives, et l'archétype + tier du stat block ennemi. Les trois derniers événements mécaniques sont exposés via `CombatState.recent_events` — une liste cap-12 alimentée par le bot après chaque résolution (`engine.combat.record_combat_event`). Le bloc `## Acting character` est aussi enrichi en toutes circonstances avec race/classe/niveau/arme équipée pour que le narrateur puisse dire « le clerc nain abat sa masse » plutôt que « le joueur attaque ». [ai/prompts/system_narrator.txt](../../ai/prompts/system_narrator.txt) déclare les règles de narration spéciales (miss=miss, tour par tour, ton tendu, HP NPC vagues, invitation au tour suivant).
 
@@ -82,7 +82,7 @@ StoryArc(
     current_beat_index: int,
     villain_name: str,
     villain_motivation: str,
-    villain_stat_block: NPCStatBlock | None,  # Task 42 : stat block complet custom
+    villain_stat_block: NPCStatBlock | None,  # stat block complet custom
 )
 
 StoryBeat(
@@ -99,7 +99,7 @@ StoryBeat(
 )
 ```
 
-L'arc est généré **une fois** à la création de la campagne, avec `think=True` (mode raisonnement étendu de Qwen 3.5) pour la cohérence narrative. Depuis Task 42, le même appel LLM produit aussi le `villain_stat_block` complet du villain (tier boss, 2-3 signatures thématiques, 3 legendary_actions costs 1/2/3, 1-2 phases) — permettant au climax final de jouer des capacités uniques au villain plutôt qu'un generic_boss. Fallback automatique sur `engine.npc_library.get_archetype('generic_boss')` (tagué `generic_boss:<villain_name>`) si l'output LLM casse la validation Pydantic.
+L'arc est généré **une fois** à la création de la campagne, avec `think=True` (mode raisonnement étendu de Qwen 3.5) pour la cohérence narrative. Le même appel LLM produit aussi le `villain_stat_block` complet du villain (tier boss, 2-3 signatures thématiques, 3 legendary_actions costs 1/2/3, 1-2 phases) — permettant au climax final de jouer des capacités uniques au villain plutôt qu'un generic_boss. Fallback automatique sur `engine.npc_library.get_archetype('generic_boss')` (tagué `generic_boss:<villain_name>`) si l'output LLM casse la validation Pydantic.
 
 ### Avancement
 

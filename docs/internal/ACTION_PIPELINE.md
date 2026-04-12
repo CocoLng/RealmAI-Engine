@@ -83,30 +83,30 @@ Checks :
 - Pour `USE_ITEM` : item présent en inventaire.
 - Pour `FLEE` : `can_move()` (pas `RESTRAINED` etc).
 
-### Règles strictes D&D 5e (Task 30)
+### Règles strictes D&D 5e
 
 `validate_action()` applique un garde `SURPRISED` en amont : un combatant surpris ne peut rien faire ce tour (belt-and-suspenders — le turn manager skipe déjà les surpris, mais le validator le renforce). Les types d'action inconnus sont rejetés avec un message clair au lieu de lever une `KeyError`. `validate_attack()` vérifie dans l'ordre : budget action (action déjà utilisée = refus), existence et vie de la cible, absence de tir allié (`CombatSide` identique = refus), arme équipée, puis contrôle de portée par zone (`current_zone`) — une arme de mêlée ne peut pas toucher un combatant dans une zone différente, mais une arme de jet ou à distance (`SIMPLE_RANGED`/`MARTIAL_RANGED`, propriété `THROWN`) passe toutes les zones. `validate_cast_spell()` vérifie maintenant le budget action economy selon le `casting_time` du sort (`ACTION`, `BONUS_ACTION`, `REACTION`). `validate_move_in_combat()` (nouvelle fonction) vérifie les conditions bloquantes (`cannot_move`) et le mouvement restant (`movement_remaining_feet > 0`) avant d'autoriser un déplacement de zone.
 
-### Dispatch pipeline (Task 31)
+### Dispatch pipeline
 
 `_validate()` applique la logique suivante **dans l'ordre** :
 
 1. **MOVE → FLEE en combat actif** : si un combat est actif et l'action est `MOVE`, l'action est silencieusement convertie en `FLEE`. La destination (`target_name`) est sauvegardée dans `_pending_flee_destination` pour être consommée par le résolveur de fuite. Le dispatcher continue vers les validateurs combat.
 2. **Détection de trigger & bootstrap** : si aucun combat actif, `detect_combat_trigger(action, session)` est appelé. S'il retourne un `CombatTrigger`, `enter_combat(session, trigger)` assemble le `CombatState` party-wide, puis `start_combat(combatants, trigger)` roule l'initiative et applique les conditions `SURPRISED` 5e. Le `CombatState` résultant est posé sur `self.combat_state` et sur `session.combat_state`. Un tuple `(combat_state, trigger)` est aussi stocké dans `_pending_combat_start_embed` pour que l'appelant (`ActionHandlerCog`) poste l'embed de début de combat avant la narration.
-3. **Dispatch combat** : si un combat est actif, les actions `EXPLORATION_ACTION_TYPES` passent par `validate_exploration_action(eng_action, combat_state=self.combat_state)` (refusées sauf `LOOK`/`QUESTION`/`IMPROVISE`). **Cas spécial task 81** : `TALK` en combat est délégué à `validate_truce_attempt` (allié, mindless, sans stat_block, cible absente → rejetés) — c'est la porte d'entrée de la résolution sociale. Les autres actions passent par `validate_action(eng_action, self.combat_state)`.
+3. **Dispatch combat** : si un combat est actif, les actions `EXPLORATION_ACTION_TYPES` passent par `validate_exploration_action(eng_action, combat_state=self.combat_state)` (refusées sauf `LOOK`/`QUESTION`/`IMPROVISE`). **Cas spécial TRUCE** : `TALK` en combat est délégué à `validate_truce_attempt` (allié, mindless, sans stat_block, cible absente → rejetés) — c'est la porte d'entrée de la résolution sociale. Les autres actions passent par `validate_action(eng_action, self.combat_state)`.
 4. **Chemin exploration / trivial kill** : si aucun combat actif, les actions exploration passent par `validate_exploration_action(eng_action, combat_state=None)`. Une `ATTACK` hors combat sur un NPC est testée contre `_should_trivial_resolve(npc)` — si trivial, `_trivial_kill()` est appelé et `ValidationResult(is_valid=True)` est retourné directement. Sinon, une erreur `"'attack' nécessite un combat actif."` est retournée.
 
-### Champs de pipeline ajoutés (Task 31)
+### Champs de pipeline ajoutés
 
 | Champ | Type | Usage |
 |---|---|---|
 | `_pending_flee_destination` | `str \| None` | Zone cible d'un MOVE auto-converti en FLEE ; consommé par `_resolve_flee` |
 | `_pending_combat_start_embed` | `tuple[CombatState, CombatTrigger] \| None` | Lu par `ActionHandlerCog` pour poster l'embed de début de combat |
-| `_pending_dice_embeds` | `list[Any]` | Résultats de jets de dés à afficher (task 60) ; produit par `_resolve_flee` et les résolveurs futurs |
+| `_pending_dice_embeds` | `list[Any]` | Résultats de jets de dés à afficher ; produit par `_resolve_flee` et les résolveurs futurs |
 
 ### Cas spéciaux (Lots)
 
-- **Lot C — Combat bootstrap** : via `detect_combat_trigger` + `enter_combat` + `start_combat` (Task 31). Les NPCs combat-worthies (`stat_block` non nul, `disposition == HOSTILE`, ou `max_hp >= 10` / `ac > 12`) déclenchent un combat party-wide avec initiative et surprise 5e. Les NPCs faibles/pacifiques tombent dans le Lot E.
+- **Lot C — Combat bootstrap** : via `detect_combat_trigger` + `enter_combat` + `start_combat`. Les NPCs combat-worthies (`stat_block` non nul, `disposition == HOSTILE`, ou `max_hp >= 10` / `ac > 12`) déclenchent un combat party-wide avec initiative et surprise 5e. Les NPCs faibles/pacifiques tombent dans le Lot E.
 - **Lot E — Trivial resolve** : si PNJ pacifique (`disposition ≥ NEUTRAL`) et fragile (`max_hp < TRIVIAL_RESOLVE_HP_THRESHOLD`, =10), appelle `engine.combat.trivial_resolve()` qui résout l'attaque en one-shot sans démarrer un `CombatState` complet. Flip l'état `is_alive=False` du PNJ.
 - **Hostile witnessing** : si un PNJ ami voit un kill gratuit, il passe `HOSTILE` (logique de propagation simpliste, voir `bot/action_pipeline.py`).
 
@@ -117,10 +117,10 @@ Checks :
 | Déclencheur | `CombatTriggerKind` | Surprise | Source |
 |---|---|---|---|
 | `ATTACK` sur NPC combat-worthy (`stat_block` ou HP/AC seuil) | `PLAYER_ATTACK` | `PLAYERS` si cible NEUTRAL/FRIENDLY, `BOTH_READY` si HOSTILE/UNFRIENDLY | `detect_combat_trigger` — path ATTACK |
-| `IMPROVISE` flaggé `is_lethal_intent=True` (task 40) | `LETHAL_INTENT` | `PLAYERS` | `detect_combat_trigger` — path IMPROVISE |
-| `INTERACT` sur `Location.combat_triggers[target]` (task 41) | `AMBUSH` | `NPCS` (party surprise) | `detect_combat_trigger` — path INTERACT (dormant : `hasattr` guard) |
-| `TALK` dépassant l'`aggression_threshold` d'un PNJ (task 81) | `PROVOCATION` | décidé par task 81 | Reserved |
-| Beat scripté combat au lancement/advancement | `SCRIPTED_BEAT` | décidé par le générateur d'arc | Called from `bot/campaign_launcher.py` (task 41+) |
+| `IMPROVISE` flaggé `is_lethal_intent=True` | `LETHAL_INTENT` | `PLAYERS` | `detect_combat_trigger` — path IMPROVISE |
+| `INTERACT` sur `Location.combat_triggers[target]` | `AMBUSH` | `NPCS` (party surprise) | `detect_combat_trigger` — path INTERACT (dormant : `hasattr` guard) |
+| `TALK` dépassant l'`aggression_threshold` d'un PNJ | `PROVOCATION` | décidé par le resolver TRUCE | Reserved |
+| Beat scripté combat au lancement/advancement | `SCRIPTED_BEAT` | décidé par le générateur d'arc | Called from `bot/campaign_launcher.py` |
 
 `enter_combat(session, trigger)` assemble un `CombatState` party-wide (tous les PCs + les enemies nommés dans `trigger.enemy_names`, résolus via `session.npcs`) et le stocke sur `session.combat_state`. Raise `ValueError` si aucun enemy trouvable. L'initiative et la condition `SURPRISED` sont appliquées par `engine.combat.start_combat(combatants, trigger)` — pas par `enter_combat`. `CombatTrigger` / `CombatTriggerKind` / `InitiativeSide` vivent dans `engine/combat_trigger.py` pour que `engine/` puisse les importer sans violer la règle « engine ne dépend jamais de bot/ai ».
 
@@ -136,7 +136,7 @@ Dispatch par `action_type` :
 |---|---|
 | `LOOK` | Description textuelle (depuis `describe_scene_for_narrator()`). Pas de mutation. |
 | `SEARCH` | Révèle un détail. Pas de mutation (les items sont déjà dans `location.items_available`). |
-| `TALK` | **Hors combat** : `_resolve_talk()` : appelle `NPCAgent.respond(npc, player_input, context)` → `NPCResponse(dialogue, disposition_change, revealed_info)`. L'action pipeline applique `npc.disposition += change` et persiste. **En combat (task 81)** : `_resolve_talk_in_combat()` → `bot.combat_truce.attempt_truce` (check CHA + 2 prof vs `aggression_threshold`, SUCCESS/CRIT uniquement), sur succès appelle `bot.combat_end.finalize_combat(session, CombatEndReason.TRUCE)` et queue le dice embed. Auto-refus mindless et boss en phase 2 (triggered ≤50% HP). |
+| `TALK` | **Hors combat** : `_resolve_talk()` : appelle `NPCAgent.respond(npc, player_input, context)` → `NPCResponse(dialogue, disposition_change, revealed_info)`. L'action pipeline applique `npc.disposition += change` et persiste. **En combat** : `_resolve_talk_in_combat()` → `bot.combat_truce.attempt_truce` (check CHA + 2 prof vs `aggression_threshold`, SUCCESS/CRIT uniquement), sur succès appelle `bot.combat_end.finalize_combat(session, CombatEndReason.TRUCE)` et queue le dice embed. Auto-refus mindless et boss en phase 2 (triggered ≤50% HP). |
 | `MOVE` | `change_location(session, new_location_name)` — si nouvelle location inconnue, `WorldGenerator.generate()` en live (c'est le cas frequent en exploration). Update `session.current_location` + `campaign.current_location` + persistance. `hydrate_scene()` pour les nouveaux PNJs. |
 | `PICKUP` | `take_scene_item(location, item_name, inventory)` — retire de `items_available`, ajoute à `inventory.items`. Update DB. |
 | `USE_ITEM` | Consommation (potion → healing, scroll → spell). |
@@ -151,7 +151,7 @@ Dispatch par `action_type` :
 
 `PublicEffects` inclut uniquement les changements **visibles au joueur** : `hp_delta`, `items_gained/lost`, `gold_delta`, `location_change`, `xp_gained`, `level_up`. Pas de disposition interne, pas de rolls cachés. Render en footer via `to_footer_text()`.
 
-### Fin de combat — 5 conditions centralisées (Task 80)
+### Fin de combat — 5 conditions centralisées
 
 Toutes les conditions de fin passent maintenant par un point d'entrée unique : **`bot.combat_end.finalize_combat(session, reason) -> CombatEndSummary`**. Ce helper construit le summary (survivors/killed/fled, loot MVP, XP par tier, level-up flags), applique l'XP aux survivants PC, purge `SURPRISED`/`CONCENTRATING`, et pose le flag `_finalized` (PrivateAttr sur `CombatState`) pour être **idempotent** — les appelants pipeline et TurnManager peuvent l'appeler tous les deux sans doublonner les effets.
 
@@ -161,9 +161,9 @@ Toutes les conditions de fin passent maintenant par un point d'entrée unique : 
 | **DEFEAT** | `check_combat_end` → tous PCs morts | `TurnManager._finalize` après `advance_turn` | `DEFEAT` |
 | **FLED** | `check_combat_end` → tous PCs alive ont `fled=True` | `ActionPipeline._resolve_flee` (sur détection) + ré-appel idempotent par `TurnManager._finalize` | `FLED` |
 | **TRUCE** | `bot.combat_truce.attempt_truce` succès (CHA SUCCESS+) | `ActionPipeline._resolve_talk_in_combat` | `TRUCE` |
-| ~~TIMEOUT~~ | **Pas implémenté — hors scope**. Discord tolère les déconnexions longues, le combat reste reprenable tant qu'on ne `/end_campaign` pas. Le watcher 5 min auto-DEFEND de task 64 est un filet AFK court, pas une fin. La persistance post-tour (task 80.7) garantit la reprise. |
+| ~~TIMEOUT~~ | **Pas implémenté — hors scope**. Discord tolère les déconnexions longues, le combat reste reprenable tant qu'on ne `/end_campaign` pas. Le watcher 5 min auto-DEFEND de la TurnManager est un filet AFK court, pas une fin. La persistance post-tour garantit la reprise. |
 
-**Task 80.7 — Persistance combat** : `TurnManager` reçoit le `db_factory` (via `CombatCog.build_turn_manager`) et appelle `_persist_state` (async, thread-offloaded `persist_session`) après `advance_turn` (couvre les tours NPC qui ne passent pas par le pipeline) et après `_finalize` (capture l'état terminal). `ActionPipeline` garde son auto-checkpoint pour les actions PC. Résultat : après chaque tour et à la fin du combat, `campaigns.combat_state_json` reflète l'état courant.
+**Persistance combat** : `TurnManager` reçoit le `db_factory` (via `CombatCog.build_turn_manager`) et appelle `_persist_state` (async, thread-offloaded `persist_session`) après `advance_turn` (couvre les tours NPC qui ne passent pas par le pipeline) et après `_finalize` (capture l'état terminal). `ActionPipeline` garde son auto-checkpoint pour les actions PC. Résultat : après chaque tour et à la fin du combat, `campaigns.combat_state_json` reflète l'état courant.
 
 ### Phase 4b — BEAT COMPLETION CHECK
 

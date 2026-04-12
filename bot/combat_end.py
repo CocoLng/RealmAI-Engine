@@ -1,7 +1,7 @@
-"""Task 80 — Centralised end-of-combat finalisation.
+"""Centralised end-of-combat finalisation.
 
 Single entry point called by :class:`bot.combat_turn_manager.TurnManager`
-and :meth:`bot.action_pipeline.ActionPipeline._resolve_flee` (and task 81's
+and :meth:`bot.action_pipeline.ActionPipeline._resolve_flee` (and the
 truce path) to wrap up a combat encounter: build a structured summary,
 apply XP to survivors, purge transient conditions, and freeze the state
 for the hub UI to render.

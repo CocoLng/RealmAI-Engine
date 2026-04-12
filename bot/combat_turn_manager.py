@@ -1,4 +1,4 @@
-"""Combat TurnManager (task 64).
+"""Combat TurnManager.
 
 Drives the turn lifecycle of a combat encounter inside a Discord channel:
 
@@ -12,15 +12,14 @@ Drives the turn lifecycle of a combat encounter inside a Discord channel:
   elite → behavior profile, boss → LLM tactician with scripted fallback),
   executes the plan, posts a dice embed + compact summary, and advances
   the turn.
-- On combat end, edits the hub to a "Combat terminé" state, posts a small
-  XP stub (ported from legacy ``bot/cogs/combat.py._end_combat`` — Phase 8
-  task 80 will replace it with the full end-of-combat flow), clears
-  ``session.combat_turn_manager``.
+- On combat end, delegates to :func:`bot.combat_end.finalize_combat` for
+  XP, loot, and condition cleanup, edits the hub to a terminal state, and
+  clears ``session.combat_turn_manager``.
 
 The TurnManager does **not** decide dice or mutate HP itself — every
 mechanical change goes through :class:`bot.action_pipeline.ActionPipeline`
-or through the scripted NPC executor. That keeps Phase 6 honest about the
-golden rule: the LLM narrates, the engine arbitrates.
+or through the scripted NPC executor. That keeps the golden rule honest:
+the LLM narrates, the engine arbitrates.
 """
 
 from __future__ import annotations
@@ -110,11 +109,11 @@ class TurnManager:
         self.channel = channel
         self.session = session
         self.pipeline_factory = pipeline_factory
-        # Task 80.7 — needed for post-turn auto-checkpoint so NPC turns
-        # and the post-``advance_turn`` state make it to disk. Without this,
-        # a player disconnecting mid-combat would reload on a stale
-        # snapshot that doesn't include the latest NPC action or turn
-        # rotation. ``None`` disables persistence (tests / dev flows).
+        # Needed for post-turn auto-checkpoint so NPC turns and the
+        # post-``advance_turn`` state make it to disk. Without this, a
+        # player disconnecting mid-combat would reload on a stale snapshot
+        # that doesn't include the latest NPC action or turn rotation.
+        # ``None`` disables persistence (tests / dev flows).
         self.db_factory = db_factory
         self.hub_message: discord.Message | None = None
         self.pending_timeout: asyncio.Task[None] | None = None
@@ -163,9 +162,9 @@ class TurnManager:
             await self._finalize()
             return
 
-        # Task 80.7 — persist post-advance_turn state so a disconnect
-        # between turns doesn't lose the rotation / condition ticks /
-        # phase transitions that ``advance_turn`` just applied.
+        # Persist post-advance_turn state so a disconnect between turns
+        # doesn't lose the rotation / condition ticks / phase transitions
+        # that ``advance_turn`` just applied.
         await self._persist_state()
 
         current = get_current_combatant(state)
@@ -299,7 +298,7 @@ class TurnManager:
         if dice_embed is not None:
             await self._safe_send(embed=dice_embed)
 
-        # Task 70 — expose the NPC's action to the narrator via recent_events.
+        # Expose the NPC's action to the narrator via recent_events.
         if summary:
             record_combat_event(state, summary)
 
@@ -686,13 +685,12 @@ class TurnManager:
                 logger.debug("TurnManager hub freeze failed: %s", exc)
 
         self.session.combat_turn_manager = None
-        # Task 80.7 — persist the finalised combat state so reload
-        # after combat ends doesn't resurrect the encounter with stale
-        # ``is_active=True``.
+        # Persist the finalised combat state so reload after combat ends
+        # doesn't resurrect the encounter with stale ``is_active=True``.
         await self._persist_state()
 
     async def _persist_state(self) -> None:
-        """Task 80.7 — post-turn auto-checkpoint for the combat lifecycle.
+        """Post-turn auto-checkpoint for the combat lifecycle.
 
         Off-loaded to a thread because :func:`bot.persistence.persist_session`
         is synchronous SQLAlchemy. ``db_factory=None`` (tests / dev) makes
@@ -770,10 +768,10 @@ class TurnManager:
             combat_state=self.session.combat_state,
             inventory=inventory,
             session=self.session,
-            # Task 80.7 — pipeline-level auto-checkpoint after every
-            # button action. The TurnManager also calls ``_persist_state``
-            # at the end of ``on_action_resolved`` for the post-advance
-            # snapshot, so combat survives disconnects cleanly.
+            # Pipeline-level auto-checkpoint after every button action.
+            # The TurnManager also calls ``_persist_state`` at the end of
+            # ``on_action_resolved`` for the post-advance snapshot, so
+            # combat survives disconnects cleanly.
             db_factory=self.db_factory,
         )
 

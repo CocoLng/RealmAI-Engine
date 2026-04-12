@@ -368,7 +368,7 @@ class ActionPipeline:
         await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)
         outcome = await self._resolve_mechanics(interpreted)
 
-        # Task 70 — record a short narration hint for the narrator context.
+        # Record a short narration hint for the narrator context.
         # Only in active combat: the narrator reads the tail of this list from
         # the COMBAT ACTIVE section of the scene prompt. The engine never touches
         # the list; the cap is enforced by ``record_combat_event`` itself.
@@ -923,7 +923,7 @@ class ActionPipeline:
             return MechanicsOutcome(summary=summary, player_intent=intent)
 
         if at == ActionType.TALK:
-            # Task 81 — TALK in combat is the TRUCE path (CHA check vs
+            # TALK in combat is the TRUCE path (CHA check vs
             # aggression_threshold). Out of combat, it's the usual NPC
             # dialogue flow.
             if self.combat_state is not None and self.combat_state.is_active:
@@ -1044,14 +1044,14 @@ class ActionPipeline:
                 f"(DEX {check.total} vs DC 12) et reste bloqué en combat."
             )
 
-        # Store dice roll for the caller to display as an embed (task 60)
+        # Store dice roll for the caller to display as an embed.
         self._pending_dice_embeds.append(("flee_check", check, action.actor_name))
 
         # Check if combat ends (all alive PCs have fled)
         end = check_combat_end(self.combat_state)
         if end == CombatEndReason.FLED:
-            # Task 80 — centralised finalisation. Local import to avoid
-            # the bot.combat_end → ActionPipeline import cycle.
+            # Centralised finalisation. Local import to avoid the
+            # bot.combat_end → ActionPipeline import cycle.
             if self.session is not None:
                 from bot.combat_end import finalize_combat
                 finalize_combat(self.session, CombatEndReason.FLED)
@@ -1405,7 +1405,7 @@ class ActionPipeline:
     def _resolve_talk_in_combat(
         self, action: InterpretedAction,
     ) -> MechanicsOutcome:
-        """Task 81 — route a TALK action in combat to the TRUCE resolver.
+        """Route a TALK action in combat to the TRUCE resolver.
 
         Runs :func:`bot.combat_truce.attempt_truce` which rolls the CHA
         check and, on success, marks every enemy as fled. The result is
@@ -1415,7 +1415,7 @@ class ActionPipeline:
 
         The dice embed is queued on ``_pending_dice_embeds`` so the
         caller (ActionHandlerCog / TurnManager) can render the check in
-        the existing task 60 dice embed infrastructure.
+        the existing dice embed infrastructure.
         """
         from bot.combat_truce import attempt_truce
         from engine.combat import CombatEndReason

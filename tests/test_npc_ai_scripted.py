@@ -1,4 +1,4 @@
-"""Tests for Task 50 — scripted minion AI.
+"""Tests for scripted minion AI.
 
 Covers the ``engine.npc_ai.scripted`` module: ``NPCActionPlan`` model,
 ``decide_minion_action`` heuristic brain, ``execute_action_plan`` resolver.

@@ -1,6 +1,6 @@
-"""Task 82 — End-to-end combat scenario (Mageta vs Vellus le Mentisseur).
+"""End-to-end combat scenario (Mageta vs Vellus le Mentisseur).
 
-Gate-of-completion test for the Phase 8 chantier. Exercises the full
+Gate-of-completion test for the combat system. Exercises the full
 combat chain from bootstrap to finalisation:
 
 - Bootstrap a combat against a realistic boss stat block.
@@ -384,8 +384,8 @@ class TestNonRegression:
         self,
         scenario: ScenarioRunner,
     ) -> None:
-        """Phase 0 bugfix still holds: one-shot on a weak foe leaves
-        the combat loop intact."""
+        """Non-regression: one-shot on a weak foe leaves the combat
+        loop intact."""
         await scenario.start_campaign(theme="test", players=1)
         await scenario.add_player(
             "Guerrier", race="Human", class_="Fighter", player_idx=0,
@@ -409,7 +409,8 @@ class TestNonRegression:
         self,
         scenario: ScenarioRunner,
     ) -> None:
-        """Task 81 doesn't break the out-of-combat TALK dispatch."""
+        """The in-combat TRUCE path doesn't break the out-of-combat
+        TALK dispatch."""
         from engine.validators import (
             Action,
             ActionType,
@@ -465,10 +466,10 @@ class TestFinalizeIdempotenceE2E:
         scenario: ScenarioRunner,
         vellus_stat_block: NPCStatBlock,
     ) -> None:
-        """Task 80 invariant: the pipeline may call finalize_combat
-        (via _resolve_flee / _resolve_talk_in_combat) *and* the
-        TurnManager will call it again from _finalize. The second call
-        must not double the XP."""
+        """finalize_combat invariant: the pipeline may call
+        finalize_combat (via _resolve_flee / _resolve_talk_in_combat)
+        *and* the TurnManager will call it again from _finalize. The
+        second call must not double the XP."""
         await _mageta_vs_vellus(scenario, vellus_stat_block)
         state = scenario.session.combat_state
         vellus = _find_vellus(state)

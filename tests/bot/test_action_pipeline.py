@@ -1058,7 +1058,7 @@ class TestBeatCompletion:
 
 
 # ---------------------------------------------------------------------------
-# Task 00 — Phase 0 bugfix: villain/combat-beat NPCs must not be trivially killed
+# Villain / combat-beat NPCs must not be trivially killed
 # ---------------------------------------------------------------------------
 
 
@@ -1119,7 +1119,7 @@ def _arc_with_villain(
 
 
 class TestTrivialResolveGuards:
-    """Phase 0 — Task 00: _should_trivial_resolve must refuse story-critical NPCs.
+    """_should_trivial_resolve must refuse story-critical NPCs.
 
     Covers the regression observed in the Mageta campaign where `(Attack)
     j'attaque vellus` one-shot the villain because scene_hydration had
@@ -1329,20 +1329,20 @@ class TestTrivialResolveGuards:
 
 
 # ---------------------------------------------------------------------------
-# Task 01 — Phase 0 bugfix: MOVE rejected while a combat is active
+# MOVE rejected while a combat is active
 # ---------------------------------------------------------------------------
 
 
 class TestExplorationBlockedInCombat:
-    """Phase 0 — Task 01: ActionPipeline._validate must forward
-    self.combat_state to validate_exploration_action so that MOVE/TALK/etc.
-    are refused during an active combat."""
+    """ActionPipeline._validate must forward self.combat_state to
+    validate_exploration_action so that MOVE/TALK/etc. are refused during
+    an active combat."""
 
     def test_pipeline_autoconverts_move_to_flee_when_combat_active(
         self,
         cathedral: Location,
     ) -> None:
-        """Task 31: MOVE in active combat is auto-converted to FLEE instead of
+        """MOVE in active combat is auto-converted to FLEE instead of
         being rejected. The validation succeeds (FLEE is legal for an able
         combatant) and _pending_flee_destination captures the target zone."""
         from engine.combat import (
@@ -1490,7 +1490,7 @@ class TestExplorationBlockedInCombat:
 
 
 # ---------------------------------------------------------------------------
-# Task 31 — Combat dispatch
+# Combat dispatch
 # ---------------------------------------------------------------------------
 
 
@@ -1682,12 +1682,12 @@ def test_pipeline_detects_lethal_intent_and_bootstraps() -> None:
         location=None, npcs={}, actor_name="Héros",
         combat_state=None, session=session,
     )
-    # Simulate Task 40 flag: lethal intent on an IMPROVISE action
+    # Simulate the lethal-intent flag on an IMPROVISE action.
     action = InterpretedAction(
         action_type=ActionType.IMPROVISE, actor_name="Héros",
         target_name="Goblin", raw_input="je lui enfonce ma lame",
     )
-    object.__setattr__(action, "is_lethal_intent", True)  # forward-compatibility shim (Task 40)
+    object.__setattr__(action, "is_lethal_intent", True)  # forward-compatibility shim
 
     with (
         patch("bot.action_pipeline.detect_combat_trigger", return_value=fake_trigger),
@@ -1783,7 +1783,7 @@ def test_pipeline_trivial_kill_blocked_for_villain() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 32 — Flee resolution
+# Flee resolution
 # ---------------------------------------------------------------------------
 
 
@@ -1906,8 +1906,8 @@ async def test_flee_applies_stored_destination_on_full_escape() -> None:
     pipeline, hero = _make_active_pipeline_with_hero()
     pipeline._pending_flee_destination = "forêt"
     pipeline.db_factory = MagicMock()
-    # Task 80: finalize_combat reads session.combat_state, which in prod
-    # is the same object as pipeline.combat_state. Link them in the mock.
+    # finalize_combat reads session.combat_state, which in prod is the
+    # same object as pipeline.combat_state. Link them in the mock.
     pipeline.session = MagicMock()
     pipeline.session.combat_state = pipeline.combat_state
 
@@ -1934,7 +1934,7 @@ async def test_flee_applies_stored_destination_on_full_escape() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 7 — task 70 — combat event recording hook
+# Combat event recording hook
 # ---------------------------------------------------------------------------
 
 

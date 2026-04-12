@@ -461,7 +461,7 @@ def validate_move_in_combat(action: Action, state: CombatState) -> ValidationRes
 def validate_truce_attempt(
     action: Action, state: CombatState,
 ) -> ValidationResult:
-    """Task 81 — validate a social TRUCE attempt (TALK in combat).
+    """Validate a social TRUCE attempt (TALK in combat).
 
     TALK in combat is not a normal exploration dialogue: it's a check
     against the target NPC's ``aggression_threshold`` to end the
@@ -571,7 +571,7 @@ def validate_exploration_action(
     exploration actions are refused: only informational/catch-all actions
     (LOOK, QUESTION, IMPROVISE) remain permitted off-turn. Players must use
     Flee (combat path) to escape — MOVE/TALK/SEARCH/INTERACT/PICKUP are
-    blocked with a clear in-game message. This is the Phase 0 safety net;
+    blocked with a clear in-game message. This is a safety net; the
     finer-grained action economy lives in the combat validators.
 
     Combat action types are rejected — route them through validate_action().
@@ -585,10 +585,10 @@ def validate_exploration_action(
         )
 
     if combat_state is not None and combat_state.is_active:
-        # Task 81 — TALK in combat is the social de-escalation (TRUCE)
-        # path. The target must be a non-mindless, non-ally enemy with a
-        # stat block. ``validate_truce_attempt`` does the full check; the
-        # pipeline later dispatches to ``bot.combat_truce.attempt_truce``.
+        # TALK in combat is the social de-escalation (TRUCE) path. The
+        # target must be a non-mindless, non-ally enemy with a stat block.
+        # ``validate_truce_attempt`` does the full check; the pipeline
+        # later dispatches to ``bot.combat_truce.attempt_truce``.
         if action.action_type == ActionType.TALK:
             return validate_truce_attempt(action, combat_state)
         if action.action_type not in _EXPLORATION_ALLOWED_IN_COMBAT:

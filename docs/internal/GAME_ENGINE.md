@@ -173,11 +173,11 @@ Module principal du combat — couvre initiative (3 cas surprise), turn manageme
 
 ### Modèles
 
-- `Combatant(name, side, character, inventory, spellcaster, initiative, conditions, death_saves, is_alive, stat_block, fled, current_zone, action_budget, legendary_points_remaining, phase_save_bonus)` — les derniers champs (stat_block, fled, current_zone, action_budget, legendary_points_remaining, phase_save_bonus) ont été ajoutés en Phase 2 Task 22 pour que les tâches aval (32, 53, 54) n'aient pas à reshape le modèle.
-- `CombatState(combat_id, combatants, round_number, current_turn_index, is_active, end_reason, pending_phase_narrations)` — `combat_id` est un UUID généré auto, `end_reason` (StrEnum `CombatEndReason`) est renseigné par `check_combat_end`/`advance_turn`, `pending_phase_narrations: list[PhaseTransitionEvent]` est la queue consommée par le narrateur (tâche 71). Task 80 ajoute un `_finalized: bool` en `PrivateAttr` (non sérialisé) utilisé comme verrou d'idempotence par `bot.combat_end.finalize_combat`.
+- `Combatant(name, side, character, inventory, spellcaster, initiative, conditions, death_saves, is_alive, stat_block, fled, current_zone, action_budget, legendary_points_remaining, phase_save_bonus)` — le bloc de champs `stat_block`/`fled`/`current_zone`/`action_budget`/`legendary_points_remaining`/`phase_save_bonus` porte toute la logique combat moderne (zones, action economy, legendary actions, phase transitions).
+- `CombatState(combat_id, combatants, round_number, current_turn_index, is_active, end_reason, pending_phase_narrations)` — `combat_id` est un UUID généré auto, `end_reason` (StrEnum `CombatEndReason`) est renseigné par `check_combat_end`/`advance_turn`, `pending_phase_narrations: list[PhaseTransitionEvent]` est la queue consommée par le narrateur. Un `_finalized: bool` en `PrivateAttr` (non sérialisé) sert de verrou d'idempotence pour `bot.combat_end.finalize_combat`.
 - `ActionBudget(movement_remaining_feet, action_used, bonus_action_used, reaction_used_this_round, disengaged_this_turn)` — budget 5e par tour. `reset_for_new_turn(speed_feet)` refill Move/Action/Bonus sans toucher à la Reaction (persiste entre tours, reset au wrap de round).
 - `CombatEndReason` StrEnum : `VICTORY`, `DEFEAT`, `FLED`, `TRUCE`.
-- `PhaseTransitionEvent(combatant_name, phase_index, narrative_cue)` — événement queuing pour la tâche 54/71.
+- `PhaseTransitionEvent(combatant_name, phase_index, narrative_cue)` — événement queuing pour les transitions de phase boss.
 - `AttackResult`, `SpellCastResult`, `DeathSaveResult`, `TrivialResolveResult` (inchangés).
 
 ### Initiative — 3 cas de surprise
@@ -196,9 +196,9 @@ La condition `SURPRISED` est consommée par `advance_turn` à la **fin** du prem
 
 `advance_turn(state)` fait dans l'ordre : (1) tick conditions + consume SURPRISED sur le combattant sortant, (2) walk forward à l'index suivant en skippant les morts **ET** les `fled=True`, (3) si wrap → `round_number += 1` et reset `reaction_used_this_round` pour tous, (4) reset `action_budget` du nouveau combattant via `reset_for_new_turn(speed)`, (5) `check_combat_end` → set `is_active=False` + `end_reason` si terminal.
 
-`check_combat_end(state)` retourne la raison de fin ou `None` : VICTORY si aucun ENEMY debout (non mort, non fui), DEFEAT si aucun PC debout, FLED si **tous** les PCs ont `fled=True` (distinction vs DEFEAT), mutual wipe → DEFEAT. TRUCE est posé explicitement par `bot.combat_truce.attempt_truce` + `finalize_combat(session, CombatEndReason.TRUCE)` (task 81). `is_combat_over(state)` reste un wrapper booléen pour la rétro-compatibilité.
+`check_combat_end(state)` retourne la raison de fin ou `None` : VICTORY si aucun ENEMY debout (non mort, non fui), DEFEAT si aucun PC debout, FLED si **tous** les PCs ont `fled=True` (distinction vs DEFEAT), mutual wipe → DEFEAT. TRUCE est posé explicitement par `bot.combat_truce.attempt_truce` + `finalize_combat(session, CombatEndReason.TRUCE)`. `is_combat_over(state)` reste un wrapper booléen pour la rétro-compatibilité.
 
-### Fin de combat — `bot.combat_end.finalize_combat` (task 80)
+### Fin de combat — `bot.combat_end.finalize_combat`
 
 Point d'entrée unique (dans `bot/`, pas `engine/`, parce qu'il lit `GameSession`) qui remplace les cleanups ad-hoc éparpillés entre `TurnManager._finalize` et `ActionPipeline._resolve_flee`. Signature : `finalize_combat(session: GameSession, reason: CombatEndReason) -> CombatEndSummary`.
 
@@ -207,13 +207,13 @@ Point d'entrée unique (dans `bot/`, pas `engine/`, parce qu'il lit `GameSession
 - **Loot MVP** : pour chaque ennemi tombé avec un `stat_block`, son `attacks[0].name` devient un trophée (placeholder ; tables de loot sophistiquées hors scope).
 - **Cleanup** : retire `SURPRISED` + `CONCENTRATING` sur tous les combattants vivants (via `remove_condition`). Préserve POISONED/PRONE/FRIGHTENED/etc. qui persistent légitimement hors combat.
 - **State preservation** : `session.combat_state` reste set après finalize (pour inspection, tests, historique). `is_active=False` et `end_reason` posés. Le reset à `None` arrive à la prochaine entrée en combat via `bot/combat_entry.py`.
-- **Pas de timeout** : Discord tolère les déconnexions longues, le combat doit être reprenable. Seul le watcher 5 min auto-DEFEND de task 64 subsiste (filet AFK court, orthogonal à la fin de combat). Pas d'enum `TIMEOUT`. La persistance post-tour (task 80.7 — `TurnManager._persist_state` appelé après `advance_turn` et `_finalize`) est la garantie de reprise.
+- **Pas de timeout** : Discord tolère les déconnexions longues, le combat doit être reprenable. Seul le watcher 5 min auto-DEFEND de la TurnManager subsiste (filet AFK court, orthogonal à la fin de combat). Pas d'enum `TIMEOUT`. La persistance post-tour (`TurnManager._persist_state` appelé après `advance_turn` et `_finalize`) est la garantie de reprise.
 
-### Résolution sociale mid-combat — TRUCE (task 81)
+### Résolution sociale mid-combat — TRUCE
 
 `bot.combat_truce.attempt_truce(actor, target, state) -> (succeeded, D20CheckResult | None, summary)` roule un check `1d20 + CHA_mod + 2` vs `target.stat_block.aggression_threshold` (DC 1-30). **Succès strict** : seuls `SUCCESS` et `CRITICAL_SUCCESS` comptent — `NEAR_SUCCESS` est un échec pour que le DC reste significatif. Succès → tous les enemies alive marqués `fled=True`, l'appelant finalize avec `CombatEndReason.TRUCE`. L'Action du PC est consommée sur roll réel (succès ou échec) mais **pas** sur auto-refus.
 
-**Auto-refus** (avant toute dice roll) : cible `mindless` (`NPCStatBlock.mindless: bool`, task 81) ou cible BOSS avec `phases[i].triggered=True` à `trigger_hp_percent <= 50` ("rage absolue" post-phase-2).
+**Auto-refus** (avant toute dice roll) : cible `mindless` (`NPCStatBlock.mindless: bool`) ou cible BOSS avec `phases[i].triggered=True` à `trigger_hp_percent <= 50` ("rage absolue" post-phase-2).
 
 Le dispatch TALK-en-combat est fait par `engine.validators.validate_exploration_action` qui délègue à `validate_truce_attempt` si combat actif (allié/mindless/no-stat-block/no-target rejetés avant pipeline). Côté pipeline, `ActionPipeline._resolve_talk_in_combat` orchestre le check + finalize sur succès + queue le dice embed dans `_pending_dice_embeds`. Hors combat, TALK garde son flow dialogue habituel (`_resolve_talk`).
 
@@ -226,13 +226,13 @@ Le dispatch TALK-en-combat est fait par `engine.validators.validate_exploration_
 | `consume_movement(c, feet)` | Soustrait de `movement_remaining_feet` ; raise si insuffisant ou si `feet<0` |
 | `consume_reaction(c)` | Flag `reaction_used_this_round` ; raise si déjà utilisé ce round |
 
-Ces helpers sont les seuls points de mutation du budget. Task 30 câblera les validators ; Task 50-52 les appelleront depuis les NPC brains.
+Ces helpers sont les seuls points de mutation du budget. Les validators les consultent en lecture et les NPC brains (minion / elite / boss) les appellent lors de la résolution.
 
 ### Zone movement + attaques d'opportunité
 
 - `move_combatant_to_zone(state, combatant, target_zone, location)` : valide l'adjacence via `location.are_adjacent`, calcule le coût (15 ft/step, doublé sur `DIFFICULT_TERRAIN`), consomme le mouvement, déclenche une OOA de chaque ennemi vivant en mêlée dans la zone source (sauf si `Disengage` pris ce tour), relocalise le combattant. Retourne la liste des `AttackResult` OOA.
 - `_resolve_opportunity_attack(attacker, defender)` : si l'attaquant a un `stat_block` avec au moins un `NPCAttack`, utilise `resolve_npc_attack` ; sinon retombe sur `resolve_attack` avec l'arme main hand (silent skip si rien d'équipé).
-- `disengage(combatant)` : consomme l'Action et set `disengaged_this_turn`. `ActionType.DISENGAGE` existe côté validators (valid par common checks seulement — task 30 durcira).
+- `disengage(combatant)` : consomme l'Action et set `disengaged_this_turn`. `ActionType.DISENGAGE` existe côté validators (valid par common checks seulement).
 - Si un combattant meurt pendant un move (OOA létale), la boucle OOA s'arrête et `current_zone` n'est **pas** mis à jour — le corps reste où il tombe.
 
 ### NPC attacks (`resolve_npc_attack`)
@@ -320,25 +320,25 @@ Chaque NPC avec un `NPCStatBlock` a un cerveau tactique qui décide de son actio
 
 - **Minion** → [`engine/npc_ai/scripted.py::decide_minion_action`](../../engine/npc_ai/scripted.py) — heuristique pure, 3 règles (1) attaque la cible en range avec le moins de HP (tiebreak AC ascendant), (2) sinon step BFS vers la zone ennemie la plus proche, (3) sinon `Dodge` (DEFEND). Aucun appel LLM, pas de multi-attaques (un minion = `multiattack_count=1` par contrat de tier).
 - **Elite** → [`engine/npc_ai/elite.py::decide_elite_action`](../../engine/npc_ai/elite.py) — dispatcher par `behavior_profile` : **AGGRESSIVE** priorise un signature damage si dispo puis attaque le weakest ; **DEFENSIVE** Dodge si HP < 30% sinon attaque prudemment ; **SUPPORT** soigne les alliés blessés via une signature heal (fallback attaque) ; **TACTICAL** cible en priorité les ennemis avec condition exploitable (FRIGHTENED / PRONE / PARALYZED / RESTRAINED / STUNNED). Fallback sur `decide_minion_action` si `stat_block is None`.
-- **Boss** → `engine/npc_ai/boss_brain.py` + LLM tactician `ai/npc_tactician.py` (task 52, à venir).
+- **Boss** → `engine/npc_ai/boss_brain.py` + LLM tactician `ai/npc_tactician.py`.
 
 `NPCActionPlan` (Pydantic) est le contrat de sortie commun : `action_type`, `target_name`, `weapon_name`, `move_to_zone`, `signature_name`, `rationale`. Le resolver `execute_action_plan(combatant, plan, state, location)` consomme l'Action via `consume_action`, route ATTACK standard via `resolve_npc_attack` (l'engine roule les dés, jamais le brain), ATTACK avec `signature_name` vers `execute_signature_ability`, MOVE via `move_combatant_to_zone` (OOA inclus), DEFEND via `consume_action` simple. Les ranged attacks du stat block permettent au brain de cibler à travers n'importe quelle zone (pas de LOS en MVP).
 
 **Signature executor** (`execute_signature_ability(caster, signature, targets, state)`) résout les 3 kinds MVP : `damage` roule les dés puis `apply_damage`, `heal` roule puis `apply_healing` (clamp max HP), `condition` applique la `ActiveCondition` après échec d'un save (save_ability + save_dc sur l'effet, inclut le `phase_save_bonus` du combattant). `uses_remaining` est décrémenté quand c'est un `int`, laissé à `None` pour les `at_will`. Les 4 kinds restants (`aoe_damage`, `buff`, `debuff`, `move`) logguent un WARNING et retournent un summary de fallback — le caller peut alors réinvoquer `resolve_npc_attack` pour une attaque standard.
 
-`decide_action_for(combatant, state, location)` est le **point d'entrée unique** côté `scripted.py` : il regarde `stat_block.tier` et route vers le bon brain (minion/elite, boss = fallback elite ; pour l'appel LLM boss, le TurnManager task 64 invoquera `decide_boss_action` explicitement). Le TurnManager consommera ce dispatcher.
+`decide_action_for(combatant, state, location)` est le **point d'entrée unique** côté `scripted.py` : il regarde `stat_block.tier` et route vers le bon brain (minion/elite, boss = fallback elite ; pour l'appel LLM boss, le TurnManager invoque `decide_boss_action` explicitement). Le TurnManager consomme ce dispatcher.
 
-### Legendary actions off-turn (task 53)
+### Legendary actions off-turn
 
 Les bosses ont `legendary_points_per_round` points de legendary action (3 par défaut) qu'ils peuvent dépenser **entre** les tours des autres créatures. `engine/npc_ai/legendary.py::maybe_spend_legendary_action(state, boss, previous_combatant)` gate sur `tier == BOSS`, `is_alive`, `not fled`, `legendary_points_remaining > 0`, puis applique la heuristique `_pick_legendary` : cost-3 uniquement si HP < 30%, sinon cost-2 si dispo, sinon cost-1 eagerly. Le point est décrémenté, l'action est exécutée via le pipeline de signature existant (l'action est enrobée dans une `SignatureAbility` éphémère `at_will`).
 
-`advance_turn` hooke cette logique à deux endroits : (1) après chaque fin de tour PC, itère sur les bosses ennemis vivants et déclenche `maybe_spend_legendary_action` — les summaries retournés sont accumulés sur `CombatState.pending_legendary_summaries` pour consommation par le TurnManager (task 64) ; (2) quand le nouveau combattant actif est un boss, reset `legendary_points_remaining = stat_block.legendary_points_per_round` (5e RAW : reset au début du tour du boss, pas au round).
+`advance_turn` hooke cette logique à deux endroits : (1) après chaque fin de tour PC, itère sur les bosses ennemis vivants et déclenche `maybe_spend_legendary_action` — les summaries retournés sont accumulés sur `CombatState.pending_legendary_summaries` pour consommation par le TurnManager ; (2) quand le nouveau combattant actif est un boss, reset `legendary_points_remaining = stat_block.legendary_points_per_round` (5e RAW : reset au début du tour du boss, pas au round).
 
-### Phase transitions (task 54)
+### Phase transitions
 
 Les bosses peuvent avoir plusieurs `PhaseTransition` sur leur stat block (typiquement 50% / 25% HP). `engine/combat_phases.py::check_phase_transition(combatant)` est une fonction pure : elle calcule `hp_percent` et, pour chaque phase non-triggered dont le seuil est franchi, flippe `triggered=True`, applique `attack_bonus` à **toutes** les `NPCAttack` du stat block, ajoute `save_bonus` à `Combatant.phase_save_bonus` (cumulatif), et unlock les signatures listées dans `unlock_signatures` (bump leur `uses_remaining` de 0 à 1). Retourne la liste des phases qui viennent de se déclencher — peut en contenir plusieurs sur un gros coup qui traverse plusieurs seuils en une passe.
 
-`engine.combat.apply_damage(combatant, damage, state=None)` hook le check après la gestion de concentration et avant la transition vers 0 HP. **Toujours** exécute la mutation du stat block (effet mécanique immédiat). **Optionnellement**, si le caller fournit un `CombatState`, append un `PhaseTransitionEvent(combatant_name, phase_index, narrative_cue)` à `state.pending_phase_narrations` pour que le narrateur (task 71) puisse tisser la `narrative_cue` dans la narration du prochain tour. Les callers qui passent déjà `state` : `execute_signature_ability` (task 51). Les callers legacy (resolve_attack, resolve_npc_attack, cast_spell) laissent `state=None` et les mutations s'appliquent quand même — seule la narration est différée. Un heal qui remonte au-dessus du seuil après déclenchement ne re-déclenche pas la phase (5e RAW : phase triggered is permanent).
+`engine.combat.apply_damage(combatant, damage, state=None)` hook le check après la gestion de concentration et avant la transition vers 0 HP. **Toujours** exécute la mutation du stat block (effet mécanique immédiat). **Optionnellement**, si le caller fournit un `CombatState`, append un `PhaseTransitionEvent(combatant_name, phase_index, narrative_cue)` à `state.pending_phase_narrations` pour que le narrateur puisse tisser la `narrative_cue` dans la narration du prochain tour. Les callers qui passent déjà `state` : `execute_signature_ability`. Les callers legacy (resolve_attack, resolve_npc_attack, cast_spell) laissent `state=None` et les mutations s'appliquent quand même — seule la narration est différée. Un heal qui remonte au-dessus du seuil après déclenchement ne re-déclenche pas la phase (5e RAW : phase triggered is permanent).
 
 ## Dépendances inter-modules
 

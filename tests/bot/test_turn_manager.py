@@ -259,9 +259,9 @@ class TestFinalize:
     async def test_finalize_clears_turn_manager_and_preserves_state(
         self,
     ) -> None:
-        """Task 80 — ``_finalize`` delegates to :func:`finalize_combat`,
-        clears the turn manager from the session, but keeps
-        ``session.combat_state`` in place for history / inspection.
+        """``_finalize`` delegates to :func:`finalize_combat`, clears the
+        turn manager from the session, but keeps ``session.combat_state``
+        in place for history / inspection.
         """
         pc = _pc()
         goblin = _enemy()
@@ -275,8 +275,8 @@ class TestFinalize:
         await tm._finalize()
 
         assert session.combat_turn_manager is None
-        # Task 80 change: combat_state is preserved after finalize, the
-        # next combat_entry call resets it.
+        # combat_state is preserved after finalize, the next combat_entry
+        # call resets it.
         assert session.combat_state is not None
         assert session.combat_state.is_active is False
         assert session.combat_state.end_reason == CombatEndReason.VICTORY
@@ -284,8 +284,8 @@ class TestFinalize:
 
     @pytest.mark.asyncio
     async def test_finalize_applies_xp_via_combat_end(self) -> None:
-        """Task 80 — XP is now applied by :func:`finalize_combat`, not by
-        a local ``_apply_xp_stub``."""
+        """XP is now applied by :func:`finalize_combat`, not by a local
+        ``_apply_xp_stub``."""
         pc = _pc()
         goblin = _enemy(name="Gobelin")
         session = _fake_session([pc, goblin])
@@ -317,7 +317,7 @@ class TestFinalize:
 
 
 # ---------------------------------------------------------------------------
-# Task 80.7 — Post-turn auto-checkpoint
+# Post-turn auto-checkpoint
 # ---------------------------------------------------------------------------
 
 
@@ -374,8 +374,8 @@ class TestPersistState:
     async def test_finalize_persists_final_state(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Task 80.7 — _finalize must persist after finalize_combat so a
-        reload doesn't resurrect a stale is_active=True state.
+        """_finalize must persist after finalize_combat so a reload
+        doesn't resurrect a stale is_active=True state.
         """
         pc = _pc()
         goblin = _enemy()
@@ -424,7 +424,7 @@ class TestSessionHelpers:
 
 
 # ---------------------------------------------------------------------------
-# Phase 7 — task 71 — _flush_pending_cues narrates phase transitions
+# _flush_pending_cues narrates phase transitions
 # ---------------------------------------------------------------------------
 
 

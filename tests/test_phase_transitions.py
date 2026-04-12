@@ -1,4 +1,4 @@
-"""Tests for Task 54 — HP phase transitions on boss NPCs.
+"""Tests for HP phase transitions on boss NPCs.
 
 Covers:
 - ``engine.combat_phases.check_phase_transition`` — threshold detection,

@@ -1,9 +1,9 @@
 """Sanity checks on the narrator prompt files.
 
-These tests exist to catch accidental removal of the Phase 7 combat
-awareness block from ``system_narrator.txt``. They are deliberately
-shallow — substring checks — because the prompt wording is not a
-stable API and should not be over-specified.
+These tests exist to catch accidental removal of the combat awareness
+block from ``system_narrator.txt``. They are deliberately shallow —
+substring checks — because the prompt wording is not a stable API and
+should not be over-specified.
 """
 
 from __future__ import annotations

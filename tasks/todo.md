@@ -58,7 +58,7 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 82 — Test end-to-end Discord live (**gate de fin**)
 
 ### Phase 9 — Documentation
-- [ ] Task 90 — Rédaction `docs/internal/COMBAT_SYSTEM.md`
+- [x] Task 90 — Rédaction `docs/internal/COMBAT_SYSTEM.md`
 
 ## Différé (à faire plus tard)
 

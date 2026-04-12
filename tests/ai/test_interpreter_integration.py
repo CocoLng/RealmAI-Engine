@@ -1,4 +1,4 @@
-"""Integration-style tests for lethal intent detection (Task 40).
+"""Integration-style tests for lethal intent detection.
 
 Each test feeds a canonical phrase through the Interpreter with a mocked
 Ollama response that mirrors the kind of output the prompt is expected to

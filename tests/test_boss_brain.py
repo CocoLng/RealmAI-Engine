@@ -1,4 +1,4 @@
-"""Tests for Task 52 — boss_brain retry + fallback.
+"""Tests for boss_brain retry + fallback.
 
 Covers ``engine.npc_ai.boss_brain.decide_boss_action``: the retry loop
 on ``ValueError`` from the tactician, the scripted fallback after retries

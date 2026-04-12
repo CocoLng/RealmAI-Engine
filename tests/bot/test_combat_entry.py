@@ -250,8 +250,9 @@ class _TriggerDef:
 def test_detect_interact_on_trap_trigger() -> None:
     npc = _make_hostile_npc("Skeleton")
     location = Location(name="Crypt")
-    # Task 41 will ship combat_triggers as a first-class field. Simulate it
-    # here via attribute injection so the detector's hasattr() guard fires.
+    # ``combat_triggers`` is an optional first-class field on some rows;
+    # simulate it here via attribute injection so the detector's hasattr()
+    # guard fires.
     object.__setattr__(location, "combat_triggers", {"sarcophagus": _TriggerDef(["Skeleton"], "De la poussière tombe du plafond.")})
     session = _session_with_pc(pcs=[_make_fighter()], npcs=[npc], location=location)
     action = _make_action(ActionType.INTERACT, target_name="sarcophagus")

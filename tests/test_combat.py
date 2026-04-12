@@ -755,7 +755,7 @@ class TestTrivialResolve:
 
 
 # ---------------------------------------------------------------------------
-# Task 32 — advance_turn skip fled + check_combat_end FLED
+# advance_turn skip fled + check_combat_end FLED
 # ---------------------------------------------------------------------------
 
 

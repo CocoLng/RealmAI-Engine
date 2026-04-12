@@ -1,11 +1,11 @@
-"""Tests for Phase 2 combat engine — tasks 21/22/23/24.
+"""Tests for the multi-enemy combat engine primitives.
 
 Covers:
-- Task 21 — 3-case initiative & surprise via ``start_combat(..., trigger=)``.
-- Task 22 — ``CombatState.combat_id``, ``end_reason``, multi-enemy turn
+- 3-case initiative & surprise via ``start_combat(..., trigger=)``.
+- ``CombatState.combat_id``, ``end_reason``, multi-enemy turn
   management, ``check_combat_end``, concentration hook, ``resolve_npc_attack``.
-- Task 23 — ``ActionBudget`` + consume helpers + reset semantics.
-- Task 24 — Zone movement, opportunity attacks, Disengage.
+- ``ActionBudget`` + consume helpers + reset semantics.
+- Zone movement, opportunity attacks, Disengage.
 """
 
 from __future__ import annotations
@@ -867,7 +867,7 @@ class TestDisengage:
 
 
 # ---------------------------------------------------------------------------
-# Task 70 / 71 — narration plumbing on CombatState + PhaseTransitionEvent
+# Narration plumbing on CombatState + PhaseTransitionEvent
 # ---------------------------------------------------------------------------
 
 

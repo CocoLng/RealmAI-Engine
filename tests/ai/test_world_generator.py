@@ -392,7 +392,7 @@ def test_build_user_message_includes_required_connections(
 
 
 # ---------------------------------------------------------------------------
-# Combat zones & triggers (Task 41)
+# Combat zones & triggers
 # ---------------------------------------------------------------------------
 
 

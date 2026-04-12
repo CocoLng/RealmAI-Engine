@@ -165,10 +165,10 @@ def make_boss_enemy(
 ) -> Combatant:
     """Build a boss-tier enemy with an explicit ``NPCStatBlock``.
 
-    Used by task 82 end-to-end scenarios (Mageta vs Vellus) to exercise
-    the Phase 5 boss AI path (phase transitions, legendary actions,
-    TRUCE validation, etc.). The returned combatant is wired the same
-    way ``make_enemy`` wires minions, plus the ``stat_block`` attribute
+    Used by the end-to-end scenarios (Mageta vs Vellus) to exercise
+    the boss AI path (phase transitions, legendary actions, TRUCE
+    validation, etc.). The returned combatant is wired the same way
+    ``make_enemy`` wires minions, plus the ``stat_block`` attribute
     the boss brain dispatches on.
     """
     char = Character(
@@ -215,7 +215,7 @@ def make_boss_enemy(
 
 @pytest.fixture()
 def vellus_stat_block() -> NPCStatBlock:
-    """Task 82 — realistic boss stat block for Vellus le Mentisseur.
+    """Realistic boss stat block for Vellus le Mentisseur.
 
     Three-attack multiattack, one signature ability, three legendary
     actions, a 50% HP phase transition, an aggression_threshold around

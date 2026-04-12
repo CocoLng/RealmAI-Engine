@@ -1,4 +1,4 @@
-"""Task 80 — End-of-combat recap embed.
+"""End-of-combat recap embed.
 
 Rendered by :meth:`bot.combat_turn_manager.TurnManager._finalize` once
 :func:`bot.combat_end.finalize_combat` has produced a

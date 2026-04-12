@@ -740,7 +740,7 @@ class TestValidateExplorationDispatch:
 
 
 # ---------------------------------------------------------------------------
-# Task 01 — Phase 0 bugfix: block exploration actions during active combat
+# Block exploration actions during active combat
 # ---------------------------------------------------------------------------
 
 
@@ -756,8 +756,8 @@ def _active_combat(
 
 
 class TestExplorationDuringCombat:
-    """Phase 0 — Task 01: validate_exploration_action must refuse MOVE,
-    TALK, SEARCH, INTERACT and PICKUP while a combat is active.
+    """validate_exploration_action must refuse MOVE, TALK, SEARCH,
+    INTERACT and PICKUP while a combat is active.
 
     Only LOOK, QUESTION and IMPROVISE remain permitted — they are read-only
     / catch-all actions that don't break the combat flow. This is a minimal
@@ -854,7 +854,7 @@ class TestExplorationDuringCombat:
 
     def test_exploration_unchanged_without_combat_state(self) -> None:
         """Non-regression: calling the validator without combat_state
-        must behave exactly as before Phase 0."""
+        must behave exactly as the pre-combat-refactor baseline."""
         action = Action(
             actor_name="Arden",
             action_type=ActionType.MOVE,
@@ -967,7 +967,7 @@ class TestConcentrationLogging:
 
 
 # ---------------------------------------------------------------------------
-# Task 30 — Strict validators
+# Strict validators
 # ---------------------------------------------------------------------------
 
 
