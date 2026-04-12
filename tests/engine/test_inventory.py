@@ -928,3 +928,30 @@ class TestDefaultWeaponForClass:
         w1 = default_weapon_for_class(CharacterClass.FIGHTER)
         w2 = default_weapon_for_class(CharacterClass.FIGHTER)
         assert w1 is not w2
+
+
+# ---------------------------------------------------------------------------
+# heal_dice field — Task 5
+# ---------------------------------------------------------------------------
+
+
+class TestHealDice:
+    """Item.heal_dice structured field for potions."""
+
+    def test_default_none(self) -> None:
+        item = Item(name="Rope", item_type=ItemType.ADVENTURING_GEAR, weight=5.0)
+        assert item.heal_dice is None
+
+    def test_healing_potion_has_heal_dice(self) -> None:
+        potion = ITEM_CATALOG["Healing Potion"]
+        assert potion.heal_dice == "2d4+2"
+
+    def test_potion_heal_dice_is_valid_dice_expression(self) -> None:
+        from engine.dice import parse_dice
+
+        potion = ITEM_CATALOG["Healing Potion"]
+        assert potion.heal_dice is not None
+        count, sides, modifier = parse_dice(potion.heal_dice)
+        assert count == 2
+        assert sides == 4
+        assert modifier == 2

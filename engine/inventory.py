@@ -117,6 +117,8 @@ class Item(BaseModel):
     magical: bool = False
     stackable: bool = False
     quantity: int = Field(default=1, ge=1)
+    heal_dice: str | None = None
+    """Dice expression for healing potions, e.g. '2d4+2'. None for non-healing items."""
 
 
 class Weapon(Item):
@@ -618,6 +620,7 @@ ITEM_CATALOG: dict[str, Item] = {
         description="Heals 2d4+2 hit points.",
         stackable=True,
         quantity=1,
+        heal_dice="2d4+2",
     ),
     "Bedroll": Item(
         name="Bedroll",
