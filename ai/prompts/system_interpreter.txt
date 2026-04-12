@@ -21,6 +21,7 @@ ActionType values:
 - "Defend"      — take a defensive stance (combat only)
 - "Flee"        — try to escape from combat (combat only)
 - "Use Item"    — drink a potion, read a scroll, activate an item ALREADY in the player's inventory.
+- "Equip"       — change equipped weapon or gear during combat. Free action, once per turn. Set `item_name` to the item to equip. Only valid in combat (the scene context will say `In combat: yes`).
 - "Pick Up"     — pick up / take / grab a visible object from the scene (e.g. "je ramasse la clé", "I take the lantern", "je prends le livre"). Set `target_name` (or `item_name`) to the object name. NEVER classify a pick-up as "Use Item" — they are distinct: "Use Item" is for items already owned, "Pick Up" is for items in the location.
 - "Look"        — observe the surroundings (no specific target needed)
 - "Search"      — investigate a specific object or area for hidden details
