@@ -21,6 +21,8 @@ from discord import ui
 
 from ai.models import InterpretedAction
 from bot.views.base import LoggedView
+from bot.views.equip_select_view import EquipSelectView
+from bot.views.potion_select_view import PotionSelectView
 from bot.views.spell_select_view import SpellSelectView
 from bot.views.target_select_view import TargetSelectView
 from bot.views.zone_select_view import ZoneSelectView
@@ -54,6 +56,8 @@ class CombatActionView(LoggedView):
         spell_names: list[str],
         adjacent_zone_names: list[str],
         dispatch_callback: DispatchCallback,
+        potion_names: list[str] | None = None,
+        equippable_names: list[str] | None = None,
     ) -> None:
         super().__init__(timeout=None)
         self.user_id = user_id
@@ -62,11 +66,15 @@ class CombatActionView(LoggedView):
         self.spell_names = spell_names
         self.adjacent_zone_names = adjacent_zone_names
         self.dispatch_callback = dispatch_callback
+        self.potion_names = potion_names or []
+        self.equippable_names = equippable_names or []
 
         # Disable buttons whose pre-conditions are not satisfied.
         self._attack_button.disabled = not target_names
         self._spell_button.disabled = not spell_names
         self._move_button.disabled = not adjacent_zone_names
+        self._potion_button.disabled = not self.potion_names
+        self._equip_button.disabled = not self.equippable_names
 
     # ------------------------------------------------------------------
     # Interaction guard
@@ -119,6 +127,18 @@ class CombatActionView(LoggedView):
         await self._open_spell_select(interaction)
 
     @ui.button(
+        label="Potion",
+        style=discord.ButtonStyle.success,
+        emoji="🧪",
+        row=0,
+    )
+    async def _potion_button(
+        self, interaction: discord.Interaction, button: ui.Button["CombatActionView"],
+    ) -> None:
+        del button
+        await self._open_potion_select(interaction)
+
+    @ui.button(
         label="Défendre",
         style=discord.ButtonStyle.secondary,
         emoji="🛡️",
@@ -169,6 +189,18 @@ class CombatActionView(LoggedView):
     ) -> None:
         del button
         await self._open_zone_select(interaction)
+
+    @ui.button(
+        label="Équiper",
+        style=discord.ButtonStyle.secondary,
+        emoji="🗡️",
+        row=1,
+    )
+    async def _equip_button(
+        self, interaction: discord.Interaction, button: ui.Button["CombatActionView"],
+    ) -> None:
+        del button
+        await self._open_equip_select(interaction)
 
     # ------------------------------------------------------------------
     # Secondary view orchestration
@@ -237,6 +269,52 @@ class CombatActionView(LoggedView):
         )
         await interaction.response.send_message(
             "Choisis ton sort :", view=view, ephemeral=True,
+        )
+
+    async def _open_potion_select(self, interaction: discord.Interaction) -> None:
+        """Post an ephemeral potion picker."""
+
+        async def on_potion_chosen(potion_name: str) -> None:
+            await self._disable_self_and_edit(interaction)
+            await self.dispatch_callback(
+                InterpretedAction(
+                    action_type=ActionType.USE_ITEM,
+                    actor_name=self.actor_name,
+                    item_name=potion_name,
+                    raw_input=f"(bouton Potion → {potion_name})",
+                ),
+            )
+
+        view = PotionSelectView(
+            potion_names=self.potion_names,
+            user_id=self.user_id,
+            on_choice=on_potion_chosen,
+        )
+        await interaction.response.send_message(
+            "Choisis ta potion :", view=view, ephemeral=True,
+        )
+
+    async def _open_equip_select(self, interaction: discord.Interaction) -> None:
+        """Post an ephemeral weapon picker for equip."""
+
+        async def on_weapon_chosen(weapon_name: str) -> None:
+            await self._disable_self_and_edit(interaction)
+            await self.dispatch_callback(
+                InterpretedAction(
+                    action_type=ActionType.EQUIP,
+                    actor_name=self.actor_name,
+                    item_name=weapon_name,
+                    raw_input=f"(bouton Équiper → {weapon_name})",
+                ),
+            )
+
+        view = EquipSelectView(
+            weapon_names=self.equippable_names,
+            user_id=self.user_id,
+            on_choice=on_weapon_chosen,
+        )
+        await interaction.response.send_message(
+            "Choisis ton arme :", view=view, ephemeral=True,
         )
 
     async def _open_zone_select(self, interaction: discord.Interaction) -> None:
