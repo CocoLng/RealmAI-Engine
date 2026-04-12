@@ -1229,3 +1229,135 @@ def test_validate_disengage_rejects_if_action_already_used(
     result = validate_disengage(action, state)
     assert not result.is_valid
     assert "Action" in (result.error_message or "")
+
+
+# ---------------------------------------------------------------------------
+# validate_equip — Task 4
+# ---------------------------------------------------------------------------
+
+
+class TestValidateEquip:
+    """Validate EQUIP free-action checks."""
+
+    def test_valid_equip(self, combat_state: CombatState) -> None:
+        """Equip an unequipped weapon from inventory."""
+        actor = combat_state.combatants[0]  # Arden
+        bow = Weapon(
+            name="Shortbow",
+            weight=2.0,
+            damage_dice="1d6",
+            damage_type=DamageType.PIERCING,
+            weapon_category=WeaponCategory.SIMPLE_RANGED,
+        )
+        actor.inventory.items.append(bow)
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.EQUIP,
+            item_name="Shortbow",
+        )
+        result = validate_action(action, combat_state)
+        assert result.is_valid
+
+    def test_equip_no_item_name(self, combat_state: CombatState) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.EQUIP,
+            item_name=None,
+        )
+        result = validate_action(action, combat_state)
+        assert not result.is_valid
+        assert "item" in (result.error_message or "").lower()
+
+    def test_equip_item_not_in_inventory(self, combat_state: CombatState) -> None:
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.EQUIP,
+            item_name="Ghost Sword",
+        )
+        result = validate_action(action, combat_state)
+        assert not result.is_valid
+
+    def test_equip_already_swapped(self, combat_state: CombatState) -> None:
+        """Second swap in same turn is rejected."""
+        actor = combat_state.combatants[0]
+        bow = Weapon(
+            name="Shortbow",
+            weight=2.0,
+            damage_dice="1d6",
+            damage_type=DamageType.PIERCING,
+            weapon_category=WeaponCategory.SIMPLE_RANGED,
+        )
+        actor.inventory.items.append(bow)
+        actor.action_budget.weapon_swapped_this_turn = True
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.EQUIP,
+            item_name="Shortbow",
+        )
+        result = validate_action(action, combat_state)
+        assert not result.is_valid
+        assert "déjà" in (result.error_message or "").lower()
+
+    def test_equip_non_weapon_rejected(self, combat_state: CombatState) -> None:
+        """Cannot equip a non-weapon item (potion, gear)."""
+        actor = combat_state.combatants[0]
+        potion = Item(
+            name="Healing Potion",
+            item_type=ItemType.POTION,
+            weight=0.5,
+        )
+        actor.inventory.items.append(potion)
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.EQUIP,
+            item_name="Healing Potion",
+        )
+        result = validate_action(action, combat_state)
+        assert not result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# validate_use_item hardening — Task 6
+# ---------------------------------------------------------------------------
+
+
+class TestValidateUseItemCombat:
+    """USE_ITEM validation in combat: action budget + potion type."""
+
+    def test_use_item_rejects_when_action_used(self, combat_state: CombatState) -> None:
+        """Cannot use item after already using action this turn."""
+        actor = combat_state.combatants[0]
+        potion = Item(
+            name="Healing Potion",
+            item_type=ItemType.POTION,
+            weight=0.5,
+            heal_dice="2d4+2",
+        )
+        actor.inventory.items.append(potion)
+        actor.action_budget.action_used = True
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.USE_ITEM,
+            item_name="Healing Potion",
+        )
+        result = validate_action(action, combat_state)
+        assert not result.is_valid
+        assert "Action" in (result.error_message or "")
+
+    def test_use_item_rejects_non_healing_potion(self, combat_state: CombatState) -> None:
+        """V1: only potions with heal_dice are usable in combat."""
+        actor = combat_state.combatants[0]
+        buff_potion = Item(
+            name="Potion of Speed",
+            item_type=ItemType.POTION,
+            weight=0.5,
+        )
+        actor.inventory.items.append(buff_potion)
+        action = Action(
+            actor_name="Arden",
+            action_type=ActionType.USE_ITEM,
+            item_name="Potion of Speed",
+        )
+        result = validate_action(action, combat_state)
+        assert not result.is_valid
+        assert "soin" in (result.error_message or "").lower()

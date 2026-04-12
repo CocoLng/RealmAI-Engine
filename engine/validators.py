@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from engine.combat import CombatState, Combatant
 from engine.conditions import cannot_move, is_incapacitated, is_surprised
-from engine.inventory import EquipmentSlot, Weapon, WeaponCategory, WeaponProperty
+from engine.inventory import EquipmentSlot, ItemType, Weapon, WeaponCategory, WeaponProperty
 from engine.spells import SPELL_CATALOG, CastingTime, can_cast_spell
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ class ActionType(StrEnum):
     DISENGAGE = "Disengage"
     FLEE = "Flee"
     USE_ITEM = "Use Item"
+    EQUIP = "Equip"
     # Exploration
     LOOK = "Look"
     SEARCH = "Search"
@@ -194,6 +195,7 @@ def validate_action(action: Action, combat_state: CombatState) -> ValidationResu
         ActionType.DISENGAGE: validate_disengage,
         ActionType.FLEE: validate_flee,
         ActionType.USE_ITEM: validate_use_item,
+        ActionType.EQUIP: validate_equip,
         ActionType.MOVE: validate_move_in_combat,
     }
     validator = validators.get(action.action_type)
@@ -523,7 +525,48 @@ def validate_truce_attempt(
 
 
 def validate_use_item(action: Action, state: CombatState) -> ValidationResult:
-    """Validate a use item action. Common + item in inventory."""
+    """Validate a use item action. Common + action budget + item in inventory + potion check."""
+    common = _validate_common(action, state)
+    if common is not None:
+        return common
+
+    actor = _find_combatant(action.actor_name, state)
+    assert actor is not None
+
+    if actor.action_budget.action_used:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà utilisé son Action ce tour.",
+        )
+
+    if action.item_name is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message="Use Item requires an item name",
+        )
+
+    # Check item is in inventory (carried or equipped)
+    all_items = list(actor.inventory.items) + list(actor.inventory.equipped.values())
+    matching = [i for i in all_items if i.name == action.item_name]
+    if not matching:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"Item '{action.item_name}' not found in inventory",
+        )
+
+    # V1: only healing potions are usable in combat
+    item = matching[0]
+    if item.item_type == ItemType.POTION and not getattr(item, "heal_dice", None):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.item_name}' n'est pas une potion de soin utilisable en combat.",
+        )
+
+    return ValidationResult(is_valid=True)
+
+
+def validate_equip(action: Action, state: CombatState) -> ValidationResult:
+    """Validate an equip free-action. Common + weapon in inventory + not already swapped."""
     common = _validate_common(action, state)
     if common is not None:
         return common
@@ -534,17 +577,28 @@ def validate_use_item(action: Action, state: CombatState) -> ValidationResult:
     if action.item_name is None:
         return ValidationResult(
             is_valid=False,
-            error_message="Use Item requires an item name",
+            error_message="Equip requires an item name",
         )
 
-    # Check item is in inventory (carried or equipped)
-    all_items = [i.name for i in actor.inventory.items] + [
-        i.name for i in actor.inventory.equipped.values()
-    ]
-    if action.item_name not in all_items:
+    if actor.action_budget.weapon_swapped_this_turn:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' a déjà changé d'arme ce tour.",
+        )
+
+    # Check item is in unequipped inventory
+    matching = [i for i in actor.inventory.items if i.name == action.item_name]
+    if not matching:
         return ValidationResult(
             is_valid=False,
             error_message=f"Item '{action.item_name}' not found in inventory",
+        )
+
+    item = matching[0]
+    if not isinstance(item, Weapon):
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.item_name}' n'est pas une arme équipable.",
         )
 
     return ValidationResult(is_valid=True)
