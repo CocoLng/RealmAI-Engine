@@ -1992,3 +1992,58 @@ async def test_pipeline_event_recording_skipped_when_combat_inactive() -> None:
     assert outcome.summary
     # With no combat_state there is nothing to append to — nothing crashes.
     assert pipeline.combat_state is None
+
+
+# ---------------------------------------------------------------------------
+# Weapon auto-resolution
+# ---------------------------------------------------------------------------
+
+from engine.inventory import (
+    DamageType,
+    EquipmentSlot,
+    Inventory,
+    Weapon,
+    WeaponCategory,
+)
+
+
+def _make_longsword() -> Weapon:
+    return Weapon(
+        name="Longsword",
+        weight=3.0,
+        damage_dice="1d8",
+        damage_type=DamageType.SLASHING,
+        weapon_category=WeaponCategory.MARTIAL_MELEE,
+    )
+
+
+class TestWeaponAutoResolve:
+    """weapon_name auto-filled from MAIN_HAND when player omits it."""
+
+    def test_auto_resolves_main_hand_weapon(self) -> None:
+        """ATTACK + weapon_name=None + Longsword in MAIN_HAND → weapon_name='Longsword'."""
+        sword = _make_longsword()
+        inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: sword})
+        assert ActionPipeline._auto_resolve_weapon_name(None, inv) == "Longsword"
+
+    def test_no_override_when_weapon_specified(self) -> None:
+        """Player explicitly named 'Dagger' → keeps 'Dagger'."""
+        sword = _make_longsword()
+        inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: sword})
+        assert ActionPipeline._auto_resolve_weapon_name("Dagger", inv) == "Dagger"
+
+    def test_no_resolve_empty_main_hand(self) -> None:
+        """No weapon in MAIN_HAND → stays None."""
+        inv = Inventory(items=[], equipped={})
+        assert ActionPipeline._auto_resolve_weapon_name(None, inv) is None
+
+    def test_no_resolve_non_weapon_in_main_hand(self) -> None:
+        """Shield in MAIN_HAND → stays None (not a Weapon instance)."""
+        from engine.inventory import Item, ItemType
+        shield = Item(name="Shield", item_type=ItemType.SHIELD, weight=6.0)
+        inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: shield})
+        assert ActionPipeline._auto_resolve_weapon_name(None, inv) is None
+
+    def test_no_resolve_no_inventory(self) -> None:
+        """inventory is None → stays None, no crash."""
+        assert ActionPipeline._auto_resolve_weapon_name(None, None) is None

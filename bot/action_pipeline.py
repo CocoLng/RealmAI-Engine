@@ -353,6 +353,16 @@ class ActionPipeline:
                 update={"item_name": resolution.resolved_entity},
             )
 
+        # --- Auto-resolve weapon for ATTACK when player omitted weapon name ---
+        if interpreted.action_type == ActionType.ATTACK:
+            resolved_weapon = self._auto_resolve_weapon_name(
+                interpreted.weapon_name, self.inventory,
+            )
+            if resolved_weapon != interpreted.weapon_name:
+                interpreted = interpreted.model_copy(
+                    update={"weapon_name": resolved_weapon},
+                )
+
         await self._emit(progress_callback, PipelinePhase.VALIDATING)
         validation = self._validate(interpreted)
         if not validation.is_valid:
@@ -569,6 +579,21 @@ class ActionPipeline:
             _do,
             log_label=f"ACTION campaign={self.campaign_id} narrate",
         )
+
+    @staticmethod
+    def _auto_resolve_weapon_name(
+        weapon_name: str | None,
+        inventory: Inventory | None,
+    ) -> str | None:
+        """Return the MAIN_HAND weapon name when the player omits it."""
+        if weapon_name is not None:
+            return weapon_name
+        if inventory is None:
+            return None
+        main_hand = inventory.equipped.get(EquipmentSlot.MAIN_HAND)
+        if main_hand is not None and isinstance(main_hand, Weapon):
+            return main_hand.name
+        return None
 
     def _validate(self, action: InterpretedAction) -> ValidationResult:
         """Convert InterpretedAction → Action and dispatch to the right validator.
