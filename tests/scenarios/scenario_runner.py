@@ -557,24 +557,45 @@ class ScenarioRunner:
         :func:`engine.combat.resolve_attack` directly so multi-step
         scenarios stay fast. Player weapon lookup is done inline against
         the inventory to avoid any dependency on the combat cog.
+
+        Task 80: returns a no-op capture (instead of raising) when combat
+        is already finalised or when the target is dead — lets
+        ``for _ in range(10): await scenario.attack(...)`` loops keep
+        working without tracking ``combat_state`` manually. The new
+        invariant preserves ``combat_state`` with ``is_active=False``,
+        so the old "break on combat_state is None" pattern no longer
+        short-circuits the loop.
         """
         session = self.session
         if session is None or session.combat_state is None:
             msg = "No active combat"
             raise RuntimeError(msg)
+        if not session.combat_state.is_active:
+            cap = EmbedCapture(content="Combat déjà terminé.")
+            self.responses.append(cap)
+            return cap
 
         attacker = self._find_player_combatant(player_idx)
         player = self._make_player(player_idx)
 
-        # Find target combatant
-        target_combatant = next(
-            (c for c in session.combat_state.combatants
-             if c.name == target and c.is_alive),
+        # Find target combatant — unknown target still raises (edge-case
+        # tests rely on this). Dead target is a gentle no-op so naive
+        # scenario loops that hammer the same target don't crash once it
+        # drops (new task 80 contract: combat_state stays around).
+        target_ever = next(
+            (c for c in session.combat_state.combatants if c.name == target),
             None,
         )
-        if target_combatant is None:
+        if target_ever is None:
             msg = f"Target '{target}' not found or dead"
             raise ValueError(msg)
+        if not target_ever.is_alive:
+            cap = EmbedCapture(
+                content=f"'{target}' est déjà mort.",
+            )
+            self.responses.append(cap)
+            return cap
+        target_combatant = target_ever
 
         weapon = self._lookup_player_weapon(session, player.id)
         if weapon is None:
@@ -632,28 +653,26 @@ class ScenarioRunner:
         return None
 
     async def _finalize_combat(self, session: GameSession) -> None:
-        """Drop combat state and award a 100xp-per-kill stub (legacy parity)."""
+        """Delegate to :func:`bot.combat_end.finalize_combat` (task 80).
+
+        The Phase 8 refactor moved XP / condition cleanup / summary
+        construction into a single engine entry point. The runner defers
+        to it so scenario tests exercise the same code path as the live
+        Discord flow. ``session.combat_state`` is preserved (new
+        invariant — tests assert via ``assert_not_in_combat`` which
+        tolerates both ``None`` and ``is_active=False``).
+        """
         if session.combat_state is None:
             return
-        xp_per_enemy = 100
-        dead_enemies = sum(
-            1
-            for c in session.combat_state.combatants
-            if c.side == CombatSide.ENEMY and not c.is_alive
-        )
-        survivors = [
-            c
-            for c in session.combat_state.combatants
-            if c.side == CombatSide.PLAYER and c.is_alive
-        ]
-        if survivors:
-            xp_each = (dead_enemies * xp_per_enemy) // max(len(survivors), 1)
-            from engine.character import add_xp
+        from bot.combat_end import finalize_combat
+        from engine.combat import CombatEndReason, check_combat_end
 
-            for combatant in survivors:
-                if xp_each > 0:
-                    add_xp(combatant.character, xp_each)
-        session.combat_state = None
+        reason = (
+            session.combat_state.end_reason
+            or check_combat_end(session.combat_state)
+            or CombatEndReason.VICTORY  # degenerate fallback
+        )
+        finalize_combat(session, reason)
 
     async def cast_spell(
         self, spell: str, target: str, player_idx: int = 0,
@@ -899,11 +918,20 @@ class ScenarioRunner:
         assert session.combat_state.is_active, "Combat is not active"
 
     def assert_not_in_combat(self) -> None:
-        """Assert that no combat is active."""
+        """Assert that no combat is active.
+
+        Task 80 preserves ``combat_state`` after finalize for history —
+        so ``is_active=False`` counts as "not in combat" just like
+        ``combat_state is None``.
+        """
         session = self.session
         if session is None:
             return  # No session means no combat
-        assert session.combat_state is None, "Combat is still active"
+        if session.combat_state is None:
+            return
+        assert session.combat_state.is_active is False, (
+            "Combat is still active"
+        )
 
     def assert_has_item(self, player_idx: int, item_name: str) -> None:
         """Assert a player has an item in their inventory."""

@@ -923,6 +923,13 @@ class ActionPipeline:
             return MechanicsOutcome(summary=summary, player_intent=intent)
 
         if at == ActionType.TALK:
+            # Task 81 — TALK in combat is the TRUCE path (CHA check vs
+            # aggression_threshold). Out of combat, it's the usual NPC
+            # dialogue flow.
+            if self.combat_state is not None and self.combat_state.is_active:
+                return await asyncio.to_thread(
+                    self._resolve_talk_in_combat, action,
+                )
             return await asyncio.to_thread(self._resolve_talk, action)
 
         if at == ActionType.MOVE:
@@ -1043,8 +1050,16 @@ class ActionPipeline:
         # Check if combat ends (all alive PCs have fled)
         end = check_combat_end(self.combat_state)
         if end == CombatEndReason.FLED:
-            self.combat_state.is_active = False
-            self.combat_state.end_reason = end
+            # Task 80 — centralised finalisation. Local import to avoid
+            # the bot.combat_end → ActionPipeline import cycle.
+            if self.session is not None:
+                from bot.combat_end import finalize_combat
+                finalize_combat(self.session, CombatEndReason.FLED)
+            else:
+                # Session-less pipeline (shouldn't happen in live flow but
+                # some tests build one): fall back to a minimal state flip.
+                self.combat_state.is_active = False
+                self.combat_state.end_reason = end
             destination_name: str | None = None
             if self._pending_flee_destination and self.session and self.db_factory:
                 from bot.world_navigation import LocationChangeError, change_location
@@ -1385,6 +1400,63 @@ class ActionPipeline:
             npc_dialogue=response.dialogue,
             talk_reveals_count=len(response.revealed_info),
             talk_disposition_change=int(response.disposition_change),
+        )
+
+    def _resolve_talk_in_combat(
+        self, action: InterpretedAction,
+    ) -> MechanicsOutcome:
+        """Task 81 — route a TALK action in combat to the TRUCE resolver.
+
+        Runs :func:`bot.combat_truce.attempt_truce` which rolls the CHA
+        check and, on success, marks every enemy as fled. The result is
+        then forwarded to :func:`bot.combat_end.finalize_combat` with
+        ``CombatEndReason.TRUCE`` so the encounter closes cleanly and the
+        TurnManager picks up an idempotent summary next tick.
+
+        The dice embed is queued on ``_pending_dice_embeds`` so the
+        caller (ActionHandlerCog / TurnManager) can render the check in
+        the existing task 60 dice embed infrastructure.
+        """
+        from bot.combat_truce import attempt_truce
+        from engine.combat import CombatEndReason
+        from engine.validators import _find_combatant
+
+        intent = self._build_player_intent(action)
+        assert self.combat_state is not None
+
+        actor = _find_combatant(action.actor_name, self.combat_state)
+        target = _find_combatant(
+            action.target_name or "", self.combat_state,
+        )
+        if actor is None or target is None:
+            return MechanicsOutcome(
+                summary=(
+                    f"{action.actor_name} tente de parler, mais la cible "
+                    "est introuvable."
+                ),
+                player_intent=intent,
+            )
+
+        succeeded, check, summary_text = attempt_truce(
+            actor, target, self.combat_state,
+        )
+
+        if check is not None:
+            # Queue the dice embed for the caller (task 60 rendering).
+            self._pending_dice_embeds.append(
+                ("truce_check", check, action.actor_name),
+            )
+
+        if succeeded and self.session is not None:
+            # Finalise combat with TRUCE. finalize_combat is idempotent
+            # so the TurnManager's post-advance_turn re-call is a no-op.
+            from bot.combat_end import finalize_combat
+            finalize_combat(self.session, CombatEndReason.TRUCE)
+
+        return MechanicsOutcome(
+            summary=summary_text,
+            player_intent=intent,
+            outcome_facts=summary_text,
         )
 
     def _resolve_pickup(self, action: InterpretedAction) -> str:

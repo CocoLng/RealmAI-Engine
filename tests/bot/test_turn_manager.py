@@ -158,11 +158,13 @@ def _turn_manager(
     session: MagicMock,
     channel: MagicMock,
     pipeline_factory: object | None = None,
+    db_factory: object | None = None,
 ) -> TurnManager:
     return TurnManager(
         channel=channel,
         session=session,
         pipeline_factory=pipeline_factory or MagicMock(),
+        db_factory=db_factory,
     )
 
 
@@ -254,7 +256,13 @@ class TestTimeout:
 
 class TestFinalize:
     @pytest.mark.asyncio
-    async def test_finalize_clears_turn_manager_on_session(self) -> None:
+    async def test_finalize_clears_turn_manager_and_preserves_state(
+        self,
+    ) -> None:
+        """Task 80 — ``_finalize`` delegates to :func:`finalize_combat`,
+        clears the turn manager from the session, but keeps
+        ``session.combat_state`` in place for history / inspection.
+        """
         pc = _pc()
         goblin = _enemy()
         session = _fake_session([pc, goblin])
@@ -267,31 +275,131 @@ class TestFinalize:
         await tm._finalize()
 
         assert session.combat_turn_manager is None
-        assert session.combat_state is None
-        channel.send.assert_awaited()  # posted the closing XP line
+        # Task 80 change: combat_state is preserved after finalize, the
+        # next combat_entry call resets it.
+        assert session.combat_state is not None
+        assert session.combat_state.is_active is False
+        assert session.combat_state.end_reason == CombatEndReason.VICTORY
+        channel.send.assert_awaited()  # posted the end embed
 
-    def test_xp_stub_awards_100_per_dead_enemy(self) -> None:
+    @pytest.mark.asyncio
+    async def test_finalize_applies_xp_via_combat_end(self) -> None:
+        """Task 80 — XP is now applied by :func:`finalize_combat`, not by
+        a local ``_apply_xp_stub``."""
         pc = _pc()
-        goblin1 = _enemy(name="Gobelin 1")
-        goblin2 = _enemy(name="Gobelin 2")
-        goblin1.is_alive = False
-        goblin2.is_alive = False
-        state = _state([pc, goblin1, goblin2])
-        session = _fake_session([pc, goblin1, goblin2])
-        session.combat_state = state
+        goblin = _enemy(name="Gobelin")
+        session = _fake_session([pc, goblin])
+        session.combat_state.end_reason = CombatEndReason.VICTORY
         tm = _turn_manager(session, _fake_channel())
+        session.combat_turn_manager = tm
 
-        xp_each, level_ups = tm._apply_xp_stub(state)
-        # 2 dead enemies × 100 / 1 survivor
-        assert xp_each == 200
-        assert isinstance(level_ups, list)
+        goblin.is_alive = False
+        pc_xp_before = pc.character.xp
+        await tm._finalize()
 
-    def test_xp_stub_returns_zero_without_state(self) -> None:
+        # Minion tier = 50 XP / 1 survivor = 50.
+        assert pc.character.xp == pc_xp_before + 50
+
+    @pytest.mark.asyncio
+    async def test_finalize_skips_embed_without_end_reason(self) -> None:
+        """Degenerate case: _finalize called but end_reason is None —
+        still clears the turn manager, no crash.
+        """
+        pc = _pc()
+        session = _fake_session([pc])
+        session.combat_state.end_reason = None
+        tm = _turn_manager(session, _fake_channel())
+        session.combat_turn_manager = tm
+
+        await tm._finalize()
+
+        assert session.combat_turn_manager is None
+
+
+# ---------------------------------------------------------------------------
+# Task 80.7 — Post-turn auto-checkpoint
+# ---------------------------------------------------------------------------
+
+
+class TestPersistState:
+    @pytest.mark.asyncio
+    async def test_persist_state_is_noop_without_db_factory(self) -> None:
         session = _fake_session([_pc()])
-        tm = _turn_manager(session, _fake_channel())
-        xp_each, level_ups = tm._apply_xp_stub(None)
-        assert xp_each == 0
-        assert level_ups == []
+        tm = _turn_manager(session, _fake_channel(), db_factory=None)
+
+        # Should not raise, nothing to assert — just confirming the guard.
+        await tm._persist_state()
+
+    @pytest.mark.asyncio
+    async def test_persist_state_calls_persist_session_via_thread(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        session = _fake_session([_pc()])
+        db_factory = MagicMock()
+        call_count = {"n": 0}
+
+        def fake_persist(factory, sess):
+            call_count["n"] += 1
+            assert factory is db_factory
+            assert sess is session
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session", fake_persist,
+        )
+
+        tm = _turn_manager(session, _fake_channel(), db_factory=db_factory)
+        await tm._persist_state()
+
+        assert call_count["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_persist_state_swallows_exceptions(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        session = _fake_session([_pc()])
+        db_factory = MagicMock()
+
+        def boom(factory, sess):
+            raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session", boom,
+        )
+
+        tm = _turn_manager(session, _fake_channel(), db_factory=db_factory)
+        # Must not raise — auto-checkpoint failure is logged and swallowed.
+        await tm._persist_state()
+
+    @pytest.mark.asyncio
+    async def test_finalize_persists_final_state(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Task 80.7 — _finalize must persist after finalize_combat so a
+        reload doesn't resurrect a stale is_active=True state.
+        """
+        pc = _pc()
+        goblin = _enemy()
+        session = _fake_session([pc, goblin])
+        session.combat_state.end_reason = CombatEndReason.VICTORY
+        goblin.is_alive = False
+
+        db_factory = MagicMock()
+        persisted_states: list[bool] = []
+
+        def capture(factory, sess):
+            # Snapshot is_active at persist time.
+            persisted_states.append(sess.combat_state.is_active)
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session", capture,
+        )
+
+        tm = _turn_manager(session, _fake_channel(), db_factory=db_factory)
+        session.combat_turn_manager = tm
+
+        await tm._finalize()
+
+        assert persisted_states == [False]
 
 
 # ---------------------------------------------------------------------------

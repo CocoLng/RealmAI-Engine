@@ -53,9 +53,9 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [x] Task 71 — Prompt narrateur pour transitions de phase
 
 ### Phase 8 — Fin de combat & intégration
-- [ ] Task 80 — Conditions de fin de combat
-- [ ] Task 81 — Résolution sociale mid-combat (truce)
-- [ ] Task 82 — Test end-to-end Discord live (**gate de fin**)
+- [x] Task 80 — Conditions de fin de combat
+- [x] Task 81 — Résolution sociale mid-combat (truce)
+- [x] Task 82 — Test end-to-end Discord live (**gate de fin**)
 
 ### Phase 9 — Documentation
 - [ ] Task 90 — Rédaction `docs/internal/COMBAT_SYSTEM.md`

@@ -52,6 +52,7 @@ class CombatCog(commands.Cog):
             channel=channel,
             session=session,
             pipeline_factory=ActionPipeline,
+            db_factory=getattr(self.bot, "db_factory", None),
         )
 
 

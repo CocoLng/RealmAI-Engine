@@ -9,7 +9,7 @@ import uuid
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from engine.character import Ability, Character, compute_modifier
 from engine.combat_trigger import CombatTrigger, InitiativeSide
@@ -190,6 +190,16 @@ class CombatState(BaseModel):
     each combat resolution; the narrator reads the tail of the list to ground
     its prose. Capped at :data:`RECENT_EVENTS_CAP` to bound serialization size.
     The engine never reads this list — it is purely for downstream narration."""
+
+    _finalized: bool = PrivateAttr(default=False)
+    """Task 80 idempotence guard. Set to ``True`` by
+    :func:`bot.combat_end.finalize_combat` on first run. Subsequent calls
+    short-circuit and return a summary reconstructed from the frozen state
+    without re-applying XP, condition cleanup, or other side effects.
+
+    Private attribute (not serialized) because the guard only matters for
+    the lifetime of a process — a reloaded ``CombatState`` with
+    ``is_active=False`` is definitionally already finalized on disk."""
 
 
 class AttackResult(BaseModel):

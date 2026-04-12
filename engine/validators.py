@@ -458,6 +458,70 @@ def validate_move_in_combat(action: Action, state: CombatState) -> ValidationRes
     return ValidationResult(is_valid=True)
 
 
+def validate_truce_attempt(
+    action: Action, state: CombatState,
+) -> ValidationResult:
+    """Task 81 — validate a social TRUCE attempt (TALK in combat).
+
+    TALK in combat is not a normal exploration dialogue: it's a check
+    against the target NPC's ``aggression_threshold`` to end the
+    encounter peacefully. This validator rules out targets that cannot
+    be reasoned with **before** any dice roll, so the actor's Action
+    stays unspent when the request is structurally invalid.
+
+    Rejected cases:
+    - Missing or unknown target.
+    - Target is an ally (same side as actor).
+    - Target has no stat block (commoner NPC — no negotiation layer).
+    - Target is ``mindless`` (zombie, rage-beast, construct).
+
+    Boss-phase-2 refusal is deferred to :func:`bot.combat_truce.attempt_truce`
+    because it depends on runtime phase state — a validator run on a
+    paused combat shouldn't be stricter than the resolver.
+    """
+    actor = _find_combatant(action.actor_name, state)
+    if actor is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=f"'{action.actor_name}' n'est pas en combat.",
+        )
+    if action.target_name is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message="Parler en combat nécessite une cible.",
+        )
+    target = _find_combatant(action.target_name, state)
+    if target is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=(
+                f"'{action.target_name}' n'est pas en combat."
+            ),
+        )
+    if target.side == actor.side:
+        return ValidationResult(
+            is_valid=False,
+            error_message="Impossible de négocier une trêve avec un allié.",
+        )
+    sb = target.stat_block
+    if sb is None:
+        return ValidationResult(
+            is_valid=False,
+            error_message=(
+                f"{target.name} ne peut pas être raisonné "
+                "(pas de profil de combat)."
+            ),
+        )
+    if sb.mindless:
+        return ValidationResult(
+            is_valid=False,
+            error_message=(
+                f"{target.name} est trop bestial pour entendre raison."
+            ),
+        )
+    return ValidationResult(is_valid=True)
+
+
 def validate_use_item(action: Action, state: CombatState) -> ValidationResult:
     """Validate a use item action. Common + item in inventory."""
     common = _validate_common(action, state)
@@ -521,6 +585,12 @@ def validate_exploration_action(
         )
 
     if combat_state is not None and combat_state.is_active:
+        # Task 81 — TALK in combat is the social de-escalation (TRUCE)
+        # path. The target must be a non-mindless, non-ally enemy with a
+        # stat block. ``validate_truce_attempt`` does the full check; the
+        # pipeline later dispatches to ``bot.combat_truce.attempt_truce``.
+        if action.action_type == ActionType.TALK:
+            return validate_truce_attempt(action, combat_state)
         if action.action_type not in _EXPLORATION_ALLOWED_IN_COMBAT:
             return ValidationResult(
                 is_valid=False,

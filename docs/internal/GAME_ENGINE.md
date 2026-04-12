@@ -174,7 +174,7 @@ Module principal du combat — couvre initiative (3 cas surprise), turn manageme
 ### Modèles
 
 - `Combatant(name, side, character, inventory, spellcaster, initiative, conditions, death_saves, is_alive, stat_block, fled, current_zone, action_budget, legendary_points_remaining, phase_save_bonus)` — les derniers champs (stat_block, fled, current_zone, action_budget, legendary_points_remaining, phase_save_bonus) ont été ajoutés en Phase 2 Task 22 pour que les tâches aval (32, 53, 54) n'aient pas à reshape le modèle.
-- `CombatState(combat_id, combatants, round_number, current_turn_index, is_active, end_reason, pending_phase_narrations)` — `combat_id` est un UUID généré auto, `end_reason` (StrEnum `CombatEndReason`) est renseigné par `check_combat_end`/`advance_turn`, `pending_phase_narrations: list[PhaseTransitionEvent]` est la queue consommée par le narrateur (tâche 71).
+- `CombatState(combat_id, combatants, round_number, current_turn_index, is_active, end_reason, pending_phase_narrations)` — `combat_id` est un UUID généré auto, `end_reason` (StrEnum `CombatEndReason`) est renseigné par `check_combat_end`/`advance_turn`, `pending_phase_narrations: list[PhaseTransitionEvent]` est la queue consommée par le narrateur (tâche 71). Task 80 ajoute un `_finalized: bool` en `PrivateAttr` (non sérialisé) utilisé comme verrou d'idempotence par `bot.combat_end.finalize_combat`.
 - `ActionBudget(movement_remaining_feet, action_used, bonus_action_used, reaction_used_this_round, disengaged_this_turn)` — budget 5e par tour. `reset_for_new_turn(speed_feet)` refill Move/Action/Bonus sans toucher à la Reaction (persiste entre tours, reset au wrap de round).
 - `CombatEndReason` StrEnum : `VICTORY`, `DEFEAT`, `FLED`, `TRUCE`.
 - `PhaseTransitionEvent(combatant_name, phase_index, narrative_cue)` — événement queuing pour la tâche 54/71.
@@ -196,7 +196,26 @@ La condition `SURPRISED` est consommée par `advance_turn` à la **fin** du prem
 
 `advance_turn(state)` fait dans l'ordre : (1) tick conditions + consume SURPRISED sur le combattant sortant, (2) walk forward à l'index suivant en skippant les morts **ET** les `fled=True`, (3) si wrap → `round_number += 1` et reset `reaction_used_this_round` pour tous, (4) reset `action_budget` du nouveau combattant via `reset_for_new_turn(speed)`, (5) `check_combat_end` → set `is_active=False` + `end_reason` si terminal.
 
-`check_combat_end(state)` retourne la raison de fin ou `None` : VICTORY si aucun ENEMY debout (non mort, non fui), DEFEAT si aucun PC debout, FLED si **tous** les PCs ont `fled=True` (distinction vs DEFEAT), mutual wipe → DEFEAT. Les cases TRUCE et l'override explicite sont réservés aux tâches 32/81. `is_combat_over(state)` reste un wrapper booléen pour la rétro-compatibilité.
+`check_combat_end(state)` retourne la raison de fin ou `None` : VICTORY si aucun ENEMY debout (non mort, non fui), DEFEAT si aucun PC debout, FLED si **tous** les PCs ont `fled=True` (distinction vs DEFEAT), mutual wipe → DEFEAT. TRUCE est posé explicitement par `bot.combat_truce.attempt_truce` + `finalize_combat(session, CombatEndReason.TRUCE)` (task 81). `is_combat_over(state)` reste un wrapper booléen pour la rétro-compatibilité.
+
+### Fin de combat — `bot.combat_end.finalize_combat` (task 80)
+
+Point d'entrée unique (dans `bot/`, pas `engine/`, parce qu'il lit `GameSession`) qui remplace les cleanups ad-hoc éparpillés entre `TurnManager._finalize` et `ActionPipeline._resolve_flee`. Signature : `finalize_combat(session: GameSession, reason: CombatEndReason) -> CombatEndSummary`.
+
+- **Idempotent** : guard via `state._finalized` (PrivateAttr). Le pipeline peut appeler `finalize_combat` pour les paths FLED/TRUCE, le `TurnManager.on_action_resolved` re-appelle pour sécurité — le second appel reconstruit juste le summary depuis l'état gelé sans redouble l'XP ni rejouer le cleanup.
+- **XP centralisé** : 50/MINION, 150/ELITE, 500/BOSS, fallback 25. Divisé également entre survivants PC (alive & non-fled), appliqué via `engine.character.add_xp`. Pas de levelup auto — `check_level_up` flagge les PCs qui ont franchi un seuil pour l'embed, la commande `/level_up` reste le seul point de progression.
+- **Loot MVP** : pour chaque ennemi tombé avec un `stat_block`, son `attacks[0].name` devient un trophée (placeholder ; tables de loot sophistiquées hors scope).
+- **Cleanup** : retire `SURPRISED` + `CONCENTRATING` sur tous les combattants vivants (via `remove_condition`). Préserve POISONED/PRONE/FRIGHTENED/etc. qui persistent légitimement hors combat.
+- **State preservation** : `session.combat_state` reste set après finalize (pour inspection, tests, historique). `is_active=False` et `end_reason` posés. Le reset à `None` arrive à la prochaine entrée en combat via `bot/combat_entry.py`.
+- **Pas de timeout** : Discord tolère les déconnexions longues, le combat doit être reprenable. Seul le watcher 5 min auto-DEFEND de task 64 subsiste (filet AFK court, orthogonal à la fin de combat). Pas d'enum `TIMEOUT`. La persistance post-tour (task 80.7 — `TurnManager._persist_state` appelé après `advance_turn` et `_finalize`) est la garantie de reprise.
+
+### Résolution sociale mid-combat — TRUCE (task 81)
+
+`bot.combat_truce.attempt_truce(actor, target, state) -> (succeeded, D20CheckResult | None, summary)` roule un check `1d20 + CHA_mod + 2` vs `target.stat_block.aggression_threshold` (DC 1-30). **Succès strict** : seuls `SUCCESS` et `CRITICAL_SUCCESS` comptent — `NEAR_SUCCESS` est un échec pour que le DC reste significatif. Succès → tous les enemies alive marqués `fled=True`, l'appelant finalize avec `CombatEndReason.TRUCE`. L'Action du PC est consommée sur roll réel (succès ou échec) mais **pas** sur auto-refus.
+
+**Auto-refus** (avant toute dice roll) : cible `mindless` (`NPCStatBlock.mindless: bool`, task 81) ou cible BOSS avec `phases[i].triggered=True` à `trigger_hp_percent <= 50` ("rage absolue" post-phase-2).
+
+Le dispatch TALK-en-combat est fait par `engine.validators.validate_exploration_action` qui délègue à `validate_truce_attempt` si combat actif (allié/mindless/no-stat-block/no-target rejetés avant pipeline). Côté pipeline, `ActionPipeline._resolve_talk_in_combat` orchestre le check + finalize sur succès + queue le dice embed dans `_pending_dice_embeds`. Hors combat, TALK garde son flow dialogue habituel (`_resolve_talk`).
 
 ### Action economy (`ActionBudget` + consume helpers)
 

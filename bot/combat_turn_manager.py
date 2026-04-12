@@ -38,7 +38,10 @@ from bot.action_pipeline import (
     AmbiguityResult,
     UnknownEntityResult,
 )
+from bot.combat_end import finalize_combat
+from bot.persistence import persist_session
 from bot.embeds.combat_embed import build_combat_embed
+from bot.embeds.combat_end_embed import build_combat_end_embed
 from bot.embeds.combat_start_embed import build_combat_start_embed
 from bot.embeds.dice_embed import (
     build_attack_roll_embed,
@@ -48,7 +51,6 @@ from bot.embeds.dice_embed import (
 from bot.embeds.narrative_embed import build_narrative_embed
 from bot.story_bible_logger import record_turn_and_maybe_check
 from bot.views.combat_action_view import CombatActionView
-from engine.character import add_xp, check_level_up
 from engine.combat import (
     CombatEndReason,
     CombatSide,
@@ -78,7 +80,15 @@ logger = logging.getLogger(__name__)
 
 
 _TIMEOUT_SECONDS = 300
-_XP_PER_ENEMY = 100
+
+# Labels for the hub-freeze message after combat ends. Displayed on the
+# edited hub above the final CombatState embed.
+_END_LABELS: dict[CombatEndReason, str] = {
+    CombatEndReason.VICTORY: "🏆 Victoire",
+    CombatEndReason.DEFEAT: "💀 Défaite",
+    CombatEndReason.FLED: "🏃 Échappés",
+    CombatEndReason.TRUCE: "🕊️ Trêve",
+}
 
 
 class TurnManager:
@@ -95,10 +105,17 @@ class TurnManager:
         channel: discord.abc.Messageable,
         session: "GameSession",
         pipeline_factory: Callable[..., ActionPipeline],
+        db_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.channel = channel
         self.session = session
         self.pipeline_factory = pipeline_factory
+        # Task 80.7 — needed for post-turn auto-checkpoint so NPC turns
+        # and the post-``advance_turn`` state make it to disk. Without this,
+        # a player disconnecting mid-combat would reload on a stale
+        # snapshot that doesn't include the latest NPC action or turn
+        # rotation. ``None`` disables persistence (tests / dev flows).
+        self.db_factory = db_factory
         self.hub_message: discord.Message | None = None
         self.pending_timeout: asyncio.Task[None] | None = None
         self.current_view: CombatActionView | None = None
@@ -145,6 +162,11 @@ class TurnManager:
         if check_combat_end(state) is not None or not state.is_active:
             await self._finalize()
             return
+
+        # Task 80.7 — persist post-advance_turn state so a disconnect
+        # between turns doesn't lose the rotation / condition ticks /
+        # phase transitions that ``advance_turn`` just applied.
+        await self._persist_state()
 
         current = get_current_combatant(state)
         await self._prompt_turn(current)
@@ -611,11 +633,16 @@ class TurnManager:
     # ------------------------------------------------------------------
 
     async def _finalize(self) -> None:
-        """Close the encounter: XP stub, hub frozen, session cleanup.
+        """Close the encounter: delegate to :func:`bot.combat_end.finalize_combat`,
+        post the recap embed, freeze the hub, and clear ``combat_turn_manager``.
 
-        Phase 8 task 80 will replace this with the full end-of-combat flow
-        (loot, level-ups, truce handling). For Phase 6 we port the minimal
-        XP split from the legacy cog so playtests can still level up.
+        :func:`finalize_combat` is idempotent — if the pipeline already called
+        it (flee or truce paths) the second call just reconstructs the summary
+        from the frozen state without re-applying XP or cleanup.
+
+        Note: ``session.combat_state`` is intentionally **not** reset to
+        ``None``. It stays as a snapshot for history / post-combat inspection
+        and is replaced on the next combat entry by :mod:`bot.combat_entry`.
         """
         if self._finalized:
             return
@@ -623,30 +650,29 @@ class TurnManager:
         self._cancel_timeout()
 
         state = self.session.combat_state
-        end_reason = state.end_reason if state is not None else None
-        xp_each, level_ups = self._apply_xp_stub(state)
+        if state is None:
+            self.session.combat_turn_manager = None
+            return
 
-        reason_labels: dict[CombatEndReason, str] = {
-            CombatEndReason.VICTORY: "🏆 Victoire",
-            CombatEndReason.DEFEAT: "💀 Défaite",
-            CombatEndReason.FLED: "🏃 Échappés",
-            CombatEndReason.TRUCE: "🕊️ Trêve",
-        }
-        reason_label = (
-            reason_labels[end_reason]
-            if end_reason is not None
-            else "Combat terminé"
-        )
+        end_reason = state.end_reason
+        if end_reason is None:
+            logger.warning(
+                "TurnManager._finalize called with no end_reason "
+                "(combat_id=%s) — skipping summary",
+                state.combat_id,
+            )
+            self.session.combat_turn_manager = None
+            return
 
-        lines = [f"**{reason_label}**"]
-        if xp_each > 0:
-            lines.append(f"XP gagné : **{xp_each}** par survivant")
-        if level_ups:
-            lines.append("Niveau disponible pour : " + ", ".join(level_ups))
+        summary = finalize_combat(self.session, end_reason)
+        reason_label = _END_LABELS.get(end_reason, "Combat terminé")
 
-        await self._safe_send(content="\n".join(lines))
+        try:
+            await self._safe_send(embed=build_combat_end_embed(summary))
+        except discord.HTTPException as exc:
+            logger.debug("TurnManager end embed send failed: %s", exc)
 
-        if self.hub_message is not None and state is not None:
+        if self.hub_message is not None:
             try:
                 frozen = build_combat_embed(
                     state, location=self.session.current_location,
@@ -660,35 +686,29 @@ class TurnManager:
                 logger.debug("TurnManager hub freeze failed: %s", exc)
 
         self.session.combat_turn_manager = None
-        self.session.combat_state = None
+        # Task 80.7 — persist the finalised combat state so reload
+        # after combat ends doesn't resurrect the encounter with stale
+        # ``is_active=True``.
+        await self._persist_state()
 
-    def _apply_xp_stub(
-        self, state: CombatState | None,
-    ) -> tuple[int, list[str]]:
-        """Mirror the legacy XP_PER_ENEMY split — minimal port for Phase 6."""
-        if state is None:
-            return 0, []
-        dead_enemies = sum(
-            1
-            for c in state.combatants
-            if c.side == CombatSide.ENEMY and not c.is_alive
-        )
-        xp_total = dead_enemies * _XP_PER_ENEMY
-        survivors = [
-            c
-            for c in state.combatants
-            if c.side == CombatSide.PLAYER and c.is_alive
-        ]
-        if not survivors:
-            return 0, []
-        xp_each = xp_total // max(len(survivors), 1)
-        level_ups: list[str] = []
-        for combatant in survivors:
-            if xp_each > 0:
-                add_xp(combatant.character, xp_each)
-            if check_level_up(combatant.character):
-                level_ups.append(combatant.name)
-        return xp_each, level_ups
+    async def _persist_state(self) -> None:
+        """Task 80.7 — post-turn auto-checkpoint for the combat lifecycle.
+
+        Off-loaded to a thread because :func:`bot.persistence.persist_session`
+        is synchronous SQLAlchemy. ``db_factory=None`` (tests / dev) makes
+        this a no-op. Failures are logged and swallowed — a failed
+        checkpoint must not brick the turn flow.
+        """
+        if self.db_factory is None:
+            return
+        try:
+            await asyncio.to_thread(
+                persist_session, self.db_factory, self.session,
+            )
+        except Exception as exc:
+            logger.exception(
+                "TurnManager auto-checkpoint failed: %s", exc,
+            )
 
     # ------------------------------------------------------------------
     # Session helpers
@@ -750,7 +770,11 @@ class TurnManager:
             combat_state=self.session.combat_state,
             inventory=inventory,
             session=self.session,
-            db_factory=None,
+            # Task 80.7 — pipeline-level auto-checkpoint after every
+            # button action. The TurnManager also calls ``_persist_state``
+            # at the end of ``on_action_resolved`` for the post-advance
+            # snapshot, so combat survives disconnects cleanly.
+            db_factory=self.db_factory,
         )
 
     async def _safe_send(

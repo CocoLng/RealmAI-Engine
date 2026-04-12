@@ -1906,7 +1906,10 @@ async def test_flee_applies_stored_destination_on_full_escape() -> None:
     pipeline, hero = _make_active_pipeline_with_hero()
     pipeline._pending_flee_destination = "forêt"
     pipeline.db_factory = MagicMock()
+    # Task 80: finalize_combat reads session.combat_state, which in prod
+    # is the same object as pipeline.combat_state. Link them in the mock.
     pipeline.session = MagicMock()
+    pipeline.session.combat_state = pipeline.combat_state
 
     fake_location = MagicMock()
     fake_location.name = "forêt"

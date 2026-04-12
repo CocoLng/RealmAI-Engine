@@ -100,9 +100,9 @@ Phase 0 ──────► Phase 1 ──► Phase 2 ──► Phase 3 ──
 ### Phase 8 — Fin de combat & intégration
 | # | Tâche | Dépendances | Status |
 |---|-------|-------------|--------|
-| 80 | [combat_end_conditions](80_combat_end_conditions.md) | 22, 32 | ⬜ |
-| 81 | [social_resolution_mid_combat](81_social_resolution_mid_combat.md) | 80 | ⬜ |
-| 82 | [end_to_end_live_test](82_end_to_end_live_test.md) | **tout le reste** | ⬜ |
+| 80 | [combat_end_conditions](80_combat_end_conditions.md) | 22, 32 | ✅ |
+| 81 | [social_resolution_mid_combat](81_social_resolution_mid_combat.md) | 80 | ✅ |
+| 82 | [end_to_end_live_test](82_end_to_end_live_test.md) | **tout le reste** | ✅ |
 
 ### Phase 9 — Documentation
 | # | Tâche | Dépendances | Status |
