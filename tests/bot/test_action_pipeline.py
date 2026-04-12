@@ -22,6 +22,15 @@ from engine.character import (
     Race,
     create_character,
 )
+from engine.inventory import (
+    DamageType,
+    EquipmentSlot,
+    Inventory,
+    Item,
+    ItemType,
+    Weapon,
+    WeaponCategory,
+)
 from engine.validators import ActionType
 from world.location import Location
 from world.npc import NPC, NPCDisposition
@@ -1998,14 +2007,6 @@ async def test_pipeline_event_recording_skipped_when_combat_inactive() -> None:
 # Weapon auto-resolution
 # ---------------------------------------------------------------------------
 
-from engine.inventory import (
-    DamageType,
-    EquipmentSlot,
-    Inventory,
-    Weapon,
-    WeaponCategory,
-)
-
 
 def _make_longsword() -> Weapon:
     return Weapon(
@@ -2039,7 +2040,6 @@ class TestWeaponAutoResolve:
 
     def test_no_resolve_non_weapon_in_main_hand(self) -> None:
         """Shield in MAIN_HAND → stays None (not a Weapon instance)."""
-        from engine.inventory import Item, ItemType
         shield = Item(name="Shield", item_type=ItemType.SHIELD, weight=6.0)
         inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: shield})
         assert ActionPipeline._auto_resolve_weapon_name(None, inv) is None

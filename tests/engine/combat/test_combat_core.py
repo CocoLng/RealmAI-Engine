@@ -15,6 +15,7 @@ from engine.character import (
     create_character,
 )
 from engine.combat import (
+    ActionBudget,
     CombatSide,
     Combatant,
     TrivialResolveResult,
@@ -849,8 +850,6 @@ class TestFledCombatant:
 # ---------------------------------------------------------------------------
 # ActionBudget — weapon_swapped_this_turn
 # ---------------------------------------------------------------------------
-
-from engine.combat import ActionBudget
 
 
 class TestActionBudgetWeaponSwap:

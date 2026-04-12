@@ -63,6 +63,7 @@ def fighter_combatant() -> Combatant:
         item_type=ItemType.POTION,
         weight=0.5,
         value_gp=50,
+        heal_dice="2d4+2",
     )
     inv = Inventory(
         items=[healing_potion],
