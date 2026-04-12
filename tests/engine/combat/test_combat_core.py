@@ -844,3 +844,23 @@ class TestFledCombatant:
             is_active=True,
         )
         assert check_combat_end(state) == CombatEndReason.FLED
+
+
+# ---------------------------------------------------------------------------
+# ActionBudget — weapon_swapped_this_turn
+# ---------------------------------------------------------------------------
+
+from engine.combat import ActionBudget
+
+
+class TestActionBudgetWeaponSwap:
+    """weapon_swapped_this_turn field on ActionBudget."""
+
+    def test_defaults_false(self) -> None:
+        budget = ActionBudget()
+        assert budget.weapon_swapped_this_turn is False
+
+    def test_reset_clears_flag(self) -> None:
+        budget = ActionBudget(weapon_swapped_this_turn=True)
+        budget.reset_for_new_turn(30)
+        assert budget.weapon_swapped_this_turn is False

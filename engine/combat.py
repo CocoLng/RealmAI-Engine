@@ -110,6 +110,8 @@ class ActionBudget(BaseModel):
     disengaged_this_turn: bool = False
     """Set by the Disengage action (task 24). Suppresses opportunity attacks
     for the remainder of this turn."""
+    weapon_swapped_this_turn: bool = False
+    """Set by EQUIP free action (once per turn). Prevents a second swap."""
 
     def reset_for_new_turn(self, base_speed_feet: int) -> None:
         """Refill Move/Action/Bonus pools. Reaction persists across turns."""
@@ -117,6 +119,7 @@ class ActionBudget(BaseModel):
         self.action_used = False
         self.bonus_action_used = False
         self.disengaged_this_turn = False
+        self.weapon_swapped_this_turn = False
 
 
 class PhaseTransitionEvent(BaseModel):
