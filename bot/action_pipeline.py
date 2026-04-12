@@ -67,7 +67,7 @@ from engine.conditions import (
     ActiveCondition,
     ConditionType,
 )
-from engine.inventory import EquipmentSlot, Inventory, Weapon
+from engine.inventory import EquipmentSlot, Inventory, Weapon, equip_item, remove_item, unequip_item
 from engine.validators import (
     Action,
     ActionType,
@@ -152,6 +152,8 @@ class ActionPipelineResult(BaseModel):
     npc_name: str | None = None
     npc_dialogue: str | None = None
     is_question: bool = False
+    is_free_action: bool = False
+    """True for EQUIP (free action) — TurnManager re-prompts instead of advancing."""
 
 
 class AmbiguityResult(BaseModel):
@@ -511,6 +513,7 @@ class ActionPipeline:
 
         await self._emit(progress_callback, PipelinePhase.DONE)
         is_question = interpreted.action_type == ActionType.QUESTION
+        is_free = interpreted.action_type == ActionType.EQUIP
         result = ActionPipelineResult(
             narrative=narration.narrative,
             tone=narration.tone,
@@ -521,6 +524,7 @@ class ActionPipeline:
             npc_name=outcome.npc_name,
             npc_dialogue=outcome.npc_dialogue,
             is_question=is_question,
+            is_free_action=is_free,
         )
         logger.info(
             "ACTION complete campaign=%s actor=%s action=%s",
@@ -883,6 +887,90 @@ class ActionPipeline:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(f"- {killer.name} a tué {victim.name} dans {loc_name}.\n")
 
+    def _resolve_equip(self, action: InterpretedAction) -> MechanicsOutcome:
+        """Swap equipped weapon — free action, no turn advance."""
+        intent = self._build_player_intent(action)
+        if self.combat_state is None or action.item_name is None:
+            return MechanicsOutcome(summary="Equip failed.", player_intent=intent)
+
+        actor = next(
+            (c for c in self.combat_state.combatants if c.name == action.actor_name),
+            None,
+        )
+        if actor is None:
+            return MechanicsOutcome(summary="Equip failed.", player_intent=intent)
+
+        inv = actor.inventory
+
+        # Unequip current MAIN_HAND if occupied
+        if EquipmentSlot.MAIN_HAND in inv.equipped:
+            unequip_item(inv, EquipmentSlot.MAIN_HAND)
+
+        # Equip the new weapon
+        equip_item(inv, action.item_name, EquipmentSlot.MAIN_HAND)
+        actor.action_budget.weapon_swapped_this_turn = True
+
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} dégaine {action.item_name}.",
+            player_intent=intent,
+        )
+
+    def _resolve_use_item(self, action: InterpretedAction) -> MechanicsOutcome:
+        """Use a healing potion — costs the action."""
+        intent = self._build_player_intent(action)
+        if self.combat_state is None or action.item_name is None:
+            return MechanicsOutcome(summary="Use item failed.", player_intent=intent)
+
+        actor = next(
+            (c for c in self.combat_state.combatants if c.name == action.actor_name),
+            None,
+        )
+        if actor is None:
+            return MechanicsOutcome(summary="Use item failed.", player_intent=intent)
+
+        # Find the potion
+        matching = [i for i in actor.inventory.items if i.name == action.item_name]
+        if not matching:
+            return MechanicsOutcome(
+                summary=f"{action.item_name} not found.", player_intent=intent,
+            )
+
+        item = matching[0]
+        heal_dice = getattr(item, "heal_dice", None)
+        if not heal_dice:
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} uses {action.item_name}.",
+                player_intent=intent,
+            )
+
+        # Roll healing dice
+        from engine.dice import roll as roll_dice
+
+        dice_result = roll_dice(heal_dice)
+        healed = dice_result.total
+        old_hp = actor.character.hp
+        actor.character.hp = min(old_hp + healed, actor.character.max_hp)
+        actual_healed = actor.character.hp - old_hp
+
+        # Remove potion from inventory
+        remove_item(actor.inventory, action.item_name)
+
+        # Mark action used
+        actor.action_budget.action_used = True
+
+        summary = (
+            f"{action.actor_name} boit {action.item_name} "
+            f"— récupère {actual_healed} PV ({dice_result.expression}: {dice_result.total})"
+        )
+        return MechanicsOutcome(
+            summary=summary,
+            player_intent=intent,
+            outcome_facts=summary,
+            public_effects=PublicEffects(
+                hp_delta={action.actor_name: actual_healed},
+            ),
+        )
+
     async def _resolve_mechanics(
         self, action: InterpretedAction,
     ) -> MechanicsOutcome:
@@ -902,6 +990,12 @@ class ActionPipeline:
             )
 
         at = action.action_type
+
+        if at == ActionType.EQUIP:
+            return self._resolve_equip(action)
+
+        if at == ActionType.USE_ITEM:
+            return self._resolve_use_item(action)
 
         if at == ActionType.FLEE:
             return await self._resolve_flee(action)
