@@ -196,6 +196,7 @@ def build_npc_combatant(npc: NPC) -> Combatant:
         side=CombatSide.ENEMY,
         character=char,
         inventory=inv,
+        stat_block=npc.stat_block,
     )
 
 

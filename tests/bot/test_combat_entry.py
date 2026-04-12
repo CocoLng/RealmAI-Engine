@@ -11,6 +11,7 @@ from bot.combat_entry import (
     CombatTrigger,
     CombatTriggerKind,
     InitiativeSide,
+    build_npc_combatant,
     detect_combat_trigger,
     enter_combat,
 )
@@ -348,3 +349,23 @@ def test_enter_combat_persists_on_session() -> None:
 
     state = enter_combat(session, trigger)  # type: ignore[arg-type]
     assert session.combat_state is state
+
+
+# ---------------------------------------------------------------------------
+# build_npc_combatant — stat_block passthrough
+# ---------------------------------------------------------------------------
+
+
+def test_build_npc_combatant_transfers_stat_block() -> None:
+    """When NPC has a stat_block, the Combatant must carry it."""
+    npc = _make_boss_npc("Wyvern")
+    combatant = build_npc_combatant(npc)
+    assert combatant.stat_block is npc.stat_block
+    assert combatant.stat_block is not None
+
+
+def test_build_npc_combatant_none_stat_block() -> None:
+    """When NPC has no stat_block, the Combatant has None."""
+    npc = _make_commoner("Villager")
+    combatant = build_npc_combatant(npc)
+    assert combatant.stat_block is None
