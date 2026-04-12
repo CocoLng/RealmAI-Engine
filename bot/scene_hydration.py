@@ -298,10 +298,22 @@ def hydrate_scene(
                 campaign_id, location.name, created, upgraded, len(session.npcs),
             )
     except Exception:
-        logger.warning(
+        logger.error(
             "SCENE hydration failed campaign=%s location=%s",
             campaign_id, location.name, exc_info=True,
         )
+        # Fallback: populate session.npcs from location names so the
+        # entity resolver can still match targets even without DB rows.
+        if not session.npcs:
+            for name in location.npcs_present:
+                if name and name.strip() and name not in session.npcs:
+                    session.npcs[name] = _build_default_npc(
+                        name, location.name,
+                    )
+            logger.info(
+                "SCENE fallback npcs campaign=%s count=%d",
+                campaign_id, len(session.npcs),
+            )
     finally:
         db_session.close()
 

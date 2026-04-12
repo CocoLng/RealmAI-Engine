@@ -3,10 +3,14 @@
 Represents places in the game world that players can visit.
 """
 
+import logging
+
 from pydantic import BaseModel, Field, model_validator
 
 from world.combat_trigger_def import CombatTriggerDef
 from world.combat_zone import Zone
+
+logger = logging.getLogger(__name__)
 
 
 class Location(BaseModel):
@@ -79,6 +83,24 @@ class Location(BaseModel):
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
+
+    @model_validator(mode="after")
+    def _deduplicate_npc_items(self) -> "Location":
+        """Remove items whose name collides with an NPC (NPCs take priority)."""
+        npc_names = set(self.npcs_present)
+        collisions = [i for i in self.items_available if i in npc_names]
+        if collisions:
+            logger.warning(
+                "LOCATION '%s': names appear in both npcs_present and "
+                "items_available, removing from items: %s",
+                self.name, collisions,
+            )
+            self.items_available = [
+                i for i in self.items_available if i not in npc_names
+            ]
+            for name in collisions:
+                self.item_descriptions.pop(name, None)
+        return self
 
     @model_validator(mode="after")
     def _validate_zones_graph(self) -> "Location":

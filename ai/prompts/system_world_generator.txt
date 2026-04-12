@@ -69,6 +69,8 @@ Rules:
   ["remparts", "dehors", "extérieur", "abattoirs", "sortir"].
   Keep each alias to 1-3 words, lowercase, no punctuation.
 - npcs_present and items_available can be empty lists
+- NEVER use the same name in both npcs_present and items_available.
+  If a name is an NPC, it must NOT appear as an item (and vice versa).
 - For EVERY item in items_available, add an entry in item_descriptions with the
   same exact name as key. The description is canon truth: it must be specific
   enough that a player cannot project false assumptions onto the object
