@@ -150,7 +150,9 @@ def _fake_session(combatants: list[Combatant]) -> MagicMock:
 
 def _fake_channel() -> MagicMock:
     channel = MagicMock()
-    channel.send = AsyncMock(return_value=MagicMock(edit=AsyncMock()))
+    channel.send = AsyncMock(
+        return_value=MagicMock(edit=AsyncMock(), delete=AsyncMock()),
+    )
     return channel
 
 
@@ -670,3 +672,75 @@ class TestFlushDiceEmbedsAttackRoll:
 
         mock_builder.assert_called_once_with(fake_result, "Aragorn")
         channel.send.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _upsert_hub — delete-and-repost instead of edit-in-place
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertHub:
+    @pytest.mark.asyncio
+    async def test_first_upsert_sends_new_message(self) -> None:
+        """When hub_message is None, _upsert_hub sends a new message."""
+        import discord
+
+        session = _fake_session([_pc(), _enemy()])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+
+        embed = discord.Embed(title="Combat")
+        await tm._upsert_hub(content="test", embed=embed, view=None)
+
+        channel.send.assert_awaited_once()
+        assert tm.hub_message is not None
+
+    @pytest.mark.asyncio
+    async def test_second_upsert_deletes_old_and_sends_new(self) -> None:
+        """When hub_message already exists, _upsert_hub deletes it then posts fresh."""
+        import discord
+
+        session = _fake_session([_pc(), _enemy()])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+
+        embed = discord.Embed(title="Combat")
+
+        # First upsert sets hub_message
+        await tm._upsert_hub(content="turn 1", embed=embed, view=None)
+        first_message = tm.hub_message
+        assert first_message is not None
+
+        # Second upsert should delete the old message and send a new one
+        await tm._upsert_hub(content="turn 2", embed=embed, view=None)
+
+        first_message.delete.assert_awaited_once()
+        assert channel.send.await_count == 2
+        # hub_message is the result of the second send
+        assert tm.hub_message is not None
+
+    @pytest.mark.asyncio
+    async def test_upsert_tolerates_discord_not_found_on_delete(self) -> None:
+        """If the old hub message is already gone, delete failure is swallowed."""
+        import discord
+
+        session = _fake_session([_pc(), _enemy()])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+
+        embed = discord.Embed(title="Combat")
+        await tm._upsert_hub(content="turn 1", embed=embed, view=None)
+
+        # Simulate the old message having been deleted already
+        old_message = tm.hub_message
+        assert old_message is not None
+        old_message.delete = AsyncMock(
+            side_effect=discord.HTTPException(MagicMock(), "Unknown Message"),
+        )
+
+        # Should not raise — just swallow and repost
+        await tm._upsert_hub(content="turn 2", embed=embed, view=None)
+
+        old_message.delete.assert_awaited_once()
+        # A new hub was still sent
+        assert channel.send.await_count == 2

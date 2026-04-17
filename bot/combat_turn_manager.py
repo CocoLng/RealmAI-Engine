@@ -530,30 +530,22 @@ class TurnManager:
         view: discord.ui.View | None,
     ) -> None:
         send_view: Any = view if view is not None else discord.utils.MISSING
-        if self.hub_message is None:
+
+        # Delete old hub so the new one appears at the channel bottom.
+        old = self.hub_message
+        self.hub_message = None
+        if old is not None:
             try:
-                self.hub_message = await self.channel.send(
-                    content=content, embed=embed, view=send_view,
-                )
-            except discord.HTTPException as exc:
-                logger.warning("TurnManager hub send failed: %s", exc)
-            return
+                await old.delete()
+            except discord.HTTPException:
+                pass  # Already gone — ignore
 
         try:
-            await self.hub_message.edit(
+            self.hub_message = await self.channel.send(
                 content=content, embed=embed, view=send_view,
             )
-        except discord.NotFound:
-            # Hub was deleted — repost a fresh one.
-            logger.info("TurnManager hub was deleted, reposting")
-            try:
-                self.hub_message = await self.channel.send(
-                    content=content, embed=embed, view=send_view,
-                )
-            except discord.HTTPException as exc:
-                logger.warning("TurnManager hub repost failed: %s", exc)
         except discord.HTTPException as exc:
-            logger.warning("TurnManager hub edit failed: %s", exc)
+            logger.warning("TurnManager hub send failed: %s", exc)
 
     async def _flush_pending_cues(self, state: CombatState) -> None:
         """Post compact messages for legendary + phase cues queued on state.
