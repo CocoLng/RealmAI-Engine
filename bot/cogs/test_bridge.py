@@ -37,12 +37,28 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class _ChannelResponse:
-    """Mimics interaction.response — posts to channel instead."""
+    """Mimics interaction.response — posts to channel instead.
 
-    channel: discord.TextChannel
-    _responded: bool = False
+    When ``bridge`` is provided, any view attached to a response is registered
+    in ``bridge.active_views`` so subsequent ``click_button`` / ``select_option``
+    / ``submit_modal`` commands can drive it. When ``message`` is provided,
+    ``edit_message`` targets that message (matching discord.py semantics where
+    the interaction's response edits the message hosting the clicked component).
+    """
+
+    def __init__(
+        self,
+        channel: discord.TextChannel,
+        bridge: TestBridge | None = None,
+        message: discord.Message | None = None,
+        player_idx: int = 1,
+    ) -> None:
+        self.channel = channel
+        self.bridge = bridge
+        self.message = message
+        self.player_idx = player_idx
+        self._responded = False
 
     async def send_message(
         self,
@@ -53,7 +69,7 @@ class _ChannelResponse:
         ephemeral: bool = False,
         **kwargs: Any,
     ) -> discord.Message | None:
-        """Post the response to the channel."""
+        """Post the response to the channel and register the view if present."""
         send_kwargs: dict[str, Any] = {}
         if content:
             send_kwargs["content"] = content
@@ -62,9 +78,46 @@ class _ChannelResponse:
         if view:
             send_kwargs["view"] = view
         self._responded = True
+        msg: discord.Message | None = None
         if send_kwargs:
-            return await self.channel.send(**send_kwargs)
-        return None
+            msg = await self.channel.send(**send_kwargs)
+        if msg is not None and view is not None and self.bridge is not None:
+            self.bridge.active_views[msg.id] = view
+        return msg
+
+    async def edit_message(
+        self,
+        *,
+        content: str | None = None,
+        embed: discord.Embed | None = None,
+        view: discord.ui.View | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Edit the message hosting this interaction.
+
+        When a new view is attached, it replaces the view registered under the
+        message id in ``bridge.active_views``.
+        """
+        self._responded = True
+        if self.message is None:
+            logger.warning("edit_message called but no message is attached to the interaction")
+            return
+        edit_kwargs: dict[str, Any] = {}
+        if content is not None:
+            edit_kwargs["content"] = content
+        if embed is not None:
+            edit_kwargs["embed"] = embed
+        if view is not None:
+            edit_kwargs["view"] = view
+        await self.message.edit(**edit_kwargs)
+        if view is not None and self.bridge is not None:
+            self.bridge.active_views[self.message.id] = view
+
+    async def send_modal(self, modal: discord.ui.Modal) -> None:
+        """Record the modal as pending for this player so ``submit_modal`` can find it."""
+        self._responded = True
+        if self.bridge is not None:
+            self.bridge.pending_modals[self.player_idx] = modal
 
     async def defer(self, *, ephemeral: bool = False, **kwargs: Any) -> None:
         """No-op defer."""
@@ -75,11 +128,16 @@ class _ChannelResponse:
         return self._responded
 
 
-@dataclass
 class _ChannelFollowup:
     """Mimics interaction.followup — posts to channel."""
 
-    channel: discord.TextChannel
+    def __init__(
+        self,
+        channel: discord.TextChannel,
+        bridge: TestBridge | None = None,
+    ) -> None:
+        self.channel = channel
+        self.bridge = bridge
 
     async def send(
         self,
@@ -90,7 +148,7 @@ class _ChannelFollowup:
         ephemeral: bool = False,
         **kwargs: Any,
     ) -> discord.Message | None:
-        """Post the followup to the channel."""
+        """Post the followup and register any attached view."""
         send_kwargs: dict[str, Any] = {}
         if content:
             send_kwargs["content"] = content
@@ -98,9 +156,12 @@ class _ChannelFollowup:
             send_kwargs["embed"] = embed
         if view:
             send_kwargs["view"] = view
+        msg: discord.Message | None = None
         if send_kwargs:
-            return await self.channel.send(**send_kwargs)
-        return None
+            msg = await self.channel.send(**send_kwargs)
+        if msg is not None and view is not None and self.bridge is not None:
+            self.bridge.active_views[msg.id] = view
+        return msg
 
 
 @dataclass
@@ -133,7 +194,21 @@ class _FakeNarrateMessage:
 
 
 class ChannelTestInteraction:
-    """Fake discord.Interaction that posts responses to a real channel."""
+    """Fake discord.Interaction that posts responses to a real channel.
+
+    Parameters
+    ----------
+    bridge:
+        Optional back-reference so ``response.send_message``/``edit_message``
+        can register the attached view in ``bridge.active_views`` and so
+        ``send_modal`` can park the modal for later ``submit_modal`` commands.
+    message:
+        When the interaction corresponds to a component click (button/select),
+        this is the message hosting the component. ``response.edit_message``
+        targets it.
+    player_idx:
+        Virtual player index, used to key pending modals per player.
+    """
 
     def __init__(
         self,
@@ -141,6 +216,10 @@ class ChannelTestInteraction:
         guild: discord.Guild,
         channel: discord.TextChannel,
         user: _VirtualMember,
+        *,
+        bridge: TestBridge | None = None,
+        message: discord.Message | None = None,
+        player_idx: int = 1,
     ) -> None:
         self.client = bot
         self.guild = guild
@@ -148,8 +227,11 @@ class ChannelTestInteraction:
         self.channel = channel
         self.channel_id = channel.id
         self.user = user  # type: ignore[assignment]
-        self.response = _ChannelResponse(channel)
-        self.followup = _ChannelFollowup(channel)
+        self.message = message
+        self.response = _ChannelResponse(
+            channel, bridge=bridge, message=message, player_idx=player_idx,
+        )
+        self.followup = _ChannelFollowup(channel, bridge=bridge)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +252,9 @@ class TestBridge(commands.Cog):
         self.tester_bot_id = int(os.environ.get("TESTER_BOT_ID", "0"))
         self.virtual_players: dict[int, _VirtualMember] = {}
         self.active_views: dict[int, discord.ui.View] = {}
+        # Modals are ephemeral dialogs with no persistent msg id. Key by player
+        # so the same tester can drive multiple parallel flows concurrently.
+        self.pending_modals: dict[int, discord.ui.Modal] = {}
 
     def _get_virtual_player(self, idx: int) -> _VirtualMember:
         """Get or create a virtual player by index."""
@@ -214,11 +299,19 @@ class TestBridge(commands.Cog):
         return command, args, player_idx
 
     def _make_interaction(
-        self, guild: discord.Guild, channel: discord.TextChannel, player_idx: int,
+        self,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+        player_idx: int,
+        *,
+        message: discord.Message | None = None,
     ) -> ChannelTestInteraction:
         """Create a ChannelTestInteraction for the virtual player."""
         user = self._get_virtual_player(player_idx)
-        return ChannelTestInteraction(self.bot, guild, channel, user)
+        return ChannelTestInteraction(
+            self.bot, guild, channel, user,
+            bridge=self, message=message, player_idx=player_idx,
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -317,6 +410,12 @@ class TestBridge(commands.Cog):
             await self._handle_inject_scene(inter, args)
         elif command == "narrate":
             await self._handle_narrate(inter, args)
+        elif command == "click_button":
+            await self._handle_click_button(args, player_idx, guild, channel)
+        elif command == "select_option":
+            await self._handle_select_option(args, player_idx, guild, channel)
+        elif command == "submit_modal":
+            await self._handle_submit_modal(args, player_idx, guild, channel)
         else:
             await channel.send(f"TestBridge: commande inconnue '{command}'")
 
@@ -381,11 +480,52 @@ class TestBridge(commands.Cog):
     async def _handle_create_character(
         self, inter: ChannelTestInteraction, args: dict[str, str],
     ) -> None:
-        """Create a character directly (bypasses multi-step view flow)."""
+        """Create a character.
+
+        Two modes:
+        - ``quick=1`` (or any legacy ``name``/``race``/``class_`` arg): skips the
+          multi-step view and creates the character directly with rolled stats.
+          Fast setup for tests that care about later behaviour.
+        - default (no args): sends the real ``CharacterCreateView``; the tester
+          then drives it with ``click_button`` / ``select_option`` / ``submit_modal``.
+        """
         session = self.bot.get_session(inter.channel_id)
         if session is None:
             await inter.channel.send("Aucune session active.")
             return
+
+        legacy_shortcut = any(k in args for k in ("name", "race", "class_"))
+        use_quick = args.get("quick", "").lower() in {"1", "true", "yes"} or legacy_shortcut
+
+        if use_quick:
+            await self._handle_create_character_quick(inter, args)
+            return
+
+        user_id = inter.user.id
+        if user_id in session.characters:
+            await inter.channel.send("Tu as deja un personnage dans cette campagne.")
+            return
+
+        from bot.views.character_create_view import CharacterCreateView
+
+        view = CharacterCreateView(on_complete=self._on_character_create_complete)
+        # Stash the player_idx on the view so the on_complete callback knows
+        # which virtual player owns this character. The view has no such field
+        # natively; we smuggle it via a dunder attr.
+        view._test_player_idx = inter.user.id  # type: ignore[attr-defined]
+        msg = await inter.channel.send(
+            content="Creation de personnage -- Choisis ta race :",
+            view=view,
+        )
+        if msg is not None:
+            self.active_views[msg.id] = view
+
+    async def _handle_create_character_quick(
+        self, inter: ChannelTestInteraction, args: dict[str, str],
+    ) -> None:
+        """Fast-path character creation (original shortcut behaviour)."""
+        session = self.bot.get_session(inter.channel_id)
+        assert session is not None  # checked by caller
 
         name = args.get("name", "TestCharacter")
         race = Race(args.get("race", "Human"))
@@ -402,7 +542,6 @@ class TestBridge(commands.Cog):
         session.inventories[user_id] = inventory
         session.spellcasters[user_id] = spellcaster
 
-        # Persist to DB
         db_session = self.bot.db_factory()
         try:
             from db.repositories import PlayerCharacterRepository
@@ -416,7 +555,217 @@ class TestBridge(commands.Cog):
         from bot.embeds.character_embed import build_character_embed
 
         embed = build_character_embed(character)
-        await inter.channel.send(content=f"**{name}** cree !", embed=embed)
+        await inter.channel.send(content=f"**{name}** cree (quick) !", embed=embed)
+
+    async def _on_character_create_complete(
+        self,
+        interaction: discord.Interaction,
+        view: Any,  # CharacterCreateView, but avoid circular import
+    ) -> None:
+        """Finalize character creation once the full view flow has run.
+
+        Mirrors the save logic in CharacterCog.create_character_cmd.
+        """
+        from engine.character import assign_standard_array
+
+        # All selections are guaranteed non-None when on_complete fires.
+        assert view.race is not None
+        assert view.char_class is not None
+        assert view.alignment is not None
+        assert view.character_name is not None
+        assert view.ability_assignments is not None
+        assert view.skill_proficiencies is not None
+
+        # The interaction passed here is the Modal submit interaction; it
+        # carries our ChannelTestInteraction when driven via TestBridge.
+        channel_id = getattr(interaction, "channel_id", None)
+        if channel_id is None:
+            logger.error("on_character_create_complete: interaction has no channel_id")
+            return
+        session = self.bot.get_session(channel_id)
+        if session is None:
+            logger.error("on_character_create_complete: no active session on channel %s", channel_id)
+            return
+
+        user_id = getattr(view, "_test_player_idx", None) or interaction.user.id
+
+        scores = assign_standard_array(view.ability_assignments, view.race)
+        character = create_character(
+            name=view.character_name,
+            race=view.race,
+            char_class=view.char_class,
+            ability_scores=scores,
+            alignment=view.alignment,
+            skill_proficiencies=view.skill_proficiencies,
+        )
+        inventory = create_inventory()
+        spellcaster = create_spellcaster_state(view.char_class, 1)
+
+        session.characters[user_id] = character
+        session.inventories[user_id] = inventory
+        session.spellcasters[user_id] = spellcaster
+
+        db_session = self.bot.db_factory()
+        try:
+            from db.repositories import PlayerCharacterRepository
+
+            pc_repo = PlayerCharacterRepository(db_session)
+            pc_repo.save(user_id, session.campaign.id, character, inventory, spellcaster)
+            db_session.commit()
+        finally:
+            db_session.close()
+
+        from bot.embeds.character_embed import build_character_embed
+
+        embed = build_character_embed(character)
+        # Prefer followup on the driving interaction so the tester can
+        # correlate the finalization to the submit_modal command.
+        followup = getattr(interaction, "followup", None)
+        if followup is not None:
+            await followup.send(content=f"**{character.name}** a ete cree !", embed=embed)
+        else:
+            channel = getattr(interaction, "channel", None)
+            if channel is not None:
+                await channel.send(content=f"**{character.name}** a ete cree !", embed=embed)
+
+    # ------------------------------------------------------------------
+    # Component-driving handlers
+    # ------------------------------------------------------------------
+
+    async def _handle_click_button(
+        self,
+        args: dict[str, str],
+        player_idx: int,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+    ) -> None:
+        """Invoke a Button callback on the view registered for the given message.
+
+        Args:
+            msg: Discord message id of the view-bearing message
+            button: Label of the button (case-sensitive match)
+        """
+        msg_id = int(args.get("msg", "0"))
+        label = args.get("button", "")
+        if not msg_id or not label:
+            await channel.send("TestBridge click_button: requiert msg=<id> et button=<label>")
+            return
+
+        view = self.active_views.get(msg_id)
+        if view is None:
+            await channel.send(f"TestBridge click_button: aucune view active pour msg={msg_id}")
+            return
+
+        button: discord.ui.Button[Any] | None = None
+        for child in view.children:
+            if isinstance(child, discord.ui.Button) and child.label == label:
+                button = child
+                break
+        if button is None:
+            labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
+            await channel.send(
+                f"TestBridge click_button: bouton '{label}' introuvable. "
+                f"Disponibles: {labels}",
+            )
+            return
+
+        message = await self._safe_fetch_message(channel, msg_id)
+        inter = self._make_interaction(guild, channel, player_idx, message=message)
+        await button.callback(inter)  # type: ignore[arg-type]
+
+    async def _handle_select_option(
+        self,
+        args: dict[str, str],
+        player_idx: int,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+    ) -> None:
+        """Invoke a Select callback on the view registered for the given message.
+
+        Args:
+            msg: Discord message id of the view-bearing message
+            value: The option value to select (may be comma-separated for multi-select)
+        """
+        msg_id = int(args.get("msg", "0"))
+        raw_value = args.get("value", "")
+        if not msg_id or raw_value == "":
+            await channel.send("TestBridge select_option: requiert msg=<id> et value=<value>")
+            return
+        values = [v for v in raw_value.split(",") if v]
+
+        view = self.active_views.get(msg_id)
+        if view is None:
+            await channel.send(f"TestBridge select_option: aucune view active pour msg={msg_id}")
+            return
+
+        select: discord.ui.Select[Any] | None = None
+        for child in view.children:
+            if not isinstance(child, discord.ui.Select):
+                continue
+            option_values = [opt.value for opt in child.options]
+            if all(v in option_values for v in values):
+                select = child
+                break
+        if select is None:
+            await channel.send(
+                f"TestBridge select_option: aucun select ne propose les valeurs {values}",
+            )
+            return
+
+        # Populate .values on the select so the callback sees the selection
+        # exactly as discord.py would after a user picked options.
+        select._values = values  # type: ignore[attr-defined, assignment]
+
+        message = await self._safe_fetch_message(channel, msg_id)
+        inter = self._make_interaction(guild, channel, player_idx, message=message)
+        await select.callback(inter)  # type: ignore[arg-type]
+
+    async def _handle_submit_modal(
+        self,
+        args: dict[str, str],
+        player_idx: int,
+        guild: discord.Guild,
+        channel: discord.TextChannel,
+    ) -> None:
+        """Submit the modal currently pending for this player.
+
+        Args:
+            field_<label>=<value>  for each TextInput field in the modal
+            (labels are matched case-sensitively, spaces encoded as ~)
+        """
+        modal = self.pending_modals.pop(player_idx, None)
+        if modal is None:
+            await channel.send(
+                f"TestBridge submit_modal: aucun modal pending pour player={player_idx}",
+            )
+            return
+
+        field_values: dict[str, str] = {
+            key[len("field_"):].replace("~", " "): value.replace("~", " ")
+            for key, value in args.items()
+            if key.startswith("field_")
+        }
+
+        # Fill each TextInput in the modal whose label matches a provided field.
+        for child in modal.children:
+            if isinstance(child, discord.ui.TextInput):
+                label = child.label
+                if label in field_values:
+                    child._value = field_values[label]  # type: ignore[attr-defined]
+
+        inter = self._make_interaction(guild, channel, player_idx)
+        await modal.on_submit(inter)  # type: ignore[arg-type]
+
+    @staticmethod
+    async def _safe_fetch_message(
+        channel: discord.TextChannel, msg_id: int,
+    ) -> discord.Message | None:
+        """Fetch a message by id, returning None on any failure (test-friendly)."""
+        try:
+            return await channel.fetch_message(msg_id)
+        except (discord.NotFound, discord.Forbidden, AttributeError, Exception) as exc:
+            logger.debug("TESTBRIDGE fetch_message(%s) failed: %s", msg_id, exc)
+            return None
 
     async def _handle_inject_scene(
         self, inter: ChannelTestInteraction, args: dict[str, str],

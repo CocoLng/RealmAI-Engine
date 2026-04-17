@@ -179,6 +179,39 @@ async def discord_select_option(
 
 
 @mcp.tool()
+async def discord_submit_modal(
+    fields: dict[str, str],
+    player: int = 1,
+) -> dict[str, Any]:
+    """Submit a modal currently pending for this virtual player.
+
+    Drives the Discord Modal that the game bot opened via
+    ``interaction.response.send_modal``. The TestBridge pops the pending modal
+    for the given player, populates each TextInput whose label matches a key
+    in ``fields``, and invokes ``modal.on_submit``.
+
+    Args:
+        fields: Map of TextInput label -> value. Labels are case-sensitive.
+        player: Virtual player index (1-based, default 1)
+
+    Returns:
+        success: Whether a response was received
+        response: The game bot's follow-up message
+    """
+    bot = await _get_bot()
+    parts = [f"player={player}", "submit_modal"]
+    for key, value in fields.items():
+        safe_key = key.replace(" ", "~")
+        safe_value = value.replace(" ", "~")
+        parts.append(f"field_{safe_key}={safe_value}")
+    cmd = " ".join(parts)
+    result = await bot.send_test_command(cmd)
+    if "error" in result:
+        return {"success": False, "error": result["error"]}
+    return {"success": True, "response": result}
+
+
+@mcp.tool()
 async def discord_wait_for_response(timeout: float = 10.0) -> dict[str, Any]:
     """Wait for the next message from the game bot.
 

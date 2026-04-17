@@ -115,7 +115,14 @@ class TesterBot(discord.Client):
 
     @staticmethod
     def _serialize_components(components: list[discord.ActionRow]) -> list[dict[str, Any]]:
-        """Convert message components to a serializable list."""
+        """Convert message components to a serializable list.
+
+        Returned shape per component:
+            {"type": "button", "label": str, "custom_id": str, "disabled": bool}
+            {"type": "select", "custom_id": str, "placeholder": str,
+             "disabled": bool, "min_values": int, "max_values": int,
+             "options": [{"label": str, "value": str}, ...]}
+        """
         result: list[dict[str, Any]] = []
         for row in components:
             for child in row.children:
@@ -130,6 +137,10 @@ class TesterBot(discord.Client):
                     result.append({
                         "type": "select",
                         "custom_id": child.custom_id or "",
+                        "placeholder": getattr(child, "placeholder", "") or "",
+                        "disabled": getattr(child, "disabled", False),
+                        "min_values": getattr(child, "min_values", 1),
+                        "max_values": getattr(child, "max_values", 1),
                         "options": [
                             {"label": opt.label, "value": opt.value}
                             for opt in (child.options or [])

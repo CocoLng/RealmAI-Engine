@@ -165,7 +165,7 @@ All commands go through the TestBridge cog. Format: `!test [player=N] <command> 
 | Command | Args | What it does |
 |---------|------|--------------|
 | `start_campaign` | `theme=X players=N` | Creates campaign on the test channel (no new channel) |
-| `create_character` | `name=X race=Y class_=Z player=N` | Creates character directly (bypasses view flow) |
+| `create_character` | *(none)* → full view flow, or `quick=1 name=X race=Y class_=Z` → shortcut | Default: sends the real multi-step view so the tester drives it like a player. Shortcut skips the view and rolls stats. |
 | `character` | | Shows character embed |
 | `save` | | Saves session to DB |
 | `resume` | | Resumes saved session |
@@ -179,6 +179,26 @@ All commands go through the TestBridge cog. Format: `!test [player=N] <command> 
 | `unequip` | `slot=X` | Unequip slot |
 | `use_item` | `item=X` | Use consumable |
 | `game_state` | | Returns full session state as JSON |
+| `click_button` | `msg=<id> button=<label>` | Clicks a Button in the view attached to the given message |
+| `select_option` | `msg=<id> value=<v>` or `value=v1,v2,...` for multi-select | Picks option(s) on the matching Select |
+| `submit_modal` | `field_<Label>=<value> ...` | Submits the modal pending for this player (from `send_modal`) |
+
+### Drive a real view (full fidelity)
+
+When testing a slash command that opens a multi-step UI (e.g. `/create_character` → race → class → alignment → stats → skills → name modal), run the full flow so bugs in select transitions / button state / modal wiring are caught:
+
+1. `discord_send_command("!test create_character")` *(no args — sends the real view)*
+2. `discord_read_messages(1)` — note the `id` of the bot's message; `components` shows the available select options
+3. `discord_select_option(message_id=<id>, value="Elf")`
+4. `discord_read_messages(1)` — class select is now enabled
+5. `discord_select_option(message_id=<id>, value="Wizard")`
+6. `discord_select_option(message_id=<id>, value="Lawful Good")` — transitions to StatAssignmentView
+7. Pick each stat value: `discord_select_option(message_id=<id>, value="15")`, `"14"`, … — then `discord_click_button(message_id=<id>, button_label="Confirmer")`
+8. Skill selection: `discord_select_option(message_id=<id>, value="Arcana,History")` (comma = multi-select) → `discord_click_button(message_id=<id>, button_label="Confirmer")`
+9. Name modal is now pending: `discord_submit_modal(fields={"Nom": "Elrond"})`
+10. Verify: `discord_send_command("!test character")` returns an embed with race=Elf, class=Wizard, name=Elrond
+
+Use the shortcut `!test create_character quick=1 name=X race=Y class_=Z` only when the view is not what you're testing — e.g. when you need a character on the session before exercising combat.
 
 ### MCP Server (alternative)
 
@@ -187,7 +207,7 @@ The MCP server at `mcp_discord/` exposes the same functionality as Claude Code t
 {"mcpServers": {"discord-test": {"command": "uv", "args": ["run", "python", "-m", "mcp_discord"]}}}
 ```
 
-Tools: `discord_status`, `discord_send_command`, `discord_read_messages`, `discord_click_button`, `discord_select_option`, `discord_wait_for_response`, `discord_get_game_state`.
+Tools: `discord_status`, `discord_send_command`, `discord_read_messages`, `discord_click_button`, `discord_select_option`, `discord_submit_modal`, `discord_wait_for_response`, `discord_get_game_state`.
 
 ## Development workflow
 
