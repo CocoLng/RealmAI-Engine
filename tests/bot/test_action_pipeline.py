@@ -2027,11 +2027,11 @@ class TestWeaponAutoResolve:
         inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: sword})
         assert ActionPipeline._auto_resolve_weapon_name(None, inv) == "Longsword"
 
-    def test_no_override_when_weapon_specified(self) -> None:
-        """Player explicitly named 'Dagger' → keeps 'Dagger'."""
+    def test_unrecognised_alias_with_single_equipped_weapon_resolves_to_it(self) -> None:
+        """Player says 'Dagger' but only Longsword is equipped → fuzzy-resolves to Longsword."""
         sword = _make_longsword()
         inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: sword})
-        assert ActionPipeline._auto_resolve_weapon_name("Dagger", inv) == "Dagger"
+        assert ActionPipeline._auto_resolve_weapon_name("Dagger", inv) == "Longsword"
 
     def test_no_resolve_empty_main_hand(self) -> None:
         """No weapon in MAIN_HAND → stays None."""
@@ -2047,3 +2047,38 @@ class TestWeaponAutoResolve:
     def test_no_resolve_no_inventory(self) -> None:
         """inventory is None → stays None, no crash."""
         assert ActionPipeline._auto_resolve_weapon_name(None, None) is None
+
+    def test_french_alias_resolves_to_equipped_weapon(self) -> None:
+        """Player says 'épée' with Longsword in MAIN_HAND → canonical 'Longsword'."""
+        sword = _make_longsword()
+        inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: sword})
+        assert ActionPipeline._auto_resolve_weapon_name("épée", inv) == "Longsword"
+
+    def test_case_insensitive_match_returns_canonical(self) -> None:
+        """'longsword' (lowercase) matches Longsword exactly, returns canonical form."""
+        sword = _make_longsword()
+        inv = Inventory(items=[], equipped={EquipmentSlot.MAIN_HAND: sword})
+        assert ActionPipeline._auto_resolve_weapon_name("longsword", inv) == "Longsword"
+
+    def test_named_weapon_in_off_hand_resolves_correctly(self) -> None:
+        """Player names 'Dagger' and Dagger is in OFF_HAND → case-insensitive match wins."""
+        sword = _make_longsword()
+        dagger = Weapon(
+            name="Dagger",
+            weight=1.0,
+            damage_dice="1d4",
+            damage_type=DamageType.PIERCING,
+            weapon_category=WeaponCategory.SIMPLE_MELEE,
+        )
+        inv = Inventory(
+            items=[],
+            equipped={
+                EquipmentSlot.MAIN_HAND: sword,
+                EquipmentSlot.OFF_HAND: dagger,
+            },
+        )
+        assert ActionPipeline._auto_resolve_weapon_name("Dagger", inv) == "Dagger"
+
+    def test_none_inventory_with_alias_returns_none(self) -> None:
+        """weapon_name is given but inventory is None → None."""
+        assert ActionPipeline._auto_resolve_weapon_name("épée", None) is None

@@ -589,15 +589,42 @@ class ActionPipeline:
         weapon_name: str | None,
         inventory: Inventory | None,
     ) -> str | None:
-        """Return the MAIN_HAND weapon name when the player omits it."""
-        if weapon_name is not None:
-            return weapon_name
+        """Return the canonical equipped weapon name, resolving player aliases.
+
+        When weapon_name is None → return MAIN_HAND weapon as before.
+        When weapon_name is given → try case-insensitive exact match first;
+        if no match and only one weapon is equipped, assume the player meant
+        that weapon (handles aliases like "épée", "sword", "mon arme").
+        Falls back to MAIN_HAND when multiple weapons are equipped and none match.
+        """
         if inventory is None:
             return None
-        main_hand = inventory.equipped.get(EquipmentSlot.MAIN_HAND)
-        if main_hand is not None and isinstance(main_hand, Weapon):
-            return main_hand.name
-        return None
+
+        equipped_weapons: list[Weapon] = [
+            item
+            for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND)
+            if (item := inventory.equipped.get(slot)) is not None
+            and isinstance(item, Weapon)
+        ]
+
+        if weapon_name is None:
+            main = inventory.equipped.get(EquipmentSlot.MAIN_HAND)
+            if main is not None and isinstance(main, Weapon):
+                return main.name
+            return equipped_weapons[0].name if equipped_weapons else None
+
+        # Case-insensitive exact match against equipped weapons.
+        for w in equipped_weapons:
+            if w.name.lower() == weapon_name.lower():
+                return w.name
+
+        # No match — if exactly one weapon is equipped, assume the player meant it.
+        if len(equipped_weapons) == 1:
+            return equipped_weapons[0].name
+
+        # Ambiguous or no weapon equipped — fall back to MAIN_HAND.
+        main = inventory.equipped.get(EquipmentSlot.MAIN_HAND)
+        return main.name if main is not None and isinstance(main, Weapon) else None
 
     def _validate(self, action: InterpretedAction) -> ValidationResult:
         """Convert InterpretedAction → Action and dispatch to the right validator.
