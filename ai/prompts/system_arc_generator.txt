@@ -39,6 +39,10 @@ Each beat's encounter_type and encounter_subtype must match what the recipe spec
 - For social beats: trigger is "talk" with the key NPC
 - For exploration beats: trigger is "arrive" (target = location name)
 - on_complete.unlock_exits should list the exit(s) connecting to the next beat's location
+- state_flags values are ALWAYS boolean true or false — NEVER strings like "place_centrale" or "compromised".
+  * BAD:  "state_flags": {"location_explored": "place_centrale", "door_open": "yes"}
+  * GOOD: "state_flags": {"location_explored": true, "door_open": true}
+  The flag NAME carries the meaning; the value is always true (flag is set) or false (flag is cleared).
 
 Return JSON only with this exact schema:
 {
@@ -156,10 +160,14 @@ engine can run a proper boss fight at the climax. Respect these rules:
 - **Exactly 3 `legendary_actions`** with costs `1`, `2`, and `3`.
 - **1 to 2 `phases`**, typically with `trigger_hp_percent=50`.
 - All `damage_type`, `condition_name`, `save_ability`, `target_scope`, and
-  `kind` values MUST use the engine's exact enum casing:
-  * `damage_type` is **TitleCase** (`"Slashing"`, not `"slashing"`).
-  * `save_ability` is **UPPERCASE** three-letter code (`"WIS"`, `"DEX"`).
-  * `target_scope` and `kind` are **lowercase** (`"single"`, `"damage"`).
+  `kind` values MUST use the engine's exact enum casing. NO synonyms allowed:
+  * `damage_type` is **TitleCase** — use EXACTLY one of:
+    Slashing, Piercing, Bludgeoning, Fire, Cold, Lightning, Thunder, Poison, Radiant, Necrotic, Force
+    BAD: "Electricity", "Electric" → use "Lightning". BAD: "Holy" → use "Radiant".
+  * `save_ability` is **UPPERCASE** three-letter code: STR, DEX, CON, INT, WIS, CHA
+  * `target_scope` is **lowercase** — use EXACTLY one of: single, zone, all_enemies, all_allies_in_zone, self
+    BAD: "all_enemies_in_zone" (does not exist) → use "all_enemies" or "zone".
+  * `kind` is **lowercase** — use exactly one of: damage, heal, condition, move, buff, debuff, aoe_damage
   * `condition_name` is **TitleCase** (`"Frightened"`, `"Poisoned"`).
 - The stat block MUST be playable as a level 5-7 boss: damage 1d8+4 to 3d10
   for attacks, signature dice up to 5d8, save DCs in the 13-16 range.
