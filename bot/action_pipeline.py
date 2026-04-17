@@ -54,6 +54,7 @@ from bot.persistence import persist_session
 from engine.character import Character, compute_modifier
 from engine.combat import (
     CombatEndReason,
+    CombatSide,
     CombatState,
     TrivialResolveResult,
     check_combat_end,
@@ -98,6 +99,23 @@ DEFENSIVE_CONDITIONS: frozenset[ConditionType] = frozenset({
     ConditionType.UNCONSCIOUS,
 })
 """Conditions that make an NPC non-trivial to defeat outright."""
+
+
+def _assign_initial_zones(state: CombatState, location: Location) -> None:
+    """Place combatants into starting zones when combat begins.
+
+    PCs go to the first zone; enemies go to the last zone (same as the first
+    when only one zone exists). Combatants that already have a zone are left
+    untouched.
+    """
+    zones = location.combat_zones
+    if not zones:
+        return
+    pc_zone = zones[0].name
+    npc_zone = zones[-1].name
+    for c in state.combatants:
+        if c.current_zone is None:
+            c.current_zone = pc_zone if c.side == CombatSide.PLAYER else npc_zone
 
 
 def is_trivially_defeatable(npc: NPC) -> bool:
@@ -680,6 +698,8 @@ class ActionPipeline:
                     return ValidationResult(is_valid=False, error_message=str(exc))
                 self.combat_state = start_combat(pre_state.combatants, trigger=trigger)
                 self.session.combat_state = self.combat_state  # type: ignore[union-attr]
+                if self.location is not None and self.location.has_combat_zones():
+                    _assign_initial_zones(self.combat_state, self.location)
                 self._pending_combat_start_embed = (self.combat_state, trigger)
                 # Fall through to combat dispatch below
 

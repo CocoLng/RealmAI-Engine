@@ -2089,7 +2089,7 @@ class TestWeaponAutoResolve:
 # ---------------------------------------------------------------------------
 
 
-def _make_pc_combatant_with_sword(name: str = "JeanTest", hp: int = 20) -> "Combatant":
+def _make_pc_combatant_with_sword(name: str = "JeanTest", hp: int = 20):
     from engine.combat import CombatSide, Combatant
 
     char = create_character(
@@ -2111,7 +2111,7 @@ def _make_pc_combatant_with_sword(name: str = "JeanTest", hp: int = 20) -> "Comb
     )
 
 
-def _make_enemy_combatant(name: str = "Gobelin", hp: int = 15, ac: int = 12) -> "Combatant":
+def _make_enemy_combatant(name: str = "Gobelin", hp: int = 15, ac: int = 12):
     from engine.combat import CombatSide, Combatant
 
     char = create_character(
@@ -2133,7 +2133,7 @@ def _make_enemy_combatant(name: str = "Gobelin", hp: int = 15, ac: int = 12) -> 
     )
 
 
-def _fake_hit_result(attacker: str, defender: str, damage: int, hp_remaining: int) -> "AttackResult":
+def _fake_hit_result(attacker: str, defender: str, damage: int, hp_remaining: int):
     from engine.combat import AttackResult
     from engine.dice import RollOutcome
 
@@ -2153,7 +2153,7 @@ def _fake_hit_result(attacker: str, defender: str, damage: int, hp_remaining: in
     )
 
 
-def _fake_miss_result(attacker: str, defender: str, hp: int) -> "AttackResult":
+def _fake_miss_result(attacker: str, defender: str, hp: int):
     from engine.combat import AttackResult
     from engine.dice import RollOutcome
 
@@ -2330,3 +2330,91 @@ class TestResolvePcAttack:
 
         assert isinstance(outcome, MechanicsOutcome)
         assert len(pipeline._pending_dice_embeds) == 0
+
+
+# ---------------------------------------------------------------------------
+# _assign_initial_zones — places combatants in starting zones on combat start
+# ---------------------------------------------------------------------------
+
+
+class TestAssignInitialZones:
+    def test_pcs_go_to_first_zone_npcs_go_to_last(self) -> None:
+        """PCs land in zone[0], enemies in zone[-1] when there are 2+ zones."""
+        from engine.combat import CombatState
+        from world.combat_zone import Zone
+        from world.location import Location
+        from bot.action_pipeline import _assign_initial_zones
+
+        pc = _make_pc_combatant_with_sword("Hero")
+        npc = _make_enemy_combatant("Orc")
+        state = CombatState(combatants=[pc, npc], round_number=1, current_turn_index=0)
+
+        location = Location(
+            name="Arena",
+            combat_zones=[Zone(name="Nord"), Zone(name="Sud")],
+        )
+
+        _assign_initial_zones(state, location)
+
+        assert pc.current_zone == "Nord"
+        assert npc.current_zone == "Sud"
+
+    def test_single_zone_both_sides_placed_in_same_zone(self) -> None:
+        """When only one zone exists, PCs and enemies share it."""
+        from engine.combat import CombatState
+        from world.combat_zone import Zone
+        from world.location import Location
+        from bot.action_pipeline import _assign_initial_zones
+
+        pc = _make_pc_combatant_with_sword("Hero")
+        npc = _make_enemy_combatant("Orc")
+        state = CombatState(combatants=[pc, npc], round_number=1, current_turn_index=0)
+
+        location = Location(
+            name="Tavern",
+            combat_zones=[Zone(name="Salle")],
+        )
+
+        _assign_initial_zones(state, location)
+
+        assert pc.current_zone == "Salle"
+        assert npc.current_zone == "Salle"
+
+    def test_combatant_with_existing_zone_is_not_overwritten(self) -> None:
+        """A combatant that already has current_zone set is left untouched."""
+        from engine.combat import CombatState
+        from world.combat_zone import Zone
+        from world.location import Location
+        from bot.action_pipeline import _assign_initial_zones
+
+        pc = _make_pc_combatant_with_sword("Hero")
+        pc.current_zone = "Milieu"  # already placed
+        npc = _make_enemy_combatant("Orc")
+        state = CombatState(combatants=[pc, npc], round_number=1, current_turn_index=0)
+
+        location = Location(
+            name="Arena",
+            combat_zones=[Zone(name="Nord"), Zone(name="Sud")],
+        )
+
+        _assign_initial_zones(state, location)
+
+        assert pc.current_zone == "Milieu"   # unchanged
+        assert npc.current_zone == "Sud"
+
+    def test_no_zones_is_a_noop(self) -> None:
+        """When the location has no combat_zones, nothing is assigned."""
+        from engine.combat import CombatState
+        from world.location import Location
+        from bot.action_pipeline import _assign_initial_zones
+
+        pc = _make_pc_combatant_with_sword("Hero")
+        npc = _make_enemy_combatant("Orc")
+        state = CombatState(combatants=[pc, npc], round_number=1, current_turn_index=0)
+
+        location = Location(name="Dungeon")  # no combat_zones
+
+        _assign_initial_zones(state, location)
+
+        assert pc.current_zone is None
+        assert npc.current_zone is None
