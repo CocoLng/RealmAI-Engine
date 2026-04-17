@@ -1143,6 +1143,9 @@ class ActionPipeline:
                 player_intent=intent,
             )
 
+        if at == ActionType.ATTACK:
+            return self._resolve_pc_attack(action)
+
         return MechanicsOutcome(
             summary=f"{action.actor_name} performs {at.value}.",
             player_intent=intent,
@@ -1603,6 +1606,79 @@ class ActionPipeline:
             summary=summary_text,
             player_intent=intent,
             outcome_facts=summary_text,
+        )
+
+    def _resolve_pc_attack(self, action: InterpretedAction) -> MechanicsOutcome:
+        """Resolve a player weapon attack in combat.
+
+        Calls engine.combat.resolve_attack() which mutates defender HP in-place.
+        Queues the AttackResult on _pending_dice_embeds for the turn manager to
+        render as a dice embed. Populates hp_delta in PublicEffects.
+        """
+        from engine.combat import consume_action, resolve_attack
+        from engine.inventory import EquipmentSlot, Weapon
+
+        intent = self._build_player_intent(action)
+        state = self.combat_state
+
+        if state is None:
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} performs Attack.",
+                player_intent=intent,
+            )
+
+        attacker = next(
+            (c for c in state.combatants if c.name == action.actor_name and c.is_alive),
+            None,
+        )
+        target = next(
+            (c for c in state.combatants if c.name == action.target_name and c.is_alive),
+            None,
+        )
+        if attacker is None or target is None:
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} performs Attack.",
+                player_intent=intent,
+            )
+
+        weapon: Weapon | None = None
+        for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
+            item = attacker.inventory.equipped.get(slot)
+            if item is not None and isinstance(item, Weapon) and item.name == action.weapon_name:
+                weapon = item
+                break
+
+        if weapon is None:
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} performs Attack.",
+                player_intent=intent,
+            )
+
+        consume_action(attacker)
+        result = resolve_attack(attacker, target, weapon)  # mutates target HP in-place
+
+        self._pending_dice_embeds.append(("attack_roll", result, action.actor_name))
+
+        if result.hit:
+            summary = (
+                f"{action.actor_name} touche {target.name} avec {weapon.name}"
+                f" — {result.damage} dégâts"
+            )
+            facts = (
+                f"{target.name} subit {result.damage} dégâts ({result.damage_type.value})."
+                + (f" {target.name} est vaincu." if not target.is_alive else "")
+            )
+            public = PublicEffects(hp_delta={target.name: -result.damage})
+        else:
+            summary = f"{action.actor_name} rate {target.name} avec {weapon.name}"
+            facts = ""
+            public = PublicEffects()
+
+        return MechanicsOutcome(
+            summary=summary,
+            player_intent=intent,
+            outcome_facts=facts,
+            public_effects=public,
         )
 
     def _resolve_pickup(self, action: InterpretedAction) -> str:

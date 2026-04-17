@@ -495,21 +495,25 @@ class TurnManager:
     async def _flush_dice_embeds(
         self, pipeline: ActionPipeline, actor_name: str,
     ) -> None:
-        """Surface any D20CheckResult stashed on the pipeline as an embed."""
+        """Surface dice results stashed on the pipeline as Discord embeds."""
+        from engine.combat import AttackResult
+
         dice_embeds = getattr(pipeline, "_pending_dice_embeds", None) or []
         for entry in dice_embeds:
             if not isinstance(entry, tuple) or len(entry) < 2:
                 continue
             kind = entry[0]
-            check = entry[1]
+            result = entry[1]
             name = entry[2] if len(entry) >= 3 else actor_name
-            if kind == "flee_check":
+            if kind == "attack_roll" and isinstance(result, AttackResult):
+                embed = build_attack_roll_embed(result, name)
+            elif kind == "flee_check":
                 embed = build_save_check_embed(
-                    check, label="Tentative de fuite", actor_name=name, ability="DEX",
+                    result, label="Tentative de fuite", actor_name=name, ability="DEX",
                 )
             else:
                 embed = build_generic_check_embed(
-                    check, label=str(kind).replace("_", " ").title(), actor_name=name,
+                    result, label=str(kind).replace("_", " ").title(), actor_name=name,
                 )
             await self._safe_send(embed=embed)
         pipeline._pending_dice_embeds.clear()

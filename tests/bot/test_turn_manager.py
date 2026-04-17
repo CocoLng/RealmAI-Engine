@@ -622,3 +622,51 @@ class TestFlushPendingPhaseTransitions:
 
         assert event.consumed is True
         narrator_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _flush_dice_embeds — attack_roll embed
+# ---------------------------------------------------------------------------
+
+
+class TestFlushDiceEmbedsAttackRoll:
+    @pytest.mark.asyncio
+    async def test_attack_roll_kind_calls_build_attack_roll_embed(self) -> None:
+        """An 'attack_roll' entry in _pending_dice_embeds posts an attack embed."""
+        from unittest.mock import MagicMock, patch
+
+        from engine.combat import AttackResult
+        from engine.dice import RollOutcome
+        from engine.inventory import DamageType
+
+        pc = _pc()
+        enemy = _enemy()
+        session = _fake_session([pc, enemy])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+
+        fake_result = AttackResult(
+            attacker="Aragorn",
+            defender="Gobelin",
+            weapon_name="Longsword",
+            attack_roll=15,
+            attack_total=18,
+            ac=12,
+            hit=True,
+            critical=False,
+            outcome=RollOutcome.SUCCESS,
+            damage=7,
+            damage_type=DamageType.SLASHING,
+            defender_hp_remaining=5,
+        )
+
+        # Build a fake pipeline stub with the entry queued.
+        fake_pipeline = MagicMock()
+        fake_pipeline._pending_dice_embeds = [("attack_roll", fake_result, "Aragorn")]
+
+        with patch("bot.combat_turn_manager.build_attack_roll_embed") as mock_builder:
+            mock_builder.return_value = MagicMock()
+            await tm._flush_dice_embeds(fake_pipeline, "Aragorn")
+
+        mock_builder.assert_called_once_with(fake_result, "Aragorn")
+        channel.send.assert_awaited_once()

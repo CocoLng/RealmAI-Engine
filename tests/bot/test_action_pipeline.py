@@ -2082,3 +2082,251 @@ class TestWeaponAutoResolve:
     def test_none_inventory_with_alias_returns_none(self) -> None:
         """weapon_name is given but inventory is None → None."""
         assert ActionPipeline._auto_resolve_weapon_name("épée", None) is None
+
+
+# ---------------------------------------------------------------------------
+# _resolve_pc_attack
+# ---------------------------------------------------------------------------
+
+
+def _make_pc_combatant_with_sword(name: str = "JeanTest", hp: int = 20) -> "Combatant":
+    from engine.combat import CombatSide, Combatant
+
+    char = create_character(
+        name=name,
+        race=Race.HUMAN,
+        char_class=CharacterClass.FIGHTER,
+        ability_scores=AbilityScores(STR=16, DEX=10, CON=14, INT=10, WIS=10, CHA=10),
+    )
+    char.hp = hp
+    char.max_hp = hp
+    sword = _make_longsword()
+    inv = Inventory(items=[sword], equipped={EquipmentSlot.MAIN_HAND: sword})
+    return Combatant(
+        name=name,
+        side=CombatSide.PLAYER,
+        character=char,
+        inventory=inv,
+        initiative=18,
+    )
+
+
+def _make_enemy_combatant(name: str = "Gobelin", hp: int = 15, ac: int = 12) -> "Combatant":
+    from engine.combat import CombatSide, Combatant
+
+    char = create_character(
+        name=name,
+        race=Race.HUMAN,
+        char_class=CharacterClass.FIGHTER,
+        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=8, WIS=8, CHA=8),
+    )
+    char.hp = hp
+    char.max_hp = hp
+    char.ac = ac
+    from engine.inventory import create_inventory
+    return Combatant(
+        name=name,
+        side=CombatSide.ENEMY,
+        character=char,
+        inventory=create_inventory(),
+        initiative=5,
+    )
+
+
+def _fake_hit_result(attacker: str, defender: str, damage: int, hp_remaining: int) -> "AttackResult":
+    from engine.combat import AttackResult
+    from engine.dice import RollOutcome
+
+    return AttackResult(
+        attacker=attacker,
+        defender=defender,
+        weapon_name="Longsword",
+        attack_roll=15,
+        attack_total=18,
+        ac=12,
+        hit=True,
+        critical=False,
+        outcome=RollOutcome.SUCCESS,
+        damage=damage,
+        damage_type=DamageType.SLASHING,
+        defender_hp_remaining=hp_remaining,
+    )
+
+
+def _fake_miss_result(attacker: str, defender: str, hp: int) -> "AttackResult":
+    from engine.combat import AttackResult
+    from engine.dice import RollOutcome
+
+    return AttackResult(
+        attacker=attacker,
+        defender=defender,
+        weapon_name="Longsword",
+        attack_roll=1,
+        attack_total=4,
+        ac=12,
+        hit=False,
+        critical=False,
+        outcome=RollOutcome.FAILURE,
+        damage=0,
+        damage_type=DamageType.SLASHING,
+        defender_hp_remaining=hp,
+    )
+
+
+class TestResolvePcAttack:
+    @pytest.mark.asyncio
+    async def test_hit_reduces_defender_hp_and_populates_hp_delta(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hit reduces defender HP in-place and sets hp_delta in public_effects."""
+        from engine.combat import CombatState
+
+        pc = _make_pc_combatant_with_sword()
+        enemy = _make_enemy_combatant(hp=15)
+        state = CombatState(combatants=[pc, enemy], round_number=1, current_turn_index=0)
+
+        fake_result = _fake_hit_result("JeanTest", "Gobelin", damage=7, hp_remaining=8)
+
+        def _fake_resolve(attacker, target, weapon, **_kw):  # type: ignore[override]
+            target.character.hp = fake_result.defender_hp_remaining
+            return fake_result
+
+        monkeypatch.setattr("engine.combat.resolve_attack", _fake_resolve)
+
+        narrator = FakeNarrator(responses=[NarrativeResult(narrative=".", tone="tense")])
+        pipeline = _make_pipeline(
+            FakeInterpreter(response=InterpretedAction(
+                action_type=ActionType.ATTACK, actor_name="JeanTest", raw_input="",
+            )),
+            narrator, None, {},
+            actor_name="JeanTest",
+        )
+        pipeline.combat_state = state
+        pipeline.inventory = pc.inventory
+
+        action = InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name="JeanTest",
+            target_name="Gobelin",
+            weapon_name="Longsword",
+            raw_input="(bouton Attaquer → Gobelin)",
+        )
+        outcome = await pipeline._resolve_mechanics(action)
+
+        assert enemy.character.hp == 8
+        assert outcome.public_effects.hp_delta == {"Gobelin": -7}
+        assert len(pipeline._pending_dice_embeds) == 1
+        kind, result_obj, actor = pipeline._pending_dice_embeds[0]
+        assert kind == "attack_roll"
+        assert actor == "JeanTest"
+
+    @pytest.mark.asyncio
+    async def test_miss_leaves_hp_unchanged_and_empty_hp_delta(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A miss leaves defender HP unchanged and hp_delta is empty."""
+        from engine.combat import CombatState
+
+        pc = _make_pc_combatant_with_sword()
+        enemy = _make_enemy_combatant(hp=15)
+        state = CombatState(combatants=[pc, enemy], round_number=1, current_turn_index=0)
+
+        fake_result = _fake_miss_result("JeanTest", "Gobelin", hp=15)
+        monkeypatch.setattr("engine.combat.resolve_attack", lambda *_a, **_kw: fake_result)
+
+        narrator = FakeNarrator(responses=[NarrativeResult(narrative=".", tone="tense")])
+        pipeline = _make_pipeline(
+            FakeInterpreter(response=InterpretedAction(
+                action_type=ActionType.ATTACK, actor_name="JeanTest", raw_input="",
+            )),
+            narrator, None, {},
+            actor_name="JeanTest",
+        )
+        pipeline.combat_state = state
+        pipeline.inventory = pc.inventory
+
+        action = InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name="JeanTest",
+            target_name="Gobelin",
+            weapon_name="Longsword",
+            raw_input="(bouton Attaquer → Gobelin)",
+        )
+        outcome = await pipeline._resolve_mechanics(action)
+
+        assert enemy.character.hp == 15
+        assert outcome.public_effects.hp_delta == {}
+        assert len(pipeline._pending_dice_embeds) == 1
+        kind, _, _ = pipeline._pending_dice_embeds[0]
+        assert kind == "attack_roll"
+
+    @pytest.mark.asyncio
+    async def test_action_budget_consumed_before_attack_resolves(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """consume_action() is called — action_budget.action_used is True after."""
+        from engine.combat import CombatState
+
+        pc = _make_pc_combatant_with_sword()
+        enemy = _make_enemy_combatant(hp=15)
+        state = CombatState(combatants=[pc, enemy], round_number=1, current_turn_index=0)
+
+        fake_result = _fake_hit_result("JeanTest", "Gobelin", damage=5, hp_remaining=10)
+        monkeypatch.setattr("engine.combat.resolve_attack", lambda *_a, **_kw: fake_result)
+
+        assert not pc.action_budget.action_used
+
+        narrator = FakeNarrator(responses=[NarrativeResult(narrative=".", tone="tense")])
+        pipeline = _make_pipeline(
+            FakeInterpreter(response=InterpretedAction(
+                action_type=ActionType.ATTACK, actor_name="JeanTest", raw_input="",
+            )),
+            narrator, None, {},
+            actor_name="JeanTest",
+        )
+        pipeline.combat_state = state
+        pipeline.inventory = pc.inventory
+
+        action = InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name="JeanTest",
+            target_name="Gobelin",
+            weapon_name="Longsword",
+            raw_input="(bouton Attaquer → Gobelin)",
+        )
+        await pipeline._resolve_mechanics(action)
+
+        assert pc.action_budget.action_used
+
+    @pytest.mark.asyncio
+    async def test_unknown_target_returns_fallback_without_crash(self) -> None:
+        """If target_name is not in combat_state, returns a generic MechanicsOutcome."""
+        from engine.combat import CombatState
+        from ai.models import MechanicsOutcome
+
+        pc = _make_pc_combatant_with_sword()
+        enemy = _make_enemy_combatant()
+        state = CombatState(combatants=[pc, enemy], round_number=1, current_turn_index=0)
+
+        narrator = FakeNarrator(responses=[NarrativeResult(narrative=".", tone="tense")])
+        pipeline = _make_pipeline(
+            FakeInterpreter(response=InterpretedAction(
+                action_type=ActionType.ATTACK, actor_name="JeanTest", raw_input="",
+            )),
+            narrator, None, {},
+            actor_name="JeanTest",
+        )
+        pipeline.combat_state = state
+        pipeline.inventory = pc.inventory
+
+        action = InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name="JeanTest",
+            target_name="InconnuInexistant",
+            weapon_name="Longsword",
+            raw_input="",
+        )
+        outcome = await pipeline._resolve_mechanics(action)
+
+        assert isinstance(outcome, MechanicsOutcome)
+        assert len(pipeline._pending_dice_embeds) == 0
