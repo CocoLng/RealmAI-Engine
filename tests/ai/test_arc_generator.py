@@ -465,3 +465,142 @@ def test_villain_stat_block_backward_compat_legacy_arc() -> None:
     # Legacy JSON: no villain_stat_block key at all.
     arc = StoryArc.model_validate(legacy)
     assert arc.villain_stat_block is None
+
+
+# ---------------------------------------------------------------------------
+# Sanitization
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeArcData:
+    """Unit tests for ArcGenerator._sanitize_arc_data()."""
+
+    def test_state_flags_string_coerced_to_true(self) -> None:
+        """Non-bool truthy string in state_flags → True."""
+        data: dict = {
+            "beats": [
+                {
+                    "beat_number": 1,
+                    "on_complete": {
+                        "state_flags": {
+                            "location_explored": "place_centrale",
+                            "door_open": "yes",
+                        }
+                    },
+                }
+            ],
+            "villain_stat_block": None,
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        flags = data["beats"][0]["on_complete"]["state_flags"]
+        assert flags == {"location_explored": True, "door_open": True}
+
+    def test_state_flags_empty_string_coerced_to_false(self) -> None:
+        """Empty string in state_flags → False."""
+        data: dict = {
+            "beats": [{"beat_number": 1, "on_complete": {"state_flags": {"flag": ""}}}],
+            "villain_stat_block": None,
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        assert data["beats"][0]["on_complete"]["state_flags"] == {"flag": False}
+
+    def test_state_flags_bool_untouched(self) -> None:
+        """Existing booleans pass through unchanged."""
+        data: dict = {
+            "beats": [
+                {"beat_number": 1, "on_complete": {"state_flags": {"a": True, "b": False}}}
+            ],
+            "villain_stat_block": None,
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        assert data["beats"][0]["on_complete"]["state_flags"] == {"a": True, "b": False}
+
+    def test_state_flags_missing_on_complete_no_crash(self) -> None:
+        """Beats without on_complete or state_flags don't crash."""
+        data: dict = {
+            "beats": [{"beat_number": 1}, {"beat_number": 2, "on_complete": {}}],
+            "villain_stat_block": None,
+        }
+        ArcGenerator._sanitize_arc_data(data)  # must not raise
+
+    def test_damage_type_electricity_normalized(self) -> None:
+        """'Electricity' synonym is normalized to 'Lightning' in attacks."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [{"damage_type": "Electricity"}],
+                "signature_abilities": [],
+                "legendary_actions": [],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        assert data["villain_stat_block"]["attacks"][0]["damage_type"] == "Lightning"
+
+    def test_damage_type_signature_effects_normalized(self) -> None:
+        """'Electricity' in signature ability effects is normalized."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [
+                    {"effects": [{"damage_type": "Electricity"}]}
+                ],
+                "legendary_actions": [],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effect = data["villain_stat_block"]["signature_abilities"][0]["effects"][0]
+        assert effect["damage_type"] == "Lightning"
+
+    def test_damage_type_legendary_effects_normalized(self) -> None:
+        """'Electricity' in legendary action effects is normalized."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [],
+                "legendary_actions": [
+                    {"effects": [{"damage_type": "Electricity"}]}
+                ],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effect = data["villain_stat_block"]["legendary_actions"][0]["effects"][0]
+        assert effect["damage_type"] == "Lightning"
+
+    def test_target_scope_all_enemies_in_zone_normalized(self) -> None:
+        """'all_enemies_in_zone' (invalid hybrid) → 'all_enemies'."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [
+                    {"effects": [{"target_scope": "all_enemies_in_zone"}]}
+                ],
+                "legendary_actions": [],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effect = data["villain_stat_block"]["signature_abilities"][0]["effects"][0]
+        assert effect["target_scope"] == "all_enemies"
+
+    def test_target_scope_legendary_normalized(self) -> None:
+        """'all_enemies_in_zone' in legendary action effects → 'all_enemies'."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [],
+                "legendary_actions": [
+                    {"effects": [{"target_scope": "all_enemies_in_zone"}]}
+                ],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effect = data["villain_stat_block"]["legendary_actions"][0]["effects"][0]
+        assert effect["target_scope"] == "all_enemies"
+
+    def test_no_villain_stat_block_no_crash(self) -> None:
+        """Absent villain_stat_block doesn't crash the sanitizer."""
+        data: dict = {"beats": [], "villain_stat_block": None}
+        ArcGenerator._sanitize_arc_data(data)  # must not raise

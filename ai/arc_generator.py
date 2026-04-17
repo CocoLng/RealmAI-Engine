@@ -70,6 +70,9 @@ class ArcGenerator:
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.9, think=False)
 
+        # Repair known LLM output quirks before validation.
+        self._sanitize_arc_data(data)
+
         # --- Villain stat block parsing with generic_boss fallback (task 42) ---
         # Validate the stat block separately so we can fallback cleanly when the
         # LLM emits an invalid or missing payload, without losing the rest of
@@ -83,6 +86,73 @@ class ArcGenerator:
             arc.villain_stat_block.archetype if arc.villain_stat_block else "none",
         )
         return arc
+
+    # Synonyms the LLM occasionally emits instead of the exact engine enum values.
+    _DAMAGE_TYPE_SYNONYMS: dict[str, str] = {
+        "Electricity": "Lightning",
+        "Electric": "Lightning",
+        "Holy": "Radiant",
+        "Unholy": "Necrotic",
+        "Shadow": "Necrotic",
+        "Acid": "Poison",
+    }
+
+    _TARGET_SCOPE_SYNONYMS: dict[str, str] = {
+        "all_enemies_in_zone": "all_enemies",
+        "all_allies": "all_allies_in_zone",
+        "enemies": "all_enemies",
+    }
+
+    @staticmethod
+    def _sanitize_arc_data(data: dict[str, Any]) -> None:
+        """Repair known LLM output quirks in-place before Pydantic validation.
+
+        Handles:
+        - state_flags values that are strings instead of booleans.
+        - damage_type synonym normalization (e.g. "Electricity" → "Lightning").
+        - target_scope invalid hybrids (e.g. "all_enemies_in_zone" → "all_enemies").
+        """
+        for beat in data.get("beats") or []:
+            on_complete = beat.get("on_complete")
+            if not isinstance(on_complete, dict):
+                continue
+            flags = on_complete.get("state_flags")
+            if not isinstance(flags, dict):
+                continue
+            on_complete["state_flags"] = {
+                k: (v if isinstance(v, bool) else bool(v))
+                for k, v in flags.items()
+            }
+
+        stat = data.get("villain_stat_block")
+        if not isinstance(stat, dict):
+            return
+
+        def _fix_effect(effect: Any) -> None:
+            if not isinstance(effect, dict):
+                return
+            dt = effect.get("damage_type")
+            if isinstance(dt, str) and dt in ArcGenerator._DAMAGE_TYPE_SYNONYMS:
+                effect["damage_type"] = ArcGenerator._DAMAGE_TYPE_SYNONYMS[dt]
+            ts = effect.get("target_scope")
+            if isinstance(ts, str) and ts in ArcGenerator._TARGET_SCOPE_SYNONYMS:
+                effect["target_scope"] = ArcGenerator._TARGET_SCOPE_SYNONYMS[ts]
+
+        for attack in stat.get("attacks") or []:
+            if isinstance(attack, dict):
+                dt = attack.get("damage_type")
+                if isinstance(dt, str) and dt in ArcGenerator._DAMAGE_TYPE_SYNONYMS:
+                    attack["damage_type"] = ArcGenerator._DAMAGE_TYPE_SYNONYMS[dt]
+
+        for ability in stat.get("signature_abilities") or []:
+            if isinstance(ability, dict):
+                for effect in ability.get("effects") or []:
+                    _fix_effect(effect)
+
+        for action in stat.get("legendary_actions") or []:
+            if isinstance(action, dict):
+                for effect in action.get("effects") or []:
+                    _fix_effect(effect)
 
     @staticmethod
     def _resolve_villain_stat_block(data: dict[str, Any]) -> NPCStatBlock:
