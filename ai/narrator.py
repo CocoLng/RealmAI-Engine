@@ -83,3 +83,61 @@ class Narrator:
         logger.info("NARRATE tone=%s output=%r", result.tone, result.narrative[:200])
         logger.debug("NARRATE full_output=%s", result.narrative)
         return result
+
+    _TEMPLATES: dict[str, list[str]] = {
+        "attack": [
+            "Le combat se poursuit dans la confusion. {action}.",
+            "Les coups pleuvent autour de toi. {action}.",
+            "L'affrontement reprend de plus belle. {action}.",
+        ],
+        "move": [
+            "Le décor change autour de toi. {action}.",
+            "Tes pas te portent ailleurs. {action}.",
+        ],
+        "talk": [
+            "Les mots échangés résonnent encore dans l'air. {action}.",
+            "La conversation suit son cours. {action}.",
+        ],
+        "search": [
+            "Tu fouilles avec attention les environs. {action}.",
+            "Tes mains parcourent l'endroit. {action}.",
+        ],
+        "default": [
+            "Le MJ rassemble ses idées un instant. {action}.",
+            "L'instant se prolonge avant la suite. {action}.",
+        ],
+    }
+
+    def _template_fallback(
+        self, action_result_text: str, outcome_facts: str
+    ) -> NarrativeResult:
+        """Return a hardcoded short narrative. Never raises.
+
+        Used as the last-resort fallback when both the primary LLM call and
+        the simplified retry have failed. The narrative is intentionally
+        short and in-universe — its job is to keep the session alive, not to
+        be invisible.
+        """
+        category = self._pick_template_category(action_result_text)
+        variants = self._TEMPLATES.get(category, self._TEMPLATES["default"])
+        # Deterministic-ish pick: use the length of action_result_text mod len(variants).
+        # Avoids importing random for a 3-element list.
+        template = variants[len(action_result_text) % len(variants)]
+        narrative = template.format(action=action_result_text.rstrip("."))
+        if outcome_facts:
+            narrative = f"{narrative} {outcome_facts}"
+        return NarrativeResult(narrative=narrative, tone="dramatic")
+
+    @staticmethod
+    def _pick_template_category(action_result_text: str) -> str:
+        """Map the mechanical action verb to a template category."""
+        lower = action_result_text.lower()
+        if "attack" in lower or "attaque" in lower or "damage" in lower or "dégât" in lower:
+            return "attack"
+        if "move" in lower or "déplace" in lower or "go to" in lower:
+            return "move"
+        if "talk" in lower or "parle" in lower or "dialogue" in lower:
+            return "talk"
+        if "search" in lower or "fouille" in lower or "look" in lower:
+            return "search"
+        return "default"

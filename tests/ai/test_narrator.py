@@ -148,3 +148,42 @@ def test_narrate_legacy_signature_still_works():
     messages = args[1] if len(args) > 1 else kwargs["messages"]
     user_msg = messages[-1]["content"]
     assert "Goblin" in user_msg
+
+
+class TestTemplateFallback:
+    """Template fallback returns a valid NarrativeResult without calling LLM."""
+
+    def test_template_fallback_returns_narrative_result(self, narrator: Narrator) -> None:
+        result = narrator._template_fallback(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage dealt.",
+            outcome_facts="",
+        )
+        assert isinstance(result, NarrativeResult)
+        assert result.narrative
+        assert len(result.narrative) >= 30
+        assert result.tone in {"dramatic", "tense", "humorous", "somber"}
+
+    def test_template_fallback_picks_attack_variant(self, narrator: Narrator) -> None:
+        result = narrator._template_fallback(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage dealt.",
+            outcome_facts="",
+        )
+        # The "attack" template family includes the action verb in some way.
+        assert "attaque" in result.narrative.lower() or "coup" in result.narrative.lower() \
+            or "combat" in result.narrative.lower()
+
+    def test_template_fallback_picks_default_for_unknown_verb(self, narrator: Narrator) -> None:
+        result = narrator._template_fallback(
+            action_result_text="Some unrecognized mechanical phrase.",
+            outcome_facts="",
+        )
+        # Default template is the "MJ regroups" line.
+        assert "rassemble" in result.narrative.lower() or "MJ" in result.narrative
+
+    def test_template_fallback_does_not_call_llm(
+        self, httpx_mock: HTTPXMock, narrator: Narrator
+    ) -> None:
+        # No httpx_mock.add_response calls — any HTTP would fail the test.
+        result = narrator._template_fallback("Some action.", "Some outcome.")
+        assert isinstance(result, NarrativeResult)
+        assert len(httpx_mock.get_requests()) == 1  # Only the health check on init.
