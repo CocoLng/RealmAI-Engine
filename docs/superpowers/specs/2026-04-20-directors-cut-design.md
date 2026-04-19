@@ -29,11 +29,9 @@ A separate latent bug: [`ai/narrator.py:78`](../../../ai/narrator.py:78) calls `
 
 Explicitly out of scope for this spec (deferred to future cycles):
 
-- Combat system bugs and lag (despite the 90 tasks completed in the combat chantier)
 - SQLite concurrency hardening (WAL mode, timeout pragmas)
 - i18n beyond current FR/EN dict
 - Observability (Prometheus metrics, OpenTelemetry traces)
-- Phase 4 polish (CI/CD pipelines, marketing artifacts)
 - Catalogue extension (backgrounds, feats, multiclass, shop)
 
 These are real issues but addressing them now would dilute the focus on the player-abandonment failure mode.
