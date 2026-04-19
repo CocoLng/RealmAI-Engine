@@ -19,7 +19,7 @@ def narrator(ollama_client: OllamaClient) -> Narrator:
 def test_narrate_returns_narrative_result(httpx_mock: HTTPXMock, narrator: Narrator) -> None:
     """Narrator returns a valid NarrativeResult."""
     response_data = {
-        "narrative": "Your axe bites deep into the goblin's shoulder.",
+        "narrative": "Your axe bites deep into the goblin's shoulder, drawing a cry of pain.",
         "tone": "dramatic",
     }
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
@@ -30,7 +30,7 @@ def test_narrate_returns_narrative_result(httpx_mock: HTTPXMock, narrator: Narra
     )
 
     assert isinstance(result, NarrativeResult)
-    assert result.narrative == "Your axe bites deep into the goblin's shoulder."
+    assert result.narrative == "Your axe bites deep into the goblin's shoulder, drawing a cry of pain."
     assert result.tone == "dramatic"
 
 
@@ -38,7 +38,7 @@ def test_narrate_uses_both_context_and_action(
     httpx_mock: HTTPXMock, narrator: Narrator
 ) -> None:
     """The user message includes both context_prompt and action_result_text."""
-    response_data = {"narrative": "The skeleton crumbles.", "tone": "somber"}
+    response_data = {"narrative": "The skeleton crumbles into ash as the fireball consumes it.", "tone": "somber"}
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
     narrator.narrate(
@@ -55,7 +55,7 @@ def test_narrate_various_tones(httpx_mock: HTTPXMock, narrator: Narrator) -> Non
     for tone in ["dramatic", "tense", "humorous", "somber"]:
         httpx_mock.add_response(
             url=CHAT_URL,
-            json=make_ollama_response({"narrative": "Something happened.", "tone": tone}),
+            json=make_ollama_response({"narrative": "Something happened in the chamber, and the air grew thick with tension.", "tone": tone}),
         )
         result = narrator.narrate(
             action_result_text="Some action occurred.",
@@ -68,7 +68,7 @@ def test_narrate_uses_high_temperature(httpx_mock: HTTPXMock, narrator: Narrator
     """Narrator uses temperature 0.8 for creative output."""
     httpx_mock.add_response(
         url=CHAT_URL,
-        json=make_ollama_response({"narrative": "The battle rages on.", "tone": "tense"}),
+        json=make_ollama_response({"narrative": "The battle rages on — your blow glances off the enemy's armour.", "tone": "tense"}),
     )
     result = narrator.narrate(
         action_result_text="Miss. No damage.",
@@ -80,7 +80,7 @@ def test_narrate_uses_high_temperature(httpx_mock: HTTPXMock, narrator: Narrator
 
 def test_narrate_includes_player_intent_and_outcome_facts():
     client = MagicMock()
-    client.chat_json.return_value = {"narrative": "ok", "tone": "tense"}
+    client.chat_json.return_value = {"narrative": "A lengthy narrative that passes the fifty character threshold easily here.", "tone": "tense"}
     narrator = Narrator(client)
 
     narrator.narrate(
@@ -101,7 +101,7 @@ def test_narrate_includes_player_intent_and_outcome_facts():
 
 def test_narrate_npc_dialogue_flag_adds_reminder():
     client = MagicMock()
-    client.chat_json.return_value = {"narrative": "ok", "tone": "dramatic"}
+    client.chat_json.return_value = {"narrative": "A lengthy narrative that passes the fifty character threshold easily here.", "tone": "dramatic"}
     narrator = Narrator(client)
 
     narrator.narrate(
@@ -120,7 +120,7 @@ def test_narrate_npc_dialogue_flag_adds_reminder():
 
 def test_narrate_no_reminder_without_npc_dialogue():
     client = MagicMock()
-    client.chat_json.return_value = {"narrative": "ok", "tone": "dramatic"}
+    client.chat_json.return_value = {"narrative": "A lengthy narrative that passes the fifty character threshold easily here.", "tone": "dramatic"}
     narrator = Narrator(client)
 
     narrator.narrate(
@@ -136,7 +136,7 @@ def test_narrate_no_reminder_without_npc_dialogue():
 
 def test_narrate_legacy_signature_still_works():
     client = MagicMock()
-    client.chat_json.return_value = {"narrative": "ok", "tone": "dramatic"}
+    client.chat_json.return_value = {"narrative": "A lengthy narrative that passes the fifty character threshold easily here.", "tone": "dramatic"}
     narrator = Narrator(client)
 
     narrator.narrate(
@@ -187,3 +187,87 @@ class TestTemplateFallback:
         result = narrator._template_fallback("Some action.", "Some outcome.")
         assert isinstance(result, NarrativeResult)
         assert len(httpx_mock.get_requests()) == 1  # Only the health check on init.
+
+
+from ai.client import LLMParseError, OllamaUnavailableError
+
+
+class TestNarratorFallbackChain:
+    """Narrator.narrate() never throws — falls back to template on repeated failure."""
+
+    def test_narrate_returns_template_on_double_parse_error(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            raise LLMParseError(
+                "boom", raw_response="", model="qwen3.5:9b", messages=[],
+            )
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+        )
+        assert isinstance(result, NarrativeResult)
+        assert result.narrative  # Template returned, non-empty
+        assert call_count["n"] == 2  # Primary + simplified retry, then template
+
+    def test_narrate_returns_template_on_ollama_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        def fake_chat_json(*args, **kwargs):
+            raise OllamaUnavailableError("Ollama down")
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Some action.",
+            context_prompt="Some context.",
+        )
+        assert isinstance(result, NarrativeResult)
+        assert result.narrative
+
+    def test_narrate_retries_with_simplified_prompt_when_first_call_too_short(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+        responses = [
+            {"narrative": "Short.", "tone": "dramatic"},  # Too short → retry
+            {"narrative": "A much longer second narrative that will pass the 50-char threshold.", "tone": "tense"},
+        ]
+
+        # Wrap to track calls and advance index
+        def chat_json_advance(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", chat_json_advance)
+        result = narrator.narrate(
+            action_result_text="Some action.",
+            context_prompt="Some context.",
+        )
+        assert call_count["n"] == 2  # Primary failed (too short) + simplified retry succeeded
+        assert "longer second narrative" in result.narrative
+        assert result.tone == "tense"
+
+    def test_narrate_succeeds_first_call_no_retry(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "A perfectly valid first-call narrative that exceeds fifty characters in length easily.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Action.", context_prompt="Context.",
+        )
+        assert call_count["n"] == 1  # Only the primary call
+        assert "perfectly valid first-call narrative" in result.narrative
