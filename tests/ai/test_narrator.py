@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_httpx import HTTPXMock
 
-from ai.client import OllamaClient
+from ai.client import LLMParseError, OllamaClient, OllamaUnavailableError
 from ai.models import NarrativeResult
 from ai.narrator import Narrator
 from tests.ai.conftest import CHAT_URL, make_ollama_response
@@ -187,9 +187,6 @@ class TestTemplateFallback:
         result = narrator._template_fallback("Some action.", "Some outcome.")
         assert isinstance(result, NarrativeResult)
         assert len(httpx_mock.get_requests()) == 1  # Only the health check on init.
-
-
-from ai.client import LLMParseError, OllamaUnavailableError
 
 
 class TestNarratorFallbackChain:
