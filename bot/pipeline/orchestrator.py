@@ -1,0 +1,793 @@
+"""Pipeline orchestrator — owns the 6-step flow logic.
+
+The :class:`PipelineRunner` is a dataclass holding all per-action state and
+implements the three public methods (``process``, ``resume_with_resolution``,
+``process_interpreted_action``) plus their private helpers.
+
+The legacy :class:`~bot.action_pipeline.ActionPipeline` facade in
+``bot.action_pipeline`` wraps a ``PipelineRunner`` and forwards calls to it,
+preserving backward compatibility.
+
+Phases (also reported via the optional ``progress_callback``):
+
+1. ``INTERPRETING``        — LLM classifies the player's intent (Interpreter)
+2. ``RESOLVING_ENTITIES``  — pure-Python entity resolution (EntityResolver)
+3. ``VALIDATING``          — pure-Python rule check (validators.py)
+4. ``RESOLVING_ACTION``    — engine modules apply mechanical effects
+5. ``ASSEMBLING_CONTEXT``  — build a small in-memory context for the narrator
+6. ``NARRATING``           — LLM produces immersive prose (Narrator)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import difflib
+import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from enum import IntEnum
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel, Field
+
+from ai.entity_resolver import EntityCandidate, EntityResolver
+from ai.interpreter import Interpreter
+from ai.models import (
+    InterpretedAction,
+    MechanicsOutcome,
+    PublicEffects,
+)
+from ai.narrator import Narrator
+from ai.scene_context import build_scene_context
+from bot.persistence import persist_session
+from engine.combat import (
+    CombatSide,
+    CombatState,
+    record_combat_event,
+)
+from bot.combat_entry import CombatTrigger
+from engine.inventory import Inventory
+from engine.validators import (
+    ActionType,
+)
+from world.location import Location
+from world.npc import NPC
+from world.story_arc import BeatEffects, StoryBeat
+
+if TYPE_CHECKING:
+    from bot.game_session import GameSession
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _assign_initial_zones(state: CombatState, location: Location) -> None:
+    """Place combatants into starting zones when combat begins.
+
+    PCs go to the first zone; enemies go to the last zone (same as the first
+    when only one zone exists). Combatants that already have a zone are left
+    untouched.
+    """
+    zones = location.combat_zones
+    if not zones:
+        return
+    pc_zone = zones[0].name
+    npc_zone = zones[-1].name
+    for c in state.combatants:
+        if c.current_zone is None:
+            c.current_zone = pc_zone if c.side == CombatSide.PLAYER else npc_zone
+
+
+def _persist_story_arc(db_factory: Callable[[], Any], arc: Any) -> None:
+    """Persist a StoryArc update via :class:`StoryArcRepository`."""
+    if arc is None:
+        return
+    from db.repositories.story_arc_repo import StoryArcRepository
+
+    db_session = db_factory()
+    try:
+        StoryArcRepository(db_session).update(arc)
+        db_session.commit()
+    finally:
+        db_session.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase enum + result types
+# ---------------------------------------------------------------------------
+
+
+class PipelinePhase(IntEnum):
+    """Observability for the action pipeline progress."""
+
+    PENDING            = 0
+    INTERPRETING       = 1
+    RESOLVING_ENTITIES = 2
+    VALIDATING         = 3
+    RESOLVING_ACTION   = 4
+    ASSEMBLING_CONTEXT = 5
+    NARRATING          = 6
+    DONE               = 7
+    FAILED             = 8
+
+
+class ActionPipelineResult(BaseModel):
+    """Successful pipeline run."""
+
+    narrative: str
+    tone: Literal["dramatic", "tense", "humorous", "somber"]
+    mechanics_text: str
+    public_effects: PublicEffects = Field(default_factory=PublicEffects)
+    interpreted_action: InterpretedAction
+    new_beat: StoryBeat | None = None
+    npc_name: str | None = None
+    npc_dialogue: str | None = None
+    is_question: bool = False
+    is_free_action: bool = False
+    """True for EQUIP (free action) — TurnManager re-prompts instead of advancing."""
+
+
+class AmbiguityResult(BaseModel):
+    """Entity resolution found multiple candidates — caller must disambiguate."""
+
+    field_name: Literal["target_name", "item_name"]
+    raw_value: str
+    candidates: list[EntityCandidate] = Field(default_factory=list)
+    partial_action: InterpretedAction
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class UnknownEntityResult(BaseModel):
+    """Entity could not be resolved — narrator generated an in-character refusal."""
+
+    field_name: str
+    raw_value: str
+    partial_action: InterpretedAction
+    refusal_narrative: str
+    tone: Literal["dramatic", "tense", "humorous", "somber"] = "somber"
+
+
+PipelineOutput = ActionPipelineResult | AmbiguityResult | UnknownEntityResult
+
+ProgressCallback = Callable[[PipelinePhase], Awaitable[None]]
+
+
+# ---------------------------------------------------------------------------
+# PipelineRunner
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PipelineRunner:
+    """Holds all per-action state and implements the 6-step pipeline flow.
+
+    A new instance is created for each player message via the
+    :class:`~bot.action_pipeline.ActionPipeline` facade.
+    """
+
+    interpreter: Interpreter
+    narrator: Narrator
+    location: Location | None
+    npcs: dict[str, NPC]
+    actor_name: str
+    language: str = "fr"
+    campaign_id: str = ""
+    combat_state: CombatState | None = None
+    inventory: Inventory | None = None
+    session: "GameSession | None" = None
+    db_factory: Callable[[], Any] | None = None
+
+    _trivial_kill_mechanics: str | None = field(default=None, init=False)
+
+    _pending_flee_destination: str | None = field(default=None, init=False)
+    """Destination zone stored when MOVE is auto-converted to FLEE in combat.
+    Consumed by _resolve_flee after a successful full-party escape."""
+
+    _pending_combat_start_embed: "tuple[CombatState, CombatTrigger] | None" = field(
+        default=None, init=False,
+    )
+    """Stored by _validate when a new combat is bootstrapped. The caller
+    (ActionHandlerCog) reads this after _validate returns and posts the
+    combat-start embed before narration."""
+
+    _pending_dice_embeds: list[Any] = field(default_factory=list, init=False)
+    """Dice roll results to display as embeds (task 60). Populated by
+    _resolve_flee and future combat resolvers. Consumed by the caller."""
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def process(
+        self,
+        player_text: str,
+        progress_callback: ProgressCallback | None = None,
+    ) -> PipelineOutput:
+        """Run the full pipeline for a fresh player action."""
+        scene = build_scene_context(
+            location=self.location,
+            npcs=self.npcs,
+            combat_state=self.combat_state,
+        )
+
+        await self._emit(progress_callback, PipelinePhase.INTERPRETING)
+        from bot.pipeline import interpret
+        interpreted = await interpret.call_interpreter(
+            interpreter=self.interpreter,
+            player_text=player_text,
+            scene=scene,
+            actor_name=self.actor_name,
+            language=self.language,
+        )
+
+        return await self._continue_from_resolution(
+            interpreted, progress_callback,
+        )
+
+    async def resume_with_resolution(
+        self,
+        ambiguity: AmbiguityResult,
+        chosen_entity_id: str,
+        progress_callback: ProgressCallback | None = None,
+    ) -> PipelineOutput:
+        """Continue a paused pipeline after the user picked a candidate."""
+        # Patch the partial action with the disambiguation choice.
+        partial = ambiguity.partial_action
+        if ambiguity.field_name == "target_name":
+            patched = partial.model_copy(update={"target_name": chosen_entity_id})
+        elif ambiguity.field_name == "item_name":
+            patched = partial.model_copy(update={"item_name": chosen_entity_id})
+        else:
+            patched = partial
+
+        return await self._continue_from_resolution(patched, progress_callback)
+
+    async def process_interpreted_action(
+        self,
+        action: InterpretedAction,
+        progress_callback: ProgressCallback | None = None,
+    ) -> PipelineOutput:
+        """Run the pipeline starting from a pre-built :class:`InterpretedAction`.
+
+        Used by the combat TurnManager (task 64) when a player clicks a
+        button on the combat hub — the action is already fully structured,
+        so we skip the interpreter phase and jump straight into entity
+        resolution + validation + mechanics + narration. Auto-Dodge on
+        timeout also routes through here.
+        """
+        return await self._continue_from_resolution(action, progress_callback)
+
+    # ------------------------------------------------------------------
+    # Internal flow
+    # ------------------------------------------------------------------
+
+    async def _continue_from_resolution(
+        self,
+        interpreted: InterpretedAction,
+        progress_callback: ProgressCallback | None,
+    ) -> PipelineOutput:
+        from bot.pipeline import interpret, narrate
+        from bot.pipeline import resolve as _resolve_mod
+
+        await self._emit(progress_callback, PipelinePhase.RESOLVING_ENTITIES)
+        resolution = EntityResolver.resolve(
+            interpreted,
+            location=self.location,
+            npcs=self.npcs,
+            combat_state=self.combat_state,
+            inventory=self.inventory,
+            interpreter=self.interpreter,
+            language=self.language,
+        )
+
+        if resolution.status == "ambiguous":
+            return AmbiguityResult(
+                field_name=resolution.field_name or "target_name",  # type: ignore[arg-type]
+                raw_value=resolution.raw_value or "",
+                candidates=list(resolution.candidates),
+                partial_action=interpreted,
+            )
+
+        if resolution.status == "unknown":
+            refusal = await narrate.narrate_unknown(
+                narrator=self.narrator,
+                action=interpreted,
+                resolution=resolution,
+                actor_name=self.actor_name,
+                location=self.location,
+                language=self.language,
+                campaign_id=self.campaign_id,
+                session=self.session,
+            )
+            return UnknownEntityResult(
+                field_name=resolution.field_name or "target_name",
+                raw_value=resolution.raw_value or "",
+                partial_action=interpreted,
+                refusal_narrative=refusal.narrative,
+                tone=refusal.tone,
+            )
+
+        # status in {"resolved", "not_applicable"} — patch action with the
+        # canonical entity id when one was found.
+        if (
+            resolution.status == "resolved"
+            and resolution.field_name == "target_name"
+            and resolution.resolved_entity is not None
+        ):
+            updates: dict[str, object] = {
+                "target_name": resolution.resolved_entity,
+            }
+            if resolution.reclassified_action_type is not None:
+                updates["action_type"] = resolution.reclassified_action_type
+            interpreted = interpreted.model_copy(update=updates)
+        elif (
+            resolution.status == "resolved"
+            and resolution.field_name == "item_name"
+            and resolution.resolved_entity is not None
+        ):
+            interpreted = interpreted.model_copy(
+                update={"item_name": resolution.resolved_entity},
+            )
+
+        # --- Auto-resolve weapon for ATTACK when player omitted weapon name ---
+        if interpreted.action_type == ActionType.ATTACK:
+            resolved_weapon = interpret.auto_resolve_weapon_name(
+                weapon_name=interpreted.weapon_name,
+                inventory=self.inventory,
+            )
+            if resolved_weapon != interpreted.weapon_name:
+                interpreted = interpreted.model_copy(
+                    update={"weapon_name": resolved_weapon},
+                )
+
+        await self._emit(progress_callback, PipelinePhase.VALIDATING)
+        # Build InterpretSideChannel, call validate, copy back mutations.
+        side_interp = interpret.InterpretSideChannel(
+            pending_flee_destination=self._pending_flee_destination,
+            pending_combat_start_embed=self._pending_combat_start_embed,
+            trivial_kill_mechanics=self._trivial_kill_mechanics,
+            pending_dice_embeds=list(self._pending_dice_embeds),
+        )
+        validation = interpret.validate(
+            action=interpreted,
+            actor_name=self.actor_name,
+            location=self.location,
+            npcs=self.npcs,
+            combat_state=self.combat_state,
+            inventory=self.inventory,
+            session=self.session,
+            campaign_id=self.campaign_id,
+            db_factory=self.db_factory,
+            side=side_interp,
+        )
+        self._pending_flee_destination = side_interp.pending_flee_destination
+        self._pending_combat_start_embed = side_interp.pending_combat_start_embed
+        self._trivial_kill_mechanics = side_interp.trivial_kill_mechanics
+        self._pending_dice_embeds = side_interp.pending_dice_embeds
+        if side_interp.pending_combat_start_embed is not None:
+            self.combat_state = side_interp.pending_combat_start_embed[0]
+
+        if not validation.is_valid:
+            refusal = await narrate.narrate_rule_failure(
+                narrator=self.narrator,
+                action=interpreted,
+                validation=validation,
+                actor_name=self.actor_name,
+                location=self.location,
+                language=self.language,
+                campaign_id=self.campaign_id,
+                session=self.session,
+            )
+            return UnknownEntityResult(
+                field_name="rule",
+                raw_value=validation.error_message or "",
+                partial_action=interpreted,
+                refusal_narrative=refusal.narrative,
+                tone=refusal.tone,
+            )
+
+        await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)
+        # Build ResolveSideChannel, call resolve_mechanics, copy back mutations.
+        side_res = _resolve_mod.ResolveSideChannel(
+            pending_flee_destination=self._pending_flee_destination,
+            pending_dice_embeds=list(self._pending_dice_embeds),
+            trivial_kill_mechanics=self._trivial_kill_mechanics,
+        )
+        outcome = await _resolve_mod.resolve_mechanics(
+            action=interpreted,
+            actor_name=self.actor_name,
+            location=self.location,
+            npcs=self.npcs,
+            combat_state=self.combat_state,
+            inventory=self.inventory,
+            session=self.session,
+            campaign_id=self.campaign_id,
+            db_factory=self.db_factory,
+            side=side_res,
+        )
+        self._pending_flee_destination = side_res.pending_flee_destination
+        self._pending_dice_embeds = side_res.pending_dice_embeds
+        self._trivial_kill_mechanics = side_res.trivial_kill_mechanics
+
+        # MOVE syncs live location / npc dict from session after navigation.
+        if (
+            interpreted.action_type == ActionType.MOVE
+            and outcome.public_effects is not None
+            and outcome.public_effects.location_change is not None
+            and self.session is not None
+        ):
+            self.location = self.session.current_location
+            self.npcs = self.session.npcs
+
+        # PICKUP syncs location + inventory refs after item transfer.
+        if (
+            interpreted.action_type == ActionType.PICKUP
+            and "picks up" in outcome.summary
+            and self.session is not None
+        ):
+            self.location = self.session.current_location
+            for uid, char in self.session.characters.items():
+                if char.name == self.actor_name:
+                    self.inventory = self.session.inventories.get(uid)
+                    break
+
+        # Record a short narration hint for the narrator context.
+        # Only in active combat: the narrator reads the tail of this list from
+        # the COMBAT ACTIVE section of the scene prompt. The engine never touches
+        # the list; the cap is enforced by ``record_combat_event`` itself.
+        if self.combat_state is not None and self.combat_state.is_active:
+            event_text = outcome.summary.strip()
+            if event_text:
+                record_combat_event(self.combat_state, event_text)
+
+        # Beat completion check — deterministic trigger.
+        beat_completed = False
+        if (
+            self.session is not None
+            and interpreted.action_type != ActionType.QUESTION
+            and self._check_beat_completion(interpreted, outcome)
+        ):
+            beat_completed = True
+            arc = self.session.story_arc
+            beat = arc.beats[arc.current_beat_index]
+            hint = self._apply_beat_effects(beat.on_complete)
+            if hint:
+                outcome = outcome.model_copy(update={
+                    "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
+                })
+            from world.story_arc import advance_beat
+            self.session.story_arc = advance_beat(arc)
+            logger.info(
+                "BEAT trigger-complete campaign=%s beat=%d title=%r",
+                self.campaign_id, beat.beat_number, beat.title,
+            )
+        elif (
+            self.session is not None
+            and getattr(self.session, "story_arc", None) is not None
+            # Only IMPROVISE is eligible for creative-completion fallback.
+            # Standard actions (TALK, ATTACK, PICKUP, MOVE, …) have
+            # direct triggers via _check_beat_completion. If the direct
+            # match failed, the beat is NOT done — we must not let the
+            # 4B judge second-guess standard actions, otherwise players
+            # skip ahead without narrative justification (observed
+            # 2026-04-11: saying hi to an NPC advanced the interrogation
+            # beat at confidence 0.95 via the LLM fallback).
+            and interpreted.action_type == ActionType.IMPROVISE
+        ):
+            arc = self.session.story_arc
+            beat = arc.beats[arc.current_beat_index]
+            if (
+                beat.completion_trigger is not None
+                and self.location is not None
+            ):
+                from bot.game_session import _normalize_location
+                loc_ratio = difflib.SequenceMatcher(
+                    None,
+                    _normalize_location(self.location.name),
+                    _normalize_location(beat.location_hint),
+                ).ratio()
+                if loc_ratio >= 0.5:
+                    judge = await self._llm_beat_fallback(interpreted, beat, outcome)
+                    logger.info(
+                        "BEAT fallback campaign=%s completed=%s confidence=%.2f",
+                        self.campaign_id,
+                        judge.get("completed"), judge.get("confidence"),
+                    )
+                    if judge.get("completed") and judge.get("confidence", 0) >= 0.85:
+                        beat_completed = True
+                        hint = self._apply_beat_effects(beat.on_complete)
+                        if hint:
+                            outcome = outcome.model_copy(update={
+                                "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
+                            })
+                        from world.story_arc import advance_beat
+                        self.session.story_arc = advance_beat(arc)
+                        logger.info(
+                            "BEAT fallback-complete campaign=%s beat=%d title=%r",
+                            self.campaign_id, beat.beat_number, beat.title,
+                        )
+
+        await self._emit(progress_callback, PipelinePhase.ASSEMBLING_CONTEXT)
+        # Detect a Talk-action continuation: outcome.npc_dialogue is only set
+        # by _resolve_talk, and outcome.npc_name is the NPC the player is
+        # mid-conversation with. The scene builder will only switch to the
+        # ongoing-dialogue layout if the NPC's history has a prior exchange.
+        ongoing_dialogue_with = (
+            outcome.npc_name
+            if outcome.npc_dialogue is not None
+            else None
+        )
+        context_prompt = narrate.assemble_context(
+            action=interpreted,
+            actor_name=self.actor_name,
+            location=self.location,
+            npcs=self.npcs,
+            session=self.session,
+            combat_state=self.combat_state,
+            inventory=self.inventory,
+            campaign_id=self.campaign_id,
+            current_outcome_summary=outcome.summary,
+            ongoing_dialogue_with=ongoing_dialogue_with,
+        )
+
+        await self._emit(progress_callback, PipelinePhase.NARRATING)
+        narration = await narrate.call_narrator(
+            narrator=self.narrator,
+            outcome=outcome,
+            context_prompt=context_prompt,
+            language=self.language,
+            campaign_id=self.campaign_id,
+        )
+
+        # Lot D — beat advancement (trigger-based or location-based fallback).
+        new_beat: StoryBeat | None = None
+        if beat_completed and self.session and self.session.story_arc:
+            new_beat = self.session.story_arc.beats[
+                self.session.story_arc.current_beat_index
+            ]
+        elif self.session is not None and hasattr(
+            self.session, "advance_beat_if_ready",
+        ):
+            try:
+                candidate = self.session.advance_beat_if_ready()
+            except Exception:
+                logger.exception(
+                    "BEAT advance check failed campaign=%s", self.campaign_id,
+                )
+                candidate = None
+            if isinstance(candidate, StoryBeat):
+                new_beat = candidate
+        if new_beat is not None and self.db_factory is not None:
+            try:
+                await asyncio.to_thread(
+                    _persist_story_arc,
+                    self.db_factory,
+                    self.session.story_arc,
+                )
+                logger.info(
+                    "BEAT advanced campaign=%s to=%d title=%r",
+                    self.campaign_id,
+                    self.session.story_arc.current_beat_index
+                    if self.session.story_arc is not None else -1,
+                    new_beat.title,
+                )
+            except Exception:
+                logger.exception(
+                    "BEAT persist failed campaign=%s", self.campaign_id,
+                )
+
+        # Auto-checkpoint: persist full session state after every resolved action (B1).
+        if self.db_factory is not None and self.session is not None:
+            try:
+                await asyncio.to_thread(
+                    persist_session, self.db_factory, self.session,
+                )
+            except Exception:
+                logger.exception("AUTO-CHECKPOINT failed campaign=%s", self.campaign_id)
+
+        await self._emit(progress_callback, PipelinePhase.DONE)
+        is_question = interpreted.action_type == ActionType.QUESTION
+        is_free = interpreted.action_type == ActionType.EQUIP
+        result = ActionPipelineResult(
+            narrative=narration.narrative,
+            tone=narration.tone,
+            mechanics_text=outcome.summary,
+            public_effects=outcome.public_effects,
+            interpreted_action=interpreted,
+            new_beat=new_beat,
+            npc_name=outcome.npc_name,
+            npc_dialogue=outcome.npc_dialogue,
+            is_question=is_question,
+            is_free_action=is_free,
+        )
+        logger.info(
+            "ACTION complete campaign=%s actor=%s action=%s",
+            self.campaign_id,
+            interpreted.actor_name,
+            interpreted.action_type.value,
+            extra={"extra_payload": {
+                "mechanics_summary": outcome.summary,
+                "player_intent": outcome.player_intent,
+                "outcome_facts": outcome.outcome_facts,
+                "public_effects": outcome.public_effects.model_dump(),
+                "narrative": narration.narrative,
+                "tone": narration.tone,
+            }},
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Beat completion (deterministic triggers)
+    # ------------------------------------------------------------------
+
+    def _check_beat_completion(
+        self,
+        action: InterpretedAction,
+        outcome: MechanicsOutcome | None = None,
+    ) -> bool:
+        """Check if the action satisfies the current beat's completion trigger.
+
+        For most trigger types (interact, defeat, arrive, pickup, search)
+        the action itself is atomic: doing it at all means the objective
+        is met. **TALK is different** — addressing the right NPC does not
+        automatically mean the conversation was productive. If the NPC
+        refused to share anything or pushed back, the beat must NOT
+        advance. That gate is applied here via ``outcome`` when provided.
+        """
+        if self.session is None or getattr(self.session, "story_arc", None) is None:
+            return False
+        arc = self.session.story_arc
+        if arc.current_beat_index >= len(arc.beats):
+            return False
+        beat = arc.beats[arc.current_beat_index]
+        trigger = beat.completion_trigger
+        if trigger is None:
+            return False
+
+        type_map: dict[str, set[str]] = {
+            "interact": {ActionType.INTERACT},
+            "defeat": {ActionType.ATTACK},
+            "talk": {ActionType.TALK},
+            "arrive": {ActionType.MOVE},
+            "search": {ActionType.SEARCH},
+            "pickup": {ActionType.PICKUP},
+        }
+        allowed = type_map.get(trigger.type, set())
+        if action.action_type not in allowed:
+            return False
+
+        target_matches = False
+        if trigger.target and action.target_name:
+            from bot.game_session import _normalize_location
+            norm_target = _normalize_location(action.target_name)
+            norm_trigger = _normalize_location(trigger.target)
+            # Substring inclusion — robust to short-vs-long mismatches
+            # (e.g. action target "Kaelen" vs trigger target "Kaelen, le
+            # Gardien Blessé"). Without this, difflib.ratio() rejects the
+            # pair and the LLM fallback starts guessing.
+            if norm_target and norm_trigger:
+                if norm_target in norm_trigger or norm_trigger in norm_target:
+                    target_matches = True
+            if not target_matches:
+                ratio = difflib.SequenceMatcher(
+                    None, norm_target, norm_trigger,
+                ).ratio()
+                target_matches = ratio >= 0.6
+        if not target_matches:
+            return False
+
+        # Quality gate for TALK triggers — the conversation must have
+        # actually produced something. A dialogue that revealed nothing
+        # (NPC stonewalled the player) or made the NPC more hostile
+        # (disposition_change < 0) does NOT complete the beat, even when
+        # the player addressed the right character. Observed 2026-04-11:
+        # the player talked to the guard, the NPC agent returned
+        # disposition_change=-1 with a cold reveal, and the beat
+        # advanced anyway — leaving the player confused.
+        if trigger.type == "talk" and outcome is not None:
+            if outcome.talk_reveals_count <= 0:
+                logger.info(
+                    "BEAT talk-gate blocked campaign=%s reason=no-reveals",
+                    self.campaign_id,
+                )
+                return False
+            if outcome.talk_disposition_change < 0:
+                logger.info(
+                    "BEAT talk-gate blocked campaign=%s reason=disposition-regressed delta=%d",
+                    self.campaign_id, outcome.talk_disposition_change,
+                )
+                return False
+
+        return True
+
+    def _apply_beat_effects(self, effects: BeatEffects) -> str:
+        """Apply beat completion effects to the current location.
+
+        Returns a narrative hint string for the narrator.
+        """
+        loc = self.location
+        if loc is None:
+            return effects.narrative_hint
+
+        for exit_name in effects.unlock_exits:
+            if exit_name not in loc.unlocked_exits:
+                loc.unlocked_exits.append(exit_name)
+        for npc_name in effects.add_npcs:
+            if npc_name not in loc.npcs_present:
+                loc.npcs_present.append(npc_name)
+        for item_name in effects.remove_items:
+            if item_name in loc.items_available:
+                loc.items_available.remove(item_name)
+        for item_name in effects.add_items:
+            if item_name not in loc.items_available:
+                loc.items_available.append(item_name)
+        loc.state_flags.update(effects.state_flags)
+
+        return effects.narrative_hint
+
+    async def _llm_beat_fallback(
+        self,
+        action: InterpretedAction,
+        beat: "StoryBeat",
+        outcome: MechanicsOutcome,
+    ) -> dict:
+        """Ask the 4b model if the player's creative action completes the beat.
+
+        Returns {"completed": bool, "confidence": float}.
+        Falls back to {"completed": False, "confidence": 0.0} on any error.
+        """
+        if self.interpreter is None:
+            return {"completed": False, "confidence": 0.0}
+        trigger_desc = ""
+        if beat.completion_trigger:
+            trigger_desc = f"{beat.completion_trigger.type} on \"{beat.completion_trigger.target}\""
+        prompt = (
+            f"Beat objective: \"{beat.description}\"\n"
+            f"Expected trigger: {trigger_desc}\n"
+            f"Player action: {action.action_type.value} on \"{action.target_name or 'nothing'}\"\n"
+            f"Action summary: \"{outcome.summary}\"\n\n"
+            f"Has the player achieved the beat objective through a creative approach?\n"
+            f"Return JSON: {{\"completed\": true/false, \"confidence\": 0.0-1.0}}"
+        )
+        try:
+            client = self.interpreter._client
+            result = client.chat_json(
+                "qwen3.5:4b",
+                [
+                    {"role": "system", "content": "You judge whether a player's action has completed a story beat objective. Respond with JSON only: {\"completed\": bool, \"confidence\": float}"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                think=False,
+            )
+            return {
+                "completed": bool(result.get("completed", False)),
+                "confidence": float(result.get("confidence", 0.0)),
+            }
+        except Exception:
+            logger.warning(
+                "BEAT LLM fallback failed campaign=%s", self.campaign_id,
+                exc_info=True,
+            )
+            return {"completed": False, "confidence": 0.0}
+
+    async def _emit(
+        self,
+        cb: ProgressCallback | None,
+        phase: PipelinePhase,
+    ) -> None:
+        """Fire the progress callback, swallowing exceptions."""
+        if cb is None:
+            return
+        try:
+            await cb(phase)
+        except Exception:
+            logger.warning(
+                "ACTION callback failed campaign=%s phase=%s",
+                self.campaign_id, phase.name, exc_info=True,
+            )
