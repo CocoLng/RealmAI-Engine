@@ -1832,7 +1832,7 @@ async def test_flee_success_marks_combatant_fled() -> None:
         expression="1d20+2", rolls=[18], modifier=2, total=20, dc=12,
         outcome=RollOutcome.SUCCESS, margin=8,
     )
-    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+    with patch("bot.pipeline.resolve.roll_check", return_value=fake_check):
         await pipeline._resolve_flee(action)
 
     assert hero.fled is True
@@ -1852,7 +1852,7 @@ async def test_flee_failure_consumes_action_stays_in_combat() -> None:
         expression="1d20+2", rolls=[4], modifier=2, total=6, dc=12,
         outcome=RollOutcome.FAILURE, margin=-6,
     )
-    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+    with patch("bot.pipeline.resolve.roll_check", return_value=fake_check):
         await pipeline._resolve_flee(action)
 
     assert hero.fled is False
@@ -1875,7 +1875,7 @@ async def test_flee_with_all_pcs_fled_ends_combat() -> None:
         expression="1d20+2", rolls=[18], modifier=2, total=20, dc=12,
         outcome=RollOutcome.SUCCESS, margin=8,
     )
-    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+    with patch("bot.pipeline.resolve.roll_check", return_value=fake_check):
         await pipeline._resolve_flee(action)
 
     assert hero.fled is True
@@ -1897,7 +1897,7 @@ async def test_flee_dice_embed_added_to_pending() -> None:
         expression="1d20+2", rolls=[10], modifier=2, total=12, dc=12,
         outcome=RollOutcome.NEAR_SUCCESS, margin=0,
     )
-    with patch("bot.action_pipeline.roll_check", return_value=fake_check):
+    with patch("bot.pipeline.resolve.roll_check", return_value=fake_check):
         await pipeline._resolve_flee(action)
 
     assert len(pipeline._pending_dice_embeds) == 1
@@ -1931,7 +1931,7 @@ async def test_flee_applies_stored_destination_on_full_escape() -> None:
         outcome=RollOutcome.SUCCESS, margin=8,
     )
     with (
-        patch("bot.action_pipeline.roll_check", return_value=fake_check),
+        patch("bot.pipeline.resolve.roll_check", return_value=fake_check),
         patch("bot.world_navigation.change_location", new=AsyncMock(return_value=fake_location)),
     ):
         outcome = await pipeline._resolve_flee(action)

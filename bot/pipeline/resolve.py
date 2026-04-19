@@ -1,0 +1,1115 @@
+"""Resolve stage — engine mechanics dispatch + combat helpers.
+
+Pure-function module. Stage helpers return MechanicsOutcome and may
+mutate the ResolveSideChannel they receive.
+
+Extracted from ``bot.action_pipeline.ActionPipeline`` so that mechanics
+dispatch can be unit-tested without instantiating the full pipeline class.
+
+The ``ActionPipeline`` facade keeps a thin wrapper for ``_resolve_mechanics``
+that round-trips side-channel state through ``ResolveSideChannel``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from ai.models import InterpretedAction, MechanicsOutcome, PublicEffects
+from engine.character import Character, compute_modifier
+from engine.combat import (
+    CombatEndReason,
+    check_combat_end,
+    trivial_resolve,
+)
+from engine.conditions import ActiveCondition, ConditionType
+from engine.dice import RollOutcome, roll_check
+from engine.inventory import EquipmentSlot, Weapon, equip_item, remove_item, unequip_item
+from engine.validators import ActionType
+from world.location import Location
+from world.npc import NPC, NPCDisposition
+
+if TYPE_CHECKING:
+    from engine.combat import CombatState, TrivialResolveResult
+    from engine.inventory import Inventory
+    from bot.game_session import GameSession
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Constants (moved from action_pipeline.py; re-exported there for compat)
+# ---------------------------------------------------------------------------
+
+TRIVIAL_RESOLVE_HP_THRESHOLD = 10
+"""NPCs with ``max_hp`` below this value are auto-resolved on attack."""
+
+TRIVIAL_RESOLVE_AC_THRESHOLD = 12
+"""NPCs with ``ac`` above this value are *not* trivially defeatable."""
+
+DEFENSIVE_CONDITIONS: frozenset[ConditionType] = frozenset({
+    ConditionType.INVISIBLE,
+    ConditionType.PETRIFIED,
+    ConditionType.RESTRAINED,
+    ConditionType.UNCONSCIOUS,
+})
+"""Conditions that make an NPC non-trivial to defeat outright."""
+
+
+# ---------------------------------------------------------------------------
+# Side-channel state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ResolveSideChannel:
+    """Mutable bag for state produced as a side effect of resolve helpers.
+
+    The ``ActionPipeline`` facade builds one of these from the current
+    ``self._pending_*`` attributes before calling :func:`resolve_mechanics`,
+    and copies the updated values back afterward.
+    """
+
+    pending_flee_destination: str | None = None
+    pending_dice_embeds: list[Any] = field(default_factory=list)
+    trivial_kill_mechanics: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper (moved from action_pipeline.py)
+# ---------------------------------------------------------------------------
+
+def is_trivially_defeatable(npc: NPC) -> bool:
+    """Check whether an NPC can be auto-killed without a combat round.
+
+    All three criteria must be met:
+    - ``npc.max_hp`` is below :data:`TRIVIAL_RESOLVE_HP_THRESHOLD`
+    - ``npc.ac`` is at or below :data:`TRIVIAL_RESOLVE_AC_THRESHOLD`
+    - NPC has no active defensive conditions (forward-compatible; NPCs
+      don't carry conditions today, but the check is ready for when they do)
+    """
+    if npc.max_hp >= TRIVIAL_RESOLVE_HP_THRESHOLD:
+        return False
+    if npc.ac > TRIVIAL_RESOLVE_AC_THRESHOLD:
+        return False
+    # NPC model does not have conditions yet; use getattr for
+    # forward-compatibility.
+    conditions: list[ActiveCondition] = getattr(npc, "conditions", [])
+    if any(c.condition_type in DEFENSIVE_CONDITIONS for c in conditions):
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Top-level dispatcher
+# ---------------------------------------------------------------------------
+
+async def resolve_mechanics(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    location: Location | None,
+    npcs: dict[str, NPC],
+    combat_state: "CombatState | None",
+    inventory: "Inventory | None",
+    session: "GameSession | None",
+    campaign_id: str,
+    db_factory: Any,
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Dispatcher — calls action-type-specific resolver.
+
+    Apply mechanical effects and return a layered outcome.
+
+    Returns a :class:`ai.models.MechanicsOutcome` carrying the short
+    mechanical summary, the player's framing, and any state-change
+    facts. The narrator consumes the three layers separately.
+    """
+    from bot.pipeline.narrate import build_player_intent
+    intent = build_player_intent(action)
+
+    if side.trivial_kill_mechanics is not None:
+        return MechanicsOutcome(
+            summary=side.trivial_kill_mechanics,
+            player_intent=intent,
+            outcome_facts=side.trivial_kill_mechanics,
+        )
+
+    at = action.action_type
+
+    if at == ActionType.EQUIP:
+        return resolve_equip(
+            action=action,
+            actor_name=actor_name,
+            combat_state=combat_state,
+            inventory=inventory,
+            side=side,
+        )
+
+    if at == ActionType.USE_ITEM:
+        return resolve_use_item(
+            action=action,
+            actor_name=actor_name,
+            combat_state=combat_state,
+            inventory=inventory,
+            side=side,
+        )
+
+    if at == ActionType.FLEE:
+        return await resolve_flee(
+            action=action,
+            actor_name=actor_name,
+            location=location,
+            combat_state=combat_state,
+            session=session,
+            db_factory=db_factory,
+            side=side,
+        )
+
+    if at == ActionType.LOOK:
+        loc = location
+        summary = (
+            f"{action.actor_name} observes {loc.name if loc else 'the area'}."
+        )
+        return MechanicsOutcome(summary=summary, player_intent=intent)
+
+    if at == ActionType.QUESTION:
+        loc = location
+        parts: list[str] = []
+        if loc:
+            parts.append(f"Location: {loc.name}. {loc.description}")
+            all_exits = loc.connections + loc.unlocked_exits
+            if all_exits:
+                parts.append(f"Exits: {', '.join(all_exits)}.")
+            if loc.items_available:
+                parts.append(f"Visible items: {', '.join(loc.items_available)}.")
+            if loc.npcs_present:
+                parts.append(f"NPCs present: {', '.join(loc.npcs_present)}.")
+            if loc.state_flags:
+                active = [k for k, v in loc.state_flags.items() if v]
+                if active:
+                    parts.append(f"Environment state: {', '.join(active)}.")
+        arc = getattr(session, "story_arc", None) if session else None
+        if arc is not None:
+            beat = arc.beats[arc.current_beat_index]
+            parts.append(f"Current objective: {beat.title} — {beat.description}")
+        summary = f"{action.actor_name} asks about the surroundings."
+        return MechanicsOutcome(
+            summary=summary,
+            player_intent=intent,
+            outcome_facts=" ".join(parts),
+        )
+
+    if at == ActionType.SEARCH:
+        summary = (
+            f"{action.actor_name} searches "
+            f"{action.target_name or 'the surroundings'}."
+        )
+        return MechanicsOutcome(summary=summary, player_intent=intent)
+
+    if at == ActionType.TALK:
+        # TALK in combat is the TRUCE path (CHA check vs
+        # aggression_threshold). Out of combat, it's the usual NPC
+        # dialogue flow.
+        _language = getattr(session, "language", "fr") if session is not None else "fr"
+        if combat_state is not None and combat_state.is_active:
+            return await asyncio.to_thread(
+                resolve_talk_in_combat,
+                action=action,
+                actor_name=actor_name,
+                combat_state=combat_state,
+                session=session,
+                side=side,
+            )
+        return await asyncio.to_thread(
+            resolve_talk,
+            action=action,
+            actor_name=actor_name,
+            location=location,
+            npcs=npcs,
+            session=session,
+            campaign_id=campaign_id,
+            db_factory=db_factory,
+            side=side,
+            language=_language,
+        )
+
+    if at == ActionType.MOVE:
+        target = action.target_name or ""
+        if (
+            session is not None
+            and db_factory is not None
+            and target
+        ):
+            from bot.world_navigation import LocationChangeError, change_location
+            try:
+                dest = await change_location(
+                    session, target, db_factory=db_factory,
+                )
+            except LocationChangeError as exc:
+                logger.warning(
+                    "MOVE change_location failed campaign=%s target=%r reason=%s",
+                    campaign_id, target, exc.reason,
+                )
+                return MechanicsOutcome(
+                    summary=f"{action.actor_name} cannot reach {exc.destination}.",
+                    player_intent=intent,
+                )
+            # Caller must sync self.location / self.npcs from session after return.
+            return MechanicsOutcome(
+                summary=f"{action.actor_name} arrives at {dest.name}.",
+                player_intent=intent,
+                outcome_facts=f"{action.actor_name} moved to {dest.name}.",
+                public_effects=PublicEffects(location_change=dest.name),
+            )
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} moves toward {action.target_name}.",
+            player_intent=intent,
+        )
+
+    if at == ActionType.INTERACT:
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} interacts with {action.target_name}.",
+            player_intent=intent,
+        )
+
+    if at == ActionType.PICKUP:
+        summary = await asyncio.to_thread(
+            resolve_pickup,
+            action=action,
+            actor_name=actor_name,
+            session=session,
+            db_factory=db_factory,
+        )
+        facts = ""
+        public = PublicEffects()
+        if "picks up" in summary:
+            facts = summary
+            picked_name = action.target_name or action.item_name or ""
+            if picked_name:
+                public = PublicEffects(items_gained=[picked_name])
+        return MechanicsOutcome(
+            summary=summary,
+            player_intent=intent,
+            outcome_facts=facts,
+            public_effects=public,
+        )
+
+    if at == ActionType.IMPROVISE:
+        description = action.improvise_description or action.raw_input
+        return MechanicsOutcome(
+            summary=(
+                f"{action.actor_name} attempts an improvised action: {description}"
+            ),
+            player_intent=intent,
+        )
+
+    if at == ActionType.ATTACK:
+        return resolve_pc_attack(
+            action=action,
+            actor_name=actor_name,
+            combat_state=combat_state,
+            side=side,
+        )
+
+    return MechanicsOutcome(
+        summary=f"{action.actor_name} performs {at.value}.",
+        player_intent=intent,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-action-type resolvers
+# ---------------------------------------------------------------------------
+
+def resolve_equip(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    combat_state: "CombatState | None",
+    inventory: "Inventory | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Swap equipped weapon — free action, no turn advance."""
+    from bot.pipeline.narrate import build_player_intent
+    intent = build_player_intent(action)
+    if combat_state is None or action.item_name is None:
+        return MechanicsOutcome(summary="Equip failed.", player_intent=intent)
+
+    actor = next(
+        (c for c in combat_state.combatants if c.name == action.actor_name),
+        None,
+    )
+    if actor is None:
+        return MechanicsOutcome(summary="Equip failed.", player_intent=intent)
+
+    inv = actor.inventory
+
+    # Unequip current MAIN_HAND if occupied
+    if EquipmentSlot.MAIN_HAND in inv.equipped:
+        unequip_item(inv, EquipmentSlot.MAIN_HAND)
+
+    # Equip the new weapon
+    equip_item(inv, action.item_name, EquipmentSlot.MAIN_HAND)
+    actor.action_budget.weapon_swapped_this_turn = True
+
+    return MechanicsOutcome(
+        summary=f"{action.actor_name} dégaine {action.item_name}.",
+        player_intent=intent,
+    )
+
+
+def resolve_use_item(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    combat_state: "CombatState | None",
+    inventory: "Inventory | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Use a healing potion — costs the action."""
+    from bot.pipeline.narrate import build_player_intent
+    intent = build_player_intent(action)
+    if combat_state is None or action.item_name is None:
+        return MechanicsOutcome(summary="Use item failed.", player_intent=intent)
+
+    actor = next(
+        (c for c in combat_state.combatants if c.name == action.actor_name),
+        None,
+    )
+    if actor is None:
+        return MechanicsOutcome(summary="Use item failed.", player_intent=intent)
+
+    # Find the potion
+    matching = [i for i in actor.inventory.items if i.name == action.item_name]
+    if not matching:
+        return MechanicsOutcome(
+            summary=f"{action.item_name} not found.", player_intent=intent,
+        )
+
+    item = matching[0]
+    heal_dice = getattr(item, "heal_dice", None)
+    if not heal_dice:
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} uses {action.item_name}.",
+            player_intent=intent,
+        )
+
+    # Roll healing dice
+    from engine.dice import roll as roll_dice
+
+    dice_result = roll_dice(heal_dice)
+    healed = dice_result.total
+    old_hp = actor.character.hp
+    actor.character.hp = min(old_hp + healed, actor.character.max_hp)
+    actual_healed = actor.character.hp - old_hp
+
+    # Remove potion from inventory
+    remove_item(actor.inventory, action.item_name)
+
+    # Mark action used
+    actor.action_budget.action_used = True
+
+    summary = (
+        f"{action.actor_name} boit {action.item_name} "
+        f"— récupère {actual_healed} PV ({dice_result.expression}: {dice_result.total})"
+    )
+    return MechanicsOutcome(
+        summary=summary,
+        player_intent=intent,
+        outcome_facts=summary,
+        public_effects=PublicEffects(
+            hp_delta={action.actor_name: actual_healed},
+        ),
+    )
+
+
+async def resolve_flee(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    location: Location | None,
+    combat_state: "CombatState | None",
+    session: "GameSession | None",
+    db_factory: Any,
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Roll DEX check (Acrobatics) DC 12 to escape combat.
+
+    Success: combatant marked fled=True, removed from turn rotation.
+    Failure: action_used=True, combatant stays in combat.
+    When all alive PCs have fled, ends combat with CombatEndReason.FLED
+    and applies the stored flee destination (from MOVE auto-conversion).
+    """
+    from bot.pipeline.narrate import build_player_intent
+    assert combat_state is not None
+    combatant = next(
+        (c for c in combat_state.combatants if c.name == action.actor_name),
+        None,
+    )
+    if combatant is None:
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} n'est pas en combat.",
+            player_intent=build_player_intent(action),
+        )
+
+    dex_score = combatant.character.ability_scores.DEX
+    dex_mod = compute_modifier(dex_score)
+    expression = f"1d20+{dex_mod}" if dex_mod >= 0 else f"1d20{dex_mod}"
+    check = roll_check(expression, dc=12)
+    intent = build_player_intent(action)
+
+    if check.outcome in (
+        RollOutcome.NEAR_SUCCESS,
+        RollOutcome.SUCCESS,
+        RollOutcome.CRITICAL_SUCCESS,
+    ):
+        combatant.fled = True
+        outcome_desc = (
+            f"{action.actor_name} réussit à fuir "
+            f"(DEX {check.total} vs DC 12) et s'échappe du combat."
+        )
+    else:
+        combatant.action_budget.action_used = True
+        outcome_desc = (
+            f"{action.actor_name} échoue à fuir "
+            f"(DEX {check.total} vs DC 12) et reste bloqué en combat."
+        )
+
+    # Store dice roll for the caller to display as an embed.
+    side.pending_dice_embeds.append(("flee_check", check, action.actor_name))
+
+    # Check if combat ends (all alive PCs have fled)
+    end = check_combat_end(combat_state)
+    if end == CombatEndReason.FLED:
+        # Centralised finalisation. Local import to avoid the
+        # bot.combat_end → ActionPipeline import cycle.
+        if session is not None:
+            from bot.combat_end import finalize_combat
+            finalize_combat(session, CombatEndReason.FLED)
+        else:
+            # Session-less pipeline (shouldn't happen in live flow but
+            # some tests build one): fall back to a minimal state flip.
+            combat_state.is_active = False
+            combat_state.end_reason = end
+        destination_name: str | None = None
+        if side.pending_flee_destination and session and db_factory:
+            from bot.world_navigation import LocationChangeError, change_location
+            try:
+                dest = await change_location(
+                    session,
+                    side.pending_flee_destination,
+                    db_factory=db_factory,
+                )
+                destination_name = dest.name
+                outcome_desc += f" Le groupe s'échappe vers {dest.name}."
+            except LocationChangeError:
+                pass
+        return MechanicsOutcome(
+            summary=outcome_desc,
+            player_intent=intent,
+            outcome_facts=outcome_desc,
+            public_effects=PublicEffects(location_change=destination_name)
+            if destination_name
+            else PublicEffects(),
+        )
+
+    return MechanicsOutcome(
+        summary=outcome_desc,
+        player_intent=intent,
+        outcome_facts=outcome_desc,
+    )
+
+
+def resolve_talk(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    location: Location | None,
+    npcs: dict[str, NPC],
+    session: "GameSession | None",
+    campaign_id: str,
+    db_factory: Any,
+    side: ResolveSideChannel,
+    language: str = "fr",
+) -> MechanicsOutcome:
+    """Run TALK through the NPC agent, persist state, build outcome."""
+    from world.npc import DialogueExchange, NPCDisposition
+    from bot.pipeline.narrate import build_player_intent
+
+    intent = build_player_intent(action)
+    target = action.target_name or ""
+
+    if (
+        session is None
+        or not target
+        or target not in (session.npcs or {})
+    ):
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} approaches {target} to speak.",
+            player_intent=intent,
+        )
+
+    npc = session.npcs[target]
+    agent = getattr(session, "npc_agent", None)
+    generator = getattr(session, "npc_generator", None)
+
+    # Lazy canon generation when the NPC sheet is empty.
+    if (
+        generator is not None
+        and callable(getattr(generator, "generate", None))
+        and not (npc.personality or npc.description)
+    ):
+        try:
+            location_ctx = ""
+            if session.current_location is not None:
+                loc = session.current_location
+                location_ctx = f"{loc.name} — {loc.description}"
+            campaign_theme = getattr(session.campaign, "name", "")
+            sheet = generator.generate(
+                npc_name=npc.name,
+                location_context=location_ctx,
+                campaign_theme=campaign_theme,
+                language=language,
+            )
+            npc.personality = sheet.personality
+            npc.description = sheet.description
+            npc.secrets = list(sheet.secrets)
+            npc.knowledge = list(sheet.knowledge)
+            logger.info(
+                "NPC lazy-generated name=%s secrets=%d knowledge=%d",
+                npc.name, len(npc.secrets), len(npc.knowledge),
+            )
+        except Exception:
+            logger.exception(
+                "NPC sheet generation failed for %s", npc.name,
+            )
+
+    if agent is None or not callable(getattr(agent, "respond", None)):
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} speaks with {npc.name}.",
+            player_intent=intent,
+        )
+
+    # Build a small scene context for the dialogue agent.
+    try:
+        from bot.scene_hydration import describe_scene_for_narrator
+        agent_context = describe_scene_for_narrator(
+            session, actor_name=action.actor_name,
+        )
+    except Exception:
+        agent_context = ""
+
+    try:
+        response = agent.respond(
+            npc=npc,
+            player_input=action.raw_input,
+            context_prompt=agent_context,
+            language=language,
+        )
+    except Exception:
+        logger.exception("NPC agent failed for %s", npc.name)
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} speaks with {npc.name}.",
+            player_intent=intent,
+        )
+
+    # Apply disposition delta (clamped to NPCDisposition order).
+    if response.disposition_change:
+        order = [
+            NPCDisposition.HOSTILE, NPCDisposition.UNFRIENDLY,
+            NPCDisposition.NEUTRAL, NPCDisposition.FRIENDLY,
+            NPCDisposition.ALLIED,
+        ]
+        try:
+            idx = order.index(npc.disposition) + response.disposition_change
+            idx = max(0, min(len(order) - 1, idx))
+            npc.disposition = order[idx]
+        except ValueError:
+            pass
+
+    # Append the exchange to history.
+    npc.dialogue_history.append(
+        DialogueExchange(
+            player_said=action.raw_input,
+            npc_said=response.dialogue,
+            revealed=list(response.revealed_info),
+        ),
+    )
+
+    # Persist the mutated NPC.
+    if db_factory is not None:
+        try:
+            from db.repositories.npc_repo import NPCRepository
+            db_session = db_factory()
+            try:
+                NPCRepository(db_session).update(npc, campaign_id)
+                db_session.commit()
+            finally:
+                db_session.close()
+        except Exception:
+            logger.exception("NPC persist failed for %s", npc.name)
+
+    # Build the outcome facts the narrator will render.
+    # NPC dialogue is passed separately so the narrator only describes
+    # framing (body language, atmosphere) — the spoken words appear in
+    # a dedicated embed field on Discord.
+    facts_lines = [f"{npc.name} responds to the player."]
+    if response.revealed_info:
+        facts_lines.append(
+            "Reveals: " + " ; ".join(response.revealed_info),
+        )
+    if response.disposition_change:
+        facts_lines.append(
+            f"Disposition shift: {response.disposition_change:+d}",
+        )
+
+    summary = f"{action.actor_name} speaks with {npc.name}."
+
+    return MechanicsOutcome(
+        summary=summary,
+        player_intent=intent,
+        outcome_facts="\n".join(facts_lines),
+        npc_name=npc.name,
+        npc_dialogue=response.dialogue,
+        talk_reveals_count=len(response.revealed_info),
+        talk_disposition_change=int(response.disposition_change),
+    )
+
+
+def resolve_talk_in_combat(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    combat_state: "CombatState | None",
+    session: "GameSession | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Route a TALK action in combat to the TRUCE resolver.
+
+    Runs :func:`bot.combat_truce.attempt_truce` which rolls the CHA
+    check and, on success, marks every enemy as fled. The result is
+    then forwarded to :func:`bot.combat_end.finalize_combat` with
+    ``CombatEndReason.TRUCE`` so the encounter closes cleanly and the
+    TurnManager picks up an idempotent summary next tick.
+
+    The dice embed is queued on ``side.pending_dice_embeds`` so the
+    caller (ActionHandlerCog / TurnManager) can render the check in
+    the existing dice embed infrastructure.
+    """
+    from bot.combat_truce import attempt_truce
+    from engine.combat import CombatEndReason
+    from engine.validators import _find_combatant
+    from bot.pipeline.narrate import build_player_intent
+
+    intent = build_player_intent(action)
+    assert combat_state is not None
+
+    actor = _find_combatant(action.actor_name, combat_state)
+    target = _find_combatant(
+        action.target_name or "", combat_state,
+    )
+    if actor is None or target is None:
+        return MechanicsOutcome(
+            summary=(
+                f"{action.actor_name} tente de parler, mais la cible "
+                "est introuvable."
+            ),
+            player_intent=intent,
+        )
+
+    succeeded, check, summary_text = attempt_truce(
+        actor, target, combat_state,
+    )
+
+    if check is not None:
+        # Queue the dice embed for the caller (task 60 rendering).
+        side.pending_dice_embeds.append(
+            ("truce_check", check, action.actor_name),
+        )
+
+    if succeeded and session is not None:
+        # Finalise combat with TRUCE. finalize_combat is idempotent
+        # so the TurnManager's post-advance_turn re-call is a no-op.
+        from bot.combat_end import finalize_combat
+        finalize_combat(session, CombatEndReason.TRUCE)
+
+    return MechanicsOutcome(
+        summary=summary_text,
+        player_intent=intent,
+        outcome_facts=summary_text,
+    )
+
+
+def resolve_pc_attack(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    combat_state: "CombatState | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Resolve a player weapon attack in combat.
+
+    Calls engine.combat.resolve_attack() which mutates defender HP in-place.
+    Queues the AttackResult on side.pending_dice_embeds for the turn manager to
+    render as a dice embed. Populates hp_delta in PublicEffects.
+    """
+    from engine.combat import consume_action, resolve_attack
+    from engine.inventory import EquipmentSlot, Weapon
+    from bot.pipeline.narrate import build_player_intent
+
+    intent = build_player_intent(action)
+    state = combat_state
+
+    if state is None:
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} performs Attack.",
+            player_intent=intent,
+        )
+
+    attacker = next(
+        (c for c in state.combatants if c.name == action.actor_name and c.is_alive),
+        None,
+    )
+    target = next(
+        (c for c in state.combatants if c.name == action.target_name and c.is_alive),
+        None,
+    )
+    if attacker is None or target is None:
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} performs Attack.",
+            player_intent=intent,
+        )
+
+    weapon: Weapon | None = None
+    for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
+        item = attacker.inventory.equipped.get(slot)
+        if item is not None and isinstance(item, Weapon) and item.name == action.weapon_name:
+            weapon = item
+            break
+
+    if weapon is None:
+        return MechanicsOutcome(
+            summary=f"{action.actor_name} performs Attack.",
+            player_intent=intent,
+        )
+
+    consume_action(attacker)
+    result = resolve_attack(attacker, target, weapon)  # mutates target HP in-place
+
+    side.pending_dice_embeds.append(("attack_roll", result, action.actor_name))
+
+    if result.hit:
+        summary = (
+            f"{action.actor_name} touche {target.name} avec {weapon.name}"
+            f" — {result.damage} dégâts"
+        )
+        facts = (
+            f"{target.name} subit {result.damage} dégâts ({result.damage_type.value})."
+            + (f" {target.name} est vaincu." if not target.is_alive else "")
+        )
+        public = PublicEffects(hp_delta={target.name: -result.damage})
+    else:
+        summary = f"{action.actor_name} rate {target.name} avec {weapon.name}"
+        facts = ""
+        public = PublicEffects()
+
+    return MechanicsOutcome(
+        summary=summary,
+        player_intent=intent,
+        outcome_facts=facts,
+        public_effects=public,
+    )
+
+
+def resolve_pickup(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    session: "GameSession | None",
+    db_factory: Any,
+) -> str:
+    """Move a scene item into the acting player's inventory (Lot G)."""
+    item_name = action.target_name or action.item_name or ""
+    if not item_name or session is None or db_factory is None:
+        return f"{action.actor_name} reaches for something, but cannot grasp it."
+
+    # Find the discord user_id for the acting character.
+    user_id: int | None = None
+    for uid, char in session.characters.items():
+        if char.name == action.actor_name:
+            user_id = uid
+            break
+    if user_id is None:
+        return f"{action.actor_name} reaches for {item_name}, but cannot grasp it."
+
+    from bot.scene_hydration import take_scene_item
+
+    item = take_scene_item(
+        session,
+        item_name=item_name,
+        user_id=user_id,
+        db_factory=db_factory,
+    )
+    if item is None:
+        return (
+            f"{action.actor_name} reaches for '{item_name}', but it is not"
+            f" here."
+        )
+    return (
+        f"{action.actor_name} picks up the {item_name} and stows it in"
+        f" their pack."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Combat helpers
+# ---------------------------------------------------------------------------
+
+def should_trivial_resolve(
+    *,
+    npc: NPC,
+    session: "GameSession | None",
+    campaign_id: str,
+) -> bool:
+    """Decide whether an attack on ``npc`` skips the combat round system.
+
+    Trivial resolution applies to peaceful, defenseless NPCs that an
+    adventurer would obviously overpower in one swing. We deliberately
+    exclude HOSTILE / UNFRIENDLY NPCs (they fight back), story-critical
+    NPCs (villain, combat-beat foes — even if currently hydrated with
+    commoner stats), and anything that :func:`is_trivially_defeatable`
+    rejects (HP, AC, or defensive conditions).
+    """
+    if not npc.is_alive:
+        return False
+
+    # Story-critical NPCs are never trivially resolved, even if they were
+    # hydrated with weak stats (commoner-style). They must go through the
+    # full combat system once it's bootstrapped — otherwise a villain
+    # could be one-shot via `trivial_kill` simply because scene
+    # hydration gave them hp=4/ac=10. See tasks/combat/00_bugfix_*.
+    story_arc = getattr(session, "story_arc", None) if session is not None else None
+    if story_arc is not None:
+        if npc.name == story_arc.villain_name:
+            return False
+        beats = getattr(story_arc, "beats", None)
+        current_index = getattr(story_arc, "current_beat_index", 0)
+        if beats and 0 <= current_index < len(beats):
+            current_beat = beats[current_index]
+            if (
+                current_beat.encounter_type in ("combat", "boss")
+                and npc.name in current_beat.npc_names
+            ):
+                return False
+
+    if npc.disposition in (
+        NPCDisposition.HOSTILE,
+        NPCDisposition.UNFRIENDLY,
+    ):
+        return False
+    return is_trivially_defeatable(npc)
+
+
+def trivial_kill(
+    *,
+    target_npc: NPC,
+    actor_name: str,
+    location: Location | None,
+    npcs: dict[str, NPC],
+    session: "GameSession | None",
+    campaign_id: str,
+    db_factory: Any,
+    side: ResolveSideChannel,
+) -> None:
+    """Auto-resolve an attack against ``target_npc`` and propagate death."""
+    # Find the attacker Character object
+    attacker_pc = find_attacker_character(actor_name=actor_name, session=session)
+    if attacker_pc is None:
+        # No matching PC — fall back to the regular bootstrap path by
+        # leaving trivial_kill_mechanics unset and letting the caller
+        # treat this as combat. Should not happen in practice.
+        logger.warning(
+            "TRIVIAL_KILL no attacker character matched campaign=%s actor=%s",
+            campaign_id, actor_name,
+        )
+        return
+
+    weapon = find_attacker_weapon(attacker_pc=attacker_pc, session=session)
+    result = trivial_resolve(attacker_pc, target_npc, weapon=weapon)
+    side.trivial_kill_mechanics = result.description
+    logger.info(
+        "TRIVIAL_KILL campaign=%s attacker=%s target=%s hit=%s damage=%d killed=%s",
+        campaign_id, attacker_pc.name, target_npc.name,
+        result.hit, result.damage, result.target_killed,
+    )
+    if result.target_killed:
+        handle_npc_death(
+            npc=target_npc,
+            killer=attacker_pc,
+            result=result,
+            location=location,
+            npcs=npcs,
+            session=session,
+            campaign_id=campaign_id,
+            db_factory=db_factory,
+        )
+
+
+def find_attacker_character(
+    *,
+    actor_name: str,
+    session: "GameSession | None",
+) -> Character | None:
+    """Look up the Character object whose name matches ``actor_name``."""
+    if session is None:
+        return None
+    for char in session.characters.values():
+        if char.name == actor_name:
+            return char
+    return None
+
+
+def find_attacker_weapon(
+    *,
+    attacker_pc: Character,
+    session: "GameSession | None",
+) -> Weapon | None:
+    """Return the attacker's main-hand weapon if any."""
+    if session is None:
+        return None
+    for user_id, char in session.characters.items():
+        if char is attacker_pc:
+            inv = session.inventories.get(user_id)
+            if inv is None:
+                return None
+            weapon = inv.equipped.get(EquipmentSlot.MAIN_HAND)
+            if isinstance(weapon, Weapon):
+                return weapon
+            return None
+    return None
+
+
+def handle_npc_death(
+    *,
+    npc: NPC,
+    killer: Character,
+    result: "TrivialResolveResult",
+    location: Location | None,
+    npcs: dict[str, NPC],
+    session: "GameSession | None",
+    campaign_id: str,
+    db_factory: Any,
+) -> None:
+    """Propagate an NPC death across world state."""
+    # 1. Idempotent kill (trivial_resolve already did it).
+    npc.kill()
+
+    # 2. Remove from the live location's npcs_present and from the
+    #    in-memory NPC dict so the next scene context doesn't list them.
+    if location is not None:
+        location.npcs_present = [
+            n for n in location.npcs_present if n != npc.name
+        ]
+    npcs.pop(npc.name, None)
+
+    # 3. Witnesses: friendly NPCs in the same location turn HOSTILE.
+    witnesses_turned: list[NPC] = []
+    for other in list(npcs.values()):
+        if other.disposition in (
+            NPCDisposition.FRIENDLY,
+            NPCDisposition.ALLIED,
+        ):
+            other.disposition = NPCDisposition.HOSTILE
+            witnesses_turned.append(other)
+
+    # 4. Persist DB state if a db_factory is wired.
+    if db_factory is not None:
+        try:
+            persist_death(
+                npc=npc,
+                location=location,
+                witnesses_turned=witnesses_turned,
+                campaign_id=campaign_id,
+                db_factory=db_factory,
+            )
+        except Exception:
+            logger.exception(
+                "TRIVIAL_KILL persistence failed campaign=%s npc=%s",
+                campaign_id, npc.name,
+            )
+
+    # 5. Append a world-fact line to the per-campaign markdown log.
+    try:
+        append_world_fact(killer=killer, victim=npc, location=location, campaign_id=campaign_id)
+    except Exception:
+        logger.exception(
+            "TRIVIAL_KILL world-fact write failed campaign=%s",
+            campaign_id,
+        )
+
+    # 6. Story bible event line.
+    if (
+        session is not None
+        and session.story_bible is not None
+    ):
+        try:
+            session.story_bible.log_event(
+                f"⚔️ MEURTRE — {killer.name} a tué {npc.name} "
+                f"dans {location.name if location else 'un lieu inconnu'}.",
+            )
+        except Exception:
+            logger.exception(
+                "TRIVIAL_KILL story bible log failed campaign=%s",
+                campaign_id,
+            )
+
+    logger.info(
+        "NPC killed campaign=%s npc=%s killer=%s witnesses_turned_hostile=%d",
+        campaign_id, npc.name, killer.name, len(witnesses_turned),
+    )
+
+
+def persist_death(
+    *,
+    npc: NPC,
+    location: Location | None,
+    witnesses_turned: list[NPC],
+    campaign_id: str,
+    db_factory: Any,
+) -> None:
+    """Persist NPC death + location update + witness flips via repos."""
+    from db.repositories.location_repo import LocationRepository
+    from db.repositories.npc_repo import NPCRepository
+
+    assert db_factory is not None
+    db_session = db_factory()
+    try:
+        npc_repo = NPCRepository(db_session)
+        npc_repo.update(npc, campaign_id)
+        for witness in witnesses_turned:
+            npc_repo.update(witness, campaign_id)
+        if location is not None:
+            loc_repo = LocationRepository(db_session)
+            loc_repo.update(location, campaign_id)
+        db_session.commit()
+    finally:
+        db_session.close()
+
+
+def append_world_fact(
+    *,
+    killer: Character,
+    victim: NPC,
+    location: Location | None,
+    campaign_id: str,
+) -> None:
+    """Append a one-line markdown fact to ``logs/campaigns/{id}_facts.md``."""
+    if not campaign_id:
+        return
+    path = Path("logs/campaigns") / f"{campaign_id}_facts.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    loc_name = location.name if location is not None else "lieu inconnu"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(f"- {killer.name} a tué {victim.name} dans {loc_name}.\n")
