@@ -11,6 +11,7 @@ import discord
 from discord import SelectOption
 
 from bot.views.character_create_view import CharacterCreateView, CharacterNameModal
+from bot.views.motivation_view import MotivationView
 from bot.views.starter_gear_view import StarterGearView
 from engine.character import Alignment, CharacterClass, Race
 from engine.starter_gear import STARTER_KITS
@@ -166,3 +167,36 @@ class TestStarterGearViewFrench:
         view = StarterGearView(kits=kits, on_selected=AsyncMock())
         labels = [child.label for child in view.children if isinstance(child, discord.ui.Button)]
         assert "Sword & Shield" in labels
+
+
+# ---------------------------------------------------------------------------
+# MotivationView
+# ---------------------------------------------------------------------------
+
+
+class TestMotivationView:
+    def test_exposes_four_buttons_one_per_motivation(self) -> None:
+        from unittest.mock import AsyncMock
+        view = MotivationView(on_selected=AsyncMock(), language="fr")
+        buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+        assert len(buttons) == 4
+
+    def test_french_labels_are_localized(self) -> None:
+        from unittest.mock import AsyncMock
+        view = MotivationView(on_selected=AsyncMock(), language="fr")
+        labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
+        assert "Contrat / Payé" in labels
+        assert "Conviction / Foi" in labels
+
+    def test_button_stores_english_key_not_display_label(self) -> None:
+        from unittest.mock import AsyncMock
+        view = MotivationView(on_selected=AsyncMock(), language="fr")
+        keys = [c.key for c in view.children if isinstance(c, discord.ui.Button)]  # type: ignore[attr-defined]
+        assert set(keys) == {"Contract", "Personal", "Curiosity", "Conviction"}
+
+    def test_english_fallback_when_language_unknown(self) -> None:
+        from unittest.mock import AsyncMock
+        view = MotivationView(on_selected=AsyncMock(), language="xx")
+        labels = [c.label for c in view.children if isinstance(c, discord.ui.Button)]
+        # Unknown language → falls back to English canonical keys.
+        assert "Contract" in labels

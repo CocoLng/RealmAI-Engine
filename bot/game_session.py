@@ -62,6 +62,14 @@ class GameSession:
     npcs: dict[str, NPC] = field(default_factory=dict)
     quests: list[Quest] = field(default_factory=list)
     story_arc: StoryArc | None = None
+    character_kits: dict[int, str] = field(default_factory=dict)
+    """Kit canonical name per player (e.g. ``"Shadow Blade"``). Captured at
+    onboarding and surfaced to the narrator so it can honor the character's
+    role in every scene (not just the opening)."""
+    character_motivations: dict[int, str] = field(default_factory=dict)
+    """Motivation canonical key per player (``"Contract" | "Personal" |
+    "Curiosity" | "Conviction"``). Same purpose as ``character_kits`` —
+    part of the opening reframer's anti-chosen-one armor."""
     language: str = "fr"
 
     # AI services — None if Ollama is unavailable

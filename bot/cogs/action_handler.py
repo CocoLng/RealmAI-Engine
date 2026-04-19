@@ -11,6 +11,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -36,6 +37,15 @@ if TYPE_CHECKING:
     from bot.bot import RealmBot
 
 logger = logging.getLogger(__name__)
+
+# Network failures we tolerate on outbound Discord sends: transient DNS/reset/
+# disconnect (aiohttp) and Discord-side HTTP errors (rate-limit, 5xx). Both
+# collapse to "try again later" semantics — we log and drop the action rather
+# than crash the whole on_message handler.
+_SEND_ERRORS: tuple[type[BaseException], ...] = (
+    discord.HTTPException,
+    aiohttp.ClientConnectionError,
+)
 
 _MENTION_RE = re.compile(r"<@!?(\d+)>")
 
@@ -152,7 +162,14 @@ class ActionHandlerCog(commands.Cog):
             current_phase=PipelinePhase.INTERPRETING,
             elapsed_seconds=0.0,
         )
-        progress_msg = await message.channel.send(embed=progress_embed)
+        try:
+            progress_msg = await message.channel.send(embed=progress_embed)
+        except _SEND_ERRORS as exc:
+            logger.warning(
+                "ACTION progress send failed campaign=%s reason=%s — dropping action",
+                session.campaign.id, exc,
+            )
+            return
 
         async def update_progress(phase: PipelinePhase) -> None:
             try:
@@ -164,7 +181,7 @@ class ActionHandlerCog(commands.Cog):
                         elapsed_seconds=time.monotonic() - start,
                     ),
                 )
-            except discord.HTTPException:
+            except _SEND_ERRORS:
                 logger.warning(
                     "ACTION progress edit failed campaign=%s phase=%s",
                     session.campaign.id, phase.name,
@@ -201,17 +218,29 @@ class ActionHandlerCog(commands.Cog):
                 "ACTION failed campaign=%s reason=%s",
                 session.campaign.id, exc,
             )
-            await progress_msg.edit(
-                embed=build_action_progress_embed(
-                    actor_name=actor_name,
-                    raw_text=raw_text,
-                    current_phase=PipelinePhase.FAILED,
-                    elapsed_seconds=time.monotonic() - start,
-                ),
-            )
-            await message.channel.send(
-                "❌ Le Game Master n'a pas pu répondre. Réessaie dans un instant.",
-            )
+            try:
+                await progress_msg.edit(
+                    embed=build_action_progress_embed(
+                        actor_name=actor_name,
+                        raw_text=raw_text,
+                        current_phase=PipelinePhase.FAILED,
+                        elapsed_seconds=time.monotonic() - start,
+                    ),
+                )
+            except _SEND_ERRORS:
+                logger.warning(
+                    "ACTION failed-embed edit dropped campaign=%s",
+                    session.campaign.id,
+                )
+            try:
+                await message.channel.send(
+                    "❌ Le Game Master n'a pas pu répondre. Réessaie dans un instant.",
+                )
+            except _SEND_ERRORS:
+                logger.warning(
+                    "ACTION error notice send dropped campaign=%s",
+                    session.campaign.id,
+                )
             return
 
         # 3b. Combat bootstrap handoff (task 64) — if the pipeline just
@@ -277,6 +306,11 @@ class ActionHandlerCog(commands.Cog):
             except AttributeError:
                 logger.debug(
                     "SCENE post-after-move skipped: missing action attributes",
+                )
+            except _SEND_ERRORS:
+                logger.warning(
+                    "SCENE post-after-move send dropped campaign=%s",
+                    session.campaign.id,
                 )
             # Lot D — celebrate beat progression with a "Nouveau chapitre" embed.
             if result.new_beat is not None and session.story_arc is not None:

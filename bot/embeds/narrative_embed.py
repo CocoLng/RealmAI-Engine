@@ -126,13 +126,28 @@ def build_state_embed(
     return embed
 
 
+_MAX_FIELD_CHARS = 1024  # Discord hard limit for field values
+
+
 def build_opening_crawl_embed(
     campaign_name: str,
     story_arc: StoryArc | None,
-    location: Location | None,
+    location: Location | None,  # noqa: ARG001 — kept for callsite compat; scene info lives in build_scene_embed
     language: str = "fr",
 ) -> discord.Embed:
-    """Build an immersive opening embed from arc and location data."""
+    """Build the opening "World & Call" embed from arc data.
+
+    Three stacked elements drive the narrative chain:
+
+    - Description = ``story_arc.premise`` (universe/mood)
+    - Field "La situation" = ``story_arc.situation`` (macro context, no villain)
+    - Field "Votre appel" = ``story_arc.call_to_action`` (group-facing hook)
+
+    The location is intentionally NOT rendered here — ``build_scene_embed``
+    handles "here and now" in the next message. Fields with empty values
+    are skipped for backward compatibility with arcs generated before the
+    new fields existed.
+    """
     premise = "Votre aventure commence..."
     if story_arc and story_arc.premise:
         premise = story_arc.premise
@@ -143,21 +158,20 @@ def build_opening_crawl_embed(
         color=_DEFAULT_COLOR,
     )
 
-    if location:
-        loc_desc = location.description or location.name
-        embed.add_field(
-            name="Lieu de départ" if language == "fr" else "Starting Location",
-            value=f"**{location.name}**\n{loc_desc}",
-            inline=False,
-        )
+    situation_label = "🌍 La situation" if language == "fr" else "🌍 The situation"
+    call_label = "🎯 Votre appel" if language == "fr" else "🎯 The call"
 
-    if story_arc and story_arc.beats:
-        first_beat = story_arc.beats[0]
-        embed.add_field(
-            name="Premier chapitre" if language == "fr" else "First Chapter",
-            value=f"*{first_beat.description}*",
-            inline=False,
-        )
+    if story_arc and story_arc.situation.strip():
+        value = story_arc.situation.strip()
+        if len(value) > _MAX_FIELD_CHARS:
+            value = value[: _MAX_FIELD_CHARS - 1] + "…"
+        embed.add_field(name=situation_label, value=value, inline=False)
+
+    if story_arc and story_arc.call_to_action.strip():
+        value = story_arc.call_to_action.strip()
+        if len(value) > _MAX_FIELD_CHARS:
+            value = value[: _MAX_FIELD_CHARS - 1] + "…"
+        embed.add_field(name=call_label, value=value, inline=False)
 
     return embed
 

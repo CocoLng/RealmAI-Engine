@@ -18,6 +18,11 @@ class Location(BaseModel):
 
     name: str
     description: str = ""
+    arrival_hook: str = ""
+    """1-2 sentences in second-person plural ("vous") bridging the party to
+    this location at the moment of arrival. Rendered in the opening scene
+    embed only; empty for locations that are not the starting area or were
+    generated before this field existed."""
     connections: list[str] = Field(default_factory=list)
     exit_aliases: dict[str, list[str]] = Field(default_factory=dict)
     npcs_present: list[str] = Field(default_factory=list)

@@ -103,6 +103,32 @@ class ArcGenerator:
         "enemies": "all_enemies",
     }
 
+    _NULL_STRINGS: frozenset[str] = frozenset({"null", "none", ""})
+
+    _OPTIONAL_NULLABLE_EFFECT_FIELDS: tuple[str, ...] = (
+        "dice", "damage_type", "condition_name",
+        "condition_duration_rounds", "save_ability", "save_dc",
+    )
+
+    _OPTIONAL_NULLABLE_ATTACK_FIELDS: tuple[str, ...] = ("range_value",)
+
+    @staticmethod
+    def _coerce_null_strings(d: dict[str, Any], keys: tuple[str, ...]) -> None:
+        """Coerce string 'null'/'None'/'' to real None for the listed optional fields.
+
+        The LLM occasionally emits the literal string "null" instead of JSON null
+        for fields it wants to leave blank. Pydantic then rejects the payload with
+        an enum / Literal validation error. This helper normalizes the quirk in
+        place before validation.
+
+        Only touches the fields listed in ``keys`` so required fields are never
+        clobbered.
+        """
+        for k in keys:
+            v = d.get(k)
+            if isinstance(v, str) and v.strip().lower() in ArcGenerator._NULL_STRINGS:
+                d[k] = None
+
     @staticmethod
     def _sanitize_arc_data(data: dict[str, Any]) -> None:
         """Repair known LLM output quirks in-place before Pydantic validation.
@@ -111,6 +137,8 @@ class ArcGenerator:
         - state_flags values that are strings instead of booleans.
         - damage_type synonym normalization (e.g. "Electricity" → "Lightning").
         - target_scope invalid hybrids (e.g. "all_enemies_in_zone" → "all_enemies").
+        - string "null"/"None"/"" coerced to real None on optional effect/attack
+          fields (damage_type, save_ability, etc.).
         """
         for beat in data.get("beats") or []:
             on_complete = beat.get("on_complete")
@@ -131,6 +159,9 @@ class ArcGenerator:
         def _fix_effect(effect: Any) -> None:
             if not isinstance(effect, dict):
                 return
+            ArcGenerator._coerce_null_strings(
+                effect, ArcGenerator._OPTIONAL_NULLABLE_EFFECT_FIELDS,
+            )
             dt = effect.get("damage_type")
             if isinstance(dt, str) and dt in ArcGenerator._DAMAGE_TYPE_SYNONYMS:
                 effect["damage_type"] = ArcGenerator._DAMAGE_TYPE_SYNONYMS[dt]
@@ -140,6 +171,9 @@ class ArcGenerator:
 
         for attack in stat.get("attacks") or []:
             if isinstance(attack, dict):
+                ArcGenerator._coerce_null_strings(
+                    attack, ArcGenerator._OPTIONAL_NULLABLE_ATTACK_FIELDS,
+                )
                 dt = attack.get("damage_type")
                 if isinstance(dt, str) and dt in ArcGenerator._DAMAGE_TYPE_SYNONYMS:
                     attack["damage_type"] = ArcGenerator._DAMAGE_TYPE_SYNONYMS[dt]

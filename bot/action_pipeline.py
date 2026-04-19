@@ -475,7 +475,20 @@ class ActionPipeline:
                         )
 
         await self._emit(progress_callback, PipelinePhase.ASSEMBLING_CONTEXT)
-        context_prompt = self._assemble_context(interpreted)
+        # Detect a Talk-action continuation: outcome.npc_dialogue is only set
+        # by _resolve_talk, and outcome.npc_name is the NPC the player is
+        # mid-conversation with. The scene builder will only switch to the
+        # ongoing-dialogue layout if the NPC's history has a prior exchange.
+        ongoing_dialogue_with = (
+            outcome.npc_name
+            if outcome.npc_dialogue is not None
+            else None
+        )
+        context_prompt = self._assemble_context(
+            interpreted,
+            current_outcome_summary=outcome.summary,
+            ongoing_dialogue_with=ongoing_dialogue_with,
+        )
 
         await self._emit(progress_callback, PipelinePhase.NARRATING)
         narration = await self._call_narrator(
@@ -1737,18 +1750,37 @@ class ActionPipeline:
             f" their pack."
         )
 
-    def _assemble_context(self, action: InterpretedAction) -> str:
+    def _assemble_context(
+        self,
+        action: InterpretedAction,
+        *,
+        current_outcome_summary: str | None = None,
+        ongoing_dialogue_with: str | None = None,
+    ) -> str:
         """Build the narrator-facing context.
 
         Delegates to :func:`bot.scene_hydration.describe_scene_for_narrator`
         when a session is available; falls back to a minimal location-only
         snippet otherwise (used by unit tests that construct the pipeline
         without a full session).
+
+        ``current_outcome_summary``, when given, is forwarded to the scene
+        builder so the combat "Derniers événements mécaniques" block drops
+        the event that represents THIS turn's outcome — prevents the narrator
+        from seeing the current action twice.
+
+        ``ongoing_dialogue_with`` is the NPC name for a Talk action that is
+        a continuation of an existing dialogue. Triggers the scene builder
+        to drop the verbose ## NPCs present block and emit a compact
+        ## Dialogue in progress block instead.
         """
         if self.session is not None:
             from bot.scene_hydration import describe_scene_for_narrator
             return describe_scene_for_narrator(
-                self.session, actor_name=action.actor_name,
+                self.session,
+                actor_name=action.actor_name,
+                current_outcome_summary=current_outcome_summary,
+                ongoing_dialogue_with=ongoing_dialogue_with,
             )
 
         loc = self.location

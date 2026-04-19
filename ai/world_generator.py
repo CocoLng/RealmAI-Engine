@@ -157,6 +157,11 @@ class WorldGenerator:
                         "Dropping invalid combat zone: %s (error: %s)", raw, exc,
                     )
 
+        # Repair the zone graph IN PLACE so the Location validator accepts it:
+        # prune dangling/self references, add missing reverse edges (LLMs
+        # routinely emit A→B without B→A).
+        _symmetrize_zone_graph(combat_zones_parsed)
+
         # --- Combat triggers parsing (task 41) ---
         raw_triggers = data.get("combat_triggers") or {}
         triggers_parsed: dict[str, CombatTriggerDef] = {}
@@ -178,6 +183,7 @@ class WorldGenerator:
             location = Location(
                 name=str(data["name"]),
                 description=str(data["description"]),
+                arrival_hook=str(data.get("arrival_hook", "")).strip(),
                 connections=connections,
                 exit_aliases=exit_aliases,
                 npcs_present=list(data.get("npcs_present", [])),
@@ -199,6 +205,7 @@ class WorldGenerator:
             location = Location(
                 name=str(data["name"]),
                 description=str(data["description"]),
+                arrival_hook=str(data.get("arrival_hook", "")).strip(),
                 connections=connections,
                 exit_aliases=exit_aliases,
                 npcs_present=list(data.get("npcs_present", [])),
@@ -273,3 +280,48 @@ class WorldGenerator:
                 "with story-relevant information."
             )
         return "\n\n".join(parts)
+
+
+def _symmetrize_zone_graph(zones: list[Zone]) -> None:
+    """Repair a zone adjacency graph in place so the Location validator accepts it.
+
+    Repairs applied:
+      1. Prune self-loops (``A → A``).
+      2. Prune dangling references (``A → Inexistante``).
+      3. Add missing reverse edges so every ``A → B`` is matched by ``B → A``.
+
+    LLMs routinely emit graphs that violate one or more of these invariants.
+    Rather than dropping the entire ``combat_zones`` payload on a single
+    defect, we repair it and preserve as much structure as the LLM intended.
+    """
+    if not zones:
+        return
+
+    known_names = {z.name for z in zones}
+    pruned = 0
+    added_reverse = 0
+
+    # Pass 1: prune self-loops and dangling references.
+    for zone in zones:
+        kept: list[str] = []
+        for adj in zone.adjacent_zone_names:
+            if adj == zone.name or adj not in known_names:
+                pruned += 1
+                continue
+            kept.append(adj)
+        zone.adjacent_zone_names = kept
+
+    # Pass 2: add missing reverse edges to restore symmetry.
+    zones_by_name = {z.name: z for z in zones}
+    for zone in zones:
+        for adj in zone.adjacent_zone_names:
+            neighbor = zones_by_name[adj]
+            if zone.name not in neighbor.adjacent_zone_names:
+                neighbor.adjacent_zone_names.append(zone.name)
+                added_reverse += 1
+
+    if pruned or added_reverse:
+        logger.info(
+            "WORLD zones symmetrized: pruned=%d dangling/self, added=%d reverse edges",
+            pruned, added_reverse,
+        )

@@ -76,11 +76,18 @@ class StoryBibleLogger:
         story_arc: StoryArc | None,
         location: Location | None,
         characters: dict[int, Character],
+        character_kits: dict[int, str] | None = None,
+        character_motivations: dict[int, str] | None = None,
     ) -> None:
         """Write the static campaign plan as the file header.
 
         Creates ``logs/campaigns/`` if missing and overwrites any existing
         file for this campaign (useful when re-running dev campaigns).
+
+        When ``character_kits`` and ``character_motivations`` are provided,
+        a "Composition du groupe" section is rendered so the chosen roles
+        are part of the frozen campaign audit trail — together with the
+        ``party_premise`` (when the story arc carries one).
         """
         lines: list[str] = []
         lines.append(f"# Campagne : {campaign.name}")
@@ -94,6 +101,21 @@ class StoryBibleLogger:
             lines.append(f"**Joueurs:** {', '.join(player_lines)}")
         lines.append("")
 
+        # Party composition — kit + motivation per player (frozen facts for
+        # the reframed opening). Emitted only when the launcher provided them.
+        kits = character_kits or {}
+        motivations = character_motivations or {}
+        if characters and (kits or motivations):
+            lines.append("## Composition du groupe")
+            for user_id, char in characters.items():
+                kit = kits.get(user_id, "?")
+                motivation = motivations.get(user_id, "?")
+                lines.append(
+                    f"- **{char.name}** ({char.race.value} {char.char_class.value}) "
+                    f"— Kit: {kit} — Motivation: {motivation}",
+                )
+            lines.append("")
+
         if story_arc is not None:
             lines.append("## Arc narratif")
             lines.append(f"**Thème:** {story_arc.theme}")
@@ -101,6 +123,15 @@ class StoryBibleLogger:
             lines.append(f"> {story_arc.villain_motivation}")
             lines.append("")
             lines.append(f"**Premise:** {story_arc.premise}")
+            if story_arc.situation.strip():
+                lines.append("")
+                lines.append(f"**Situation:** {story_arc.situation}")
+            if story_arc.call_to_action.strip():
+                lines.append("")
+                lines.append(f"**Call to action:** {story_arc.call_to_action}")
+            if story_arc.party_premise.strip():
+                lines.append("")
+                lines.append(f"**Party premise (fait figé):** {story_arc.party_premise}")
             lines.append("")
             lines.append(f"### Beats ({len(story_arc.beats)})")
             for beat in story_arc.beats:
@@ -120,6 +151,8 @@ class StoryBibleLogger:
             lines.append(f"**{location.name}**")
             if location.description:
                 lines.append(f"> {location.description}")
+            if location.arrival_hook.strip():
+                lines.append(f"*Arrivée:* {location.arrival_hook}")
             if location.connections:
                 lines.append(f"- Sorties: {', '.join(location.connections)}")
             if location.npcs_present:

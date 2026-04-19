@@ -18,6 +18,7 @@ Return JSON only:
 {
   "name": "<location name>",
   "description": "<2-4 sentence atmospheric description>",
+  "arrival_hook": "<1-2 sentences in second-person plural ('vous') describing how the group has just arrived here at this moment — the bridge between the macro call-to-action and the concrete scene. Empty string when not a starting area.>",
   "connections": ["<connected location 1>", "<connected location 2>"],
   "exit_aliases": {
     "<exact connection name from connections>": ["<short alias 1>", "<short alias 2>", "..."]
@@ -59,6 +60,12 @@ Rules:
   (they represent back-links to already-known locations). You may add other
   connections alongside them, but the required ones are non-negotiable.
 - name should be specific and evocative (e.g. "The Broken Crown Tavern" not "A tavern")
+- arrival_hook: fill it ONLY when the location is a `starting_area` (check the
+  user message). Write 1-2 sentences in SECOND-PERSON PLURAL ("vous") placing
+  the group in this exact spot at this exact moment, consistent with the
+  campaign's call_to_action. No villain spoilers, no twist hints, no
+  individual character names. For non-starting locations, return an empty
+  string.
 - connections is a list of location names (0-4 entries)
 - For EVERY entry in connections, add an entry in exit_aliases with the same
   exact name as key. The value is a list of 2-5 SHORT aliases that a player
@@ -103,7 +110,11 @@ Règles :
 - Les zones sont nommées en français (ex : "Autel central", "Promontoire rocheux",
   "Alcôve sud") — pas de coordonnées, pas de numérotation.
 - L'adjacence est SYMÉTRIQUE : si A liste B dans `adjacent_zone_names`, alors B
-  DOIT lister A. Toute violation fait rejeter silencieusement les zones côté parseur.
+  DOIT lister A. Toute violation déclenche une réparation automatique côté parseur
+  (ajout du reverse edge manquant, pruning des références inconnues) ; à toi de
+  livrer un graphe propre dès le premier essai.
+  * BAD:  [{"name":"A","adjacent_zone_names":["B"]}, {"name":"B","adjacent_zone_names":[]}]
+  * GOOD: [{"name":"A","adjacent_zone_names":["B"]}, {"name":"B","adjacent_zone_names":["A"]}]
 - Les tags influencent les rolls : `cover` = +2 AC ranged, `difficult_terrain` =
   mouvement doublé, `elevated` = advantage ranged, `hazard` = dégâts à l'entrée,
   `obscured` = disadvantage on attacks.

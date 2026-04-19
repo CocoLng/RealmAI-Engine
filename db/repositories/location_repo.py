@@ -47,6 +47,7 @@ class LocationRepository:
             msg = f"Location '{location.name}' not found in campaign '{campaign_id}'"
             raise ValueError(msg)
         row.description = location.description
+        row.arrival_hook = location.arrival_hook
         row.connections = location.connections  # type: ignore[assignment]
         row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
         row.npcs_present = location.npcs_present  # type: ignore[assignment]
@@ -75,6 +76,7 @@ class LocationRepository:
             return
         # Row exists — update fields in place.
         row.description = location.description
+        row.arrival_hook = location.arrival_hook
         row.connections = location.connections  # type: ignore[assignment]
         row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
         row.npcs_present = location.npcs_present  # type: ignore[assignment]

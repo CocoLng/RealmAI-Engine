@@ -406,6 +406,79 @@ class TestAdvanceTurnPhase2:
         advance_turn(state)
         assert not is_surprised(goblin.conditions)
 
+    def test_turn_rotation_follows_initiative_order_over_two_rounds(
+        self,
+        fighter: Combatant,
+        fighter2: Combatant,
+        goblin: Combatant,
+        orc: Combatant,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """4 combatants: the advance_turn cycle visits them in initiative order
+        for 2 full rounds. The order seen by the UI (state.combatants) matches
+        the sequence get_current_combatant returns."""
+        # Force distinct rolls so the ORDER is unambiguous:
+        # Arden=20, Bren=10, Goblin=18, Orc=5  →  [Arden, Goblin, Bren, Orc]
+        rolls = iter([20, 10, 18, 5])
+        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(next(rolls)))
+        state = start_combat([fighter, fighter2, goblin, orc])
+
+        expected_order = [c.name for c in state.combatants]
+        assert expected_order[0] == "Arden"
+
+        visited: list[str] = [state.combatants[state.current_turn_index].name]
+        for _ in range(len(state.combatants) * 2 - 1):
+            advance_turn(state)
+            visited.append(state.combatants[state.current_turn_index].name)
+
+        # Two full rounds of the same order, back-to-back.
+        assert visited == expected_order + expected_order
+        assert state.round_number == 2
+
+    def test_ordered_list_matches_descending_initiative(
+        self,
+        fighter: Combatant,
+        fighter2: Combatant,
+        goblin: Combatant,
+        orc: Combatant,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """state.combatants is strictly sorted by initiative desc (no surprise)."""
+        rolls = iter([20, 10, 18, 5])
+        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(next(rolls)))
+        state = start_combat([fighter, fighter2, goblin, orc])
+
+        initiatives = [c.initiative for c in state.combatants]
+        assert initiatives == sorted(initiatives, reverse=True)
+
+    def test_surprise_order_persists_into_round_two(
+        self,
+        fighter: Combatant,
+        fighter2: Combatant,
+        goblin: Combatant,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Under PLAYERS surprise the aggressor keeps slot 0 through round 2."""
+        monkeypatch.setattr("engine.combat.roll", lambda _expr: _make_roll(10))
+        trigger = CombatTrigger(
+            kind=CombatTriggerKind.PLAYER_ATTACK,
+            aggressor_name="Arden",
+            enemy_names=["Goblin"],
+            surprise_side=InitiativeSide.PLAYERS,
+        )
+        state = start_combat([fighter, fighter2, goblin], trigger)
+        order_round1 = [c.name for c in state.combatants]
+        assert order_round1[0] == "Arden"  # aggressor
+
+        # Full rotation through round 1 -> lands back at Arden for round 2.
+        for _ in range(len(state.combatants)):
+            advance_turn(state)
+        assert state.round_number == 2
+        assert state.current_turn_index == 0
+        assert state.combatants[state.current_turn_index].name == "Arden"
+        # The list itself wasn't shuffled between rounds.
+        assert [c.name for c in state.combatants] == order_round1
+
     def test_sets_victory_when_all_enemies_dead(
         self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
     ) -> None:

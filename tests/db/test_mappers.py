@@ -223,6 +223,25 @@ class TestLocationMapper:
         assert restored.npcs_present == []
         assert restored.items_available == []
 
+    def test_arrival_hook_roundtrip(self) -> None:
+        """arrival_hook survives to_db → from_db."""
+        loc = Location(
+            name="Place des Néons",
+            arrival_hook="Vous venez de sortir du monorail, trempés et hagards.",
+        )
+        row = location_to_db(loc, "c")
+        restored = location_from_db(row)
+        assert restored.arrival_hook == loc.arrival_hook
+
+    def test_arrival_hook_defaults_empty(self) -> None:
+        """Legacy rows with NULL arrival_hook restore as empty string."""
+        loc = Location(name="Ancien Lieu")
+        row = location_to_db(loc, "c")
+        # Simulate a legacy row where the column was NULL.
+        row.arrival_hook = None  # type: ignore[assignment]
+        restored = location_from_db(row)
+        assert restored.arrival_hook == ""
+
 
 class TestQuestMapper:
     """Quest mapper round-trip tests."""

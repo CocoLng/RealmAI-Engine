@@ -64,6 +64,7 @@ class LocationRow(Base):
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(String, default="")
+    arrival_hook: Mapped[str] = mapped_column(String, default="")
     connections: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
     exit_aliases: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
     npcs_present: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]

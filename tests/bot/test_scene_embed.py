@@ -110,3 +110,45 @@ def test_emoji_heuristic_matches_forest() -> None:
     embed = build_scene_embed(_make_location(name="Forêt Sombre"))
     assert embed.title is not None
     assert embed.title.startswith("🌲")
+
+
+def test_arrival_hook_renders_when_provided() -> None:
+    hook = (
+        "Vous venez de franchir le pont. La pluie perle sur vos épaules "
+        "et la ville gronde autour de vous."
+    )
+    embed = build_scene_embed(_make_location(), arrival_hook=hook)
+    field = _field_by_name(embed, "Votre arrivée")
+    assert field is not None
+    assert "Vous venez de franchir le pont" in field.value
+
+
+def test_arrival_hook_absent_when_not_provided() -> None:
+    embed = build_scene_embed(_make_location())
+    assert _field_by_name(embed, "Votre arrivée") is None
+
+
+def test_arrival_hook_absent_when_empty_string() -> None:
+    embed = build_scene_embed(_make_location(), arrival_hook="   ")
+    assert _field_by_name(embed, "Votre arrivée") is None
+
+
+def test_arrival_hook_en_label() -> None:
+    embed = build_scene_embed(
+        _make_location(),
+        language="en",
+        arrival_hook="You step off the monorail into the rain.",
+    )
+    assert _field_by_name(embed, "Your arrival") is not None
+
+
+def test_arrival_hook_positioned_before_npcs() -> None:
+    embed = build_scene_embed(
+        _make_location(),
+        arrival_hook="Vous débouchez sur la place.",
+    )
+    # First field should be the arrival hook, then NPCs.
+    assert embed.fields[0].name is not None
+    assert "Votre arrivée" in embed.fields[0].name
+    assert embed.fields[1].name is not None
+    assert "Personnages" in embed.fields[1].name

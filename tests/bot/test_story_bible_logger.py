@@ -138,6 +138,46 @@ class TestWriteHeader:
         assert "stale content" not in content
         assert "# Campagne :" in content
 
+    def test_header_renders_party_composition_and_premise(
+        self, tmp_path: Path,
+    ) -> None:
+        """When kits + motivations + party_premise are provided, the header
+        surfaces them as a frozen fact trail for audits."""
+        logger = StoryBibleLogger("camp-3", log_dir=tmp_path)
+        arc = _make_arc()
+        arc = arc.model_copy(update={
+            "party_premise": "Une lame de l'ombre payée pour fouiller un temple.",
+        })
+        logger.write_header(
+            campaign=_make_campaign(),
+            story_arc=arc,
+            location=_make_location(),
+            characters=_make_characters(),  # type: ignore[arg-type]
+            character_kits={100: "Shadow Blade"},
+            character_motivations={100: "Contract"},
+        )
+        content = logger.path.read_text(encoding="utf-8")
+        assert "## Composition du groupe" in content
+        assert "Kit: Shadow Blade" in content
+        assert "Motivation: Contract" in content
+        assert "Party premise (fait figé):" in content
+        assert "lame de l'ombre" in content
+
+    def test_header_skips_party_section_when_kits_absent(
+        self, tmp_path: Path,
+    ) -> None:
+        """Legacy callers that don't pass kits/motivations must not see an
+        empty 'Composition du groupe' section leaking into the output."""
+        logger = StoryBibleLogger("camp-4", log_dir=tmp_path)
+        logger.write_header(
+            campaign=_make_campaign(),
+            story_arc=_make_arc(),
+            location=_make_location(),
+            characters=_make_characters(),  # type: ignore[arg-type]
+        )
+        content = logger.path.read_text(encoding="utf-8")
+        assert "## Composition du groupe" not in content
+
 
 # ---------------------------------------------------------------------------
 # log_turn

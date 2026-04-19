@@ -31,6 +31,8 @@ def _make_arc_data(beat_count: int = 10) -> dict:
         "campaign_id": "",
         "theme": "dark fantasy",
         "premise": "Un ancien mal se reveille dans les profondeurs de la terre, menacant le royaume.",
+        "situation": "Les villages frontaliers se vident la nuit, des murmures montent des failles.",
+        "call_to_action": "Le Conseil vous paie pour trouver la source des disparitions et rapporter des preuves.",
         "beats": beats,
         "villain_name": "Seigneur Malachar",
         "villain_motivation": "Dominer le monde en liberant une armee de morts-vivants.",
@@ -156,6 +158,34 @@ def test_generate_current_beat_index_starts_at_zero(
     result = generator.generate(theme="mystery", player_count=2)
 
     assert result.current_beat_index == 0
+
+
+def test_generate_parses_situation_and_call_to_action(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """New opening-chain fields are parsed from the LLM output."""
+    arc_data = _make_arc_data(10)
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    result = generator.generate(theme="dark fantasy", player_count=4)
+
+    assert "frontaliers se vident" in result.situation
+    assert "Le Conseil vous paie" in result.call_to_action
+
+
+def test_generate_legacy_arc_without_opening_fields(
+    httpx_mock: HTTPXMock, generator: ArcGenerator
+) -> None:
+    """LLM output missing situation/call_to_action yields empty-string defaults."""
+    arc_data = _make_arc_data(10)
+    arc_data.pop("situation", None)
+    arc_data.pop("call_to_action", None)
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+    result = generator.generate(theme="dark fantasy", player_count=2)
+
+    assert result.situation == ""
+    assert result.call_to_action == ""
 
 
 def test_build_user_message_with_recipe_contains_recipe_fields(
@@ -604,3 +634,92 @@ class TestSanitizeArcData:
         """Absent villain_stat_block doesn't crash the sanitizer."""
         data: dict = {"beats": [], "villain_stat_block": None}
         ArcGenerator._sanitize_arc_data(data)  # must not raise
+
+    def test_null_string_damage_type_on_effect_coerced_to_none(self) -> None:
+        """LLM emits 'null' (string) for optional damage_type → coerce to None."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [
+                    {"effects": [{"damage_type": "null", "kind": "condition"}]}
+                ],
+                "legendary_actions": [],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effect = data["villain_stat_block"]["signature_abilities"][0]["effects"][0]
+        assert effect["damage_type"] is None
+
+    def test_null_string_save_ability_on_effect_coerced_to_none(self) -> None:
+        """LLM emits 'null' (string) for optional save_ability → coerce to None."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [],
+                "legendary_actions": [
+                    {"effects": [{"save_ability": "null", "kind": "damage"}]}
+                ],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effect = data["villain_stat_block"]["legendary_actions"][0]["effects"][0]
+        assert effect["save_ability"] is None
+
+    def test_null_string_variants_all_coerced(self) -> None:
+        """Variants 'None', 'NULL', empty string all coerce to None."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [
+                    {"effects": [
+                        {"damage_type": "None", "save_ability": "NULL",
+                         "save_dc": "", "kind": "damage"},
+                    ]},
+                ],
+                "legendary_actions": [],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effect = data["villain_stat_block"]["signature_abilities"][0]["effects"][0]
+        assert effect["damage_type"] is None
+        assert effect["save_ability"] is None
+        assert effect["save_dc"] is None
+
+    def test_valid_damage_type_preserved_when_mixed_with_null(self) -> None:
+        """A valid damage_type in one effect is not clobbered when another has 'null'."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [],
+                "signature_abilities": [
+                    {"effects": [
+                        {"damage_type": "Fire", "kind": "damage"},
+                        {"damage_type": "null", "kind": "condition"},
+                    ]},
+                ],
+                "legendary_actions": [],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        effects = data["villain_stat_block"]["signature_abilities"][0]["effects"]
+        assert effects[0]["damage_type"] == "Fire"
+        assert effects[1]["damage_type"] is None
+
+    def test_null_string_range_value_on_attack_coerced(self) -> None:
+        """Attack-level 'null' range_value coerced to None (field is optional)."""
+        data: dict = {
+            "beats": [],
+            "villain_stat_block": {
+                "attacks": [{"name": "Slash", "damage_dice": "1d8",
+                             "damage_type": "Slashing", "range_value": "null"}],
+                "signature_abilities": [],
+                "legendary_actions": [],
+            },
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        assert data["villain_stat_block"]["attacks"][0]["range_value"] is None
+        # damage_type is REQUIRED on NPCAttack — must NOT be touched
+        assert data["villain_stat_block"]["attacks"][0]["damage_type"] == "Slashing"

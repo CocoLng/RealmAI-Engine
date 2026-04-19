@@ -140,6 +140,7 @@ def location_to_db(location: Location, campaign_id: str) -> LocationRow:
         campaign_id=campaign_id,
         name=location.name,
         description=location.description,
+        arrival_hook=location.arrival_hook,
         connections=location.connections,
         exit_aliases=location.exit_aliases,
         npcs_present=location.npcs_present,
@@ -162,6 +163,7 @@ def location_from_db(row: LocationRow) -> Location:
     return Location(
         name=row.name,
         description=row.description,
+        arrival_hook=row.arrival_hook or "",
         connections=list(row.connections) if row.connections else [],
         exit_aliases={
             str(k): [str(a) for a in v]

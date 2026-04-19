@@ -744,3 +744,60 @@ class TestUpsertHub:
         old_message.delete.assert_awaited_once()
         # A new hub was still sent
         assert channel.send.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Surprise skip (fix 3b)
+# ---------------------------------------------------------------------------
+
+
+class TestSurpriseSkip:
+    """A surprised NPC's turn must be skipped without dispatching the brain."""
+
+    def _apply_surprise(self, combatant: Combatant) -> None:
+        from engine.conditions import ActiveCondition, ConditionType, apply_condition
+
+        apply_condition(
+            combatant.conditions,
+            ActiveCondition(condition_type=ConditionType.SURPRISED),
+        )
+
+    @pytest.mark.asyncio
+    async def test_surprised_npc_turn_skipped_cleanly(self) -> None:
+        """NPC brain is not called; a 'surpris' message is posted; turn advances."""
+        pc = _pc()
+        goblin = _enemy(tier=NPCTier.MINION)
+        self._apply_surprise(goblin)
+
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+
+        tm._dispatch_npc_brain = MagicMock()  # type: ignore[method-assign]
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+
+        await tm._resolve_npc_turn(goblin)
+
+        tm._dispatch_npc_brain.assert_not_called()
+        tm.on_action_resolved.assert_awaited_once()
+
+        posted = [call.kwargs.get("content", "") for call in channel.send.await_args_list]
+        assert any("surpris" in (c or "").lower() for c in posted)
+
+    @pytest.mark.asyncio
+    async def test_surprised_npc_records_combat_event(self) -> None:
+        """The surprise skip is exposed to the narrator via recent_events."""
+        pc = _pc()
+        goblin = _enemy(tier=NPCTier.MINION)
+        self._apply_surprise(goblin)
+
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+
+        await tm._resolve_npc_turn(goblin)
+
+        state = session.combat_state
+        assert state is not None
+        assert any("surpris" in ev.lower() for ev in state.recent_events)

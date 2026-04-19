@@ -24,6 +24,8 @@ Each beat's encounter_type and encounter_subtype must match what the recipe spec
 - Le prêtre vertueux sans faille
 - La prophétie de l'élu
 - Le dragon qui garde un trésor dans une grotte
+- Le groupe présenté comme "les derniers gardiens", "les élus", "les héritiers de…", "choisis par la prophétie"
+- Les PJ vivant dans le monde-source de l'aventure (ex : temple en ruine → ne jamais présenter les PJ comme les derniers moines/gardiens/prêtres/fidèles restants). Les PJ sont TOUJOURS des outsiders : visiteurs, mercenaires, pèlerins, enquêteurs — jamais la population locale déchue
 
 ## Requirements
 - Each beat: beat_number, title, description (2-3 sentences), location_hint, npc_names (list), encounter_type, encounter_subtype, is_twist (boolean)
@@ -43,12 +45,54 @@ Each beat's encounter_type and encounter_subtype must match what the recipe spec
   * BAD:  "state_flags": {"location_explored": "place_centrale", "door_open": "yes"}
   * GOOD: "state_flags": {"location_explored": true, "door_open": true}
   The flag NAME carries the meaning; the value is always true (flag is set) or false (flag is cleared).
+- Optional enum fields on villain_stat_block effects (damage_type, save_ability, save_dc,
+  condition_name, condition_duration_rounds, range_value, dice): if the field is not
+  applicable for this effect, OMIT it entirely from the JSON. NEVER emit the string
+  "null" — the engine only accepts proper JSON null or a missing field.
+  * BAD:  {"kind": "condition", "damage_type": "null", "save_ability": "null"}
+  * GOOD: {"kind": "condition", "condition_name": "stunned"}
+
+## Opening narrative — three-field chain (`premise`, `situation`, `call_to_action`)
+
+These three short texts are shown to players at launch and must read as a single
+narrative chain. The reader should grasp, in order: WHAT WORLD is this, WHAT'S
+HAPPENING right now, and WHY IS MY GROUP INVOLVED.
+
+- `premise` — 2-3 sentences of world/mood ONLY (tone, era, sensory signature).
+  Third person, literary voice. NO mention of an objective, NO "you/vous",
+  NO call to adventure. Just the setting.
+- `situation` — 2-3 sentences describing a concrete event or tension unfolding
+  in this world right now (rumor, disaster, disappearance, deadline, civic
+  crisis). Third person. MUST NOT name the `villain_name`, MUST NOT reveal
+  the twist, MUST NOT hint that the beat-1 giver is secretly the villain.
+  If the twist is "the patron betrays you", the situation presents them as
+  trustworthy — give the reader no way to guess.
+- `call_to_action` — 2-3 sentences in SECOND-PERSON PLURAL ("vous") linking
+  the party to the situation: who called them, what contract/promise/urgency
+  pulled them in, what they believe they need to do. This is the APPARENT
+  objective — it may be vague, partial, or a red herring, but it must give
+  the party a clear first move. NEVER mention the villain by name. NEVER
+  reveal the twist. If a beat has `is_twist=true` and names an NPC who
+  appears in `call_to_action`, that NPC is presented under their social
+  mask only (ally, employer, informant) — never hint at their real role.
+  The hook MUST be a PRAGMATIC trigger: a paid contract, a rumor leading
+  to profit, a personal debt, a chance encounter, a specific summons from
+  an external party. NEVER frame the group as predestined, unique, or the
+  world's last hope. If the theme suggests a sacred/mystical setting
+  (temple, cathedral, relic), the party are OUTSIDERS to it (mercenaries,
+  investigators, scholars, pilgrims), NOT its guardians or heirs.
+
+Write these three fields AFTER you have decided on beats and villain, so the
+chain stays coherent with the campaign you built. All three in the arc's
+language.
 
 Return JSON only with this exact schema:
 {
   "campaign_id": "",
   "theme": "<the campaign theme>",
-  "premise": "<2-3 sentence campaign premise>",
+  "premise": "<2-3 sentence world/mood — no objective, no 'you'>",
+  "situation": "<2-3 sentences of current tension/event — no villain name, no twist>",
+  "call_to_action": "<2-3 sentences to the group in 'vous' — apparent objective, no spoilers>",
   "beats": [
     {
       "beat_number": 1,

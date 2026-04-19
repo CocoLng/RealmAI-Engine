@@ -21,6 +21,7 @@ _SCENE_COLOR = 0xDAA520  # dramatic gold — same family as narrative_embed
 
 _LABELS: dict[str, dict[str, str]] = {
     "fr": {
+        "arrival": "🕯️ Votre arrivée",
         "npcs": "👥 Personnages présents",
         "no_npcs": "Aucun",
         "exits": "🚪 Sorties",
@@ -31,6 +32,7 @@ _LABELS: dict[str, dict[str, str]] = {
         "no_description": "Lieu sans description.",
     },
     "en": {
+        "arrival": "🕯️ Your arrival",
         "npcs": "👥 Characters present",
         "no_npcs": "None",
         "exits": "🚪 Exits",
@@ -58,6 +60,7 @@ _DEFAULT_EMOJI = "📍"
 
 _MAX_NPCS_DISPLAYED = 5
 _MAX_DESCRIPTION_CHARS = 1000
+_MAX_FIELD_CHARS = 1024  # Discord hard limit for field values
 
 
 def _normalize(text: str) -> str:
@@ -78,6 +81,7 @@ def build_scene_embed(
     location: Location,
     npcs_present: list[str] | None = None,
     language: str = "fr",
+    arrival_hook: str | None = None,
 ) -> discord.Embed:
     """Build a Discord embed describing the current scene.
 
@@ -90,6 +94,11 @@ def build_scene_embed(
             location.
         language: Label language — currently ``"fr"`` (default) or ``"en"``.
             Falls back to ``"fr"`` for unknown values.
+        arrival_hook: Optional 1-2 sentence bridge placing the party in this
+            scene at this moment. Rendered as a dedicated field between the
+            description and the NPC list. Only passed at campaign launch;
+            post-MOVE callers omit it so the field does not clutter
+            subsequent scenes.
 
     Returns:
         A ``discord.Embed`` with title, description, and fields for NPCs,
@@ -107,6 +116,12 @@ def build_scene_embed(
         description=description,
         color=_SCENE_COLOR,
     )
+
+    if arrival_hook and arrival_hook.strip():
+        hook_text = arrival_hook.strip()
+        if len(hook_text) > _MAX_FIELD_CHARS:
+            hook_text = hook_text[: _MAX_FIELD_CHARS - 1] + "…"
+        embed.add_field(name=labels["arrival"], value=hook_text, inline=False)
 
     npcs = npcs_present if npcs_present is not None else list(location.npcs_present)
     if npcs:

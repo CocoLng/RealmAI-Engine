@@ -434,10 +434,10 @@ def test_parses_combat_zones_from_json(
     assert result.are_adjacent("Autel central", "Alcôve sud")
 
 
-def test_drops_invalid_zones_with_asymmetric_adjacency(
+def test_symmetrizes_asymmetric_zone_graph(
     httpx_mock: HTTPXMock, generator: WorldGenerator
 ) -> None:
-    """Asymmetric zone graphs trigger a fallback to empty combat_zones."""
+    """Asymmetric zone graph is REPAIRED (reverse edge added), not dropped."""
     response_data = {
         "name": "Grotte brisée",
         "description": "Une grotte humide.",
@@ -451,7 +451,8 @@ def test_drops_invalid_zones_with_asymmetric_adjacency(
                 "tags": [],
             },
             {
-                # Asymmetric: does NOT list "Entrée" back
+                # Asymmetric input: does NOT list "Entrée" back; symmetrizer
+                # must add the reverse edge so the Location validator accepts it.
                 "name": "Fond",
                 "adjacent_zone_names": [],
                 "tags": [],
@@ -465,9 +466,11 @@ def test_drops_invalid_zones_with_asymmetric_adjacency(
         location_type="cave",
     )
 
-    # Parser catches the Location ValidationError and drops combat_zones.
-    assert result.combat_zones == []
-    assert not result.has_combat_zones()
+    # The symmetrizer adds the missing reverse edge so zones survive validation.
+    assert len(result.combat_zones) == 2
+    assert result.has_combat_zones()
+    assert result.are_adjacent("Entrée", "Fond")
+    assert result.are_adjacent("Fond", "Entrée")
 
 
 def test_parses_combat_triggers_from_json(
@@ -527,10 +530,10 @@ def test_empty_zones_and_triggers_accepted(
     assert not result.has_combat_zones()
 
 
-def test_zone_validation_error_does_not_crash_generation(
+def test_prunes_dangling_adjacency_reference(
     httpx_mock: HTTPXMock, generator: WorldGenerator
 ) -> None:
-    """A zone with an unknown adjacent neighbor is dropped silently."""
+    """Dangling adjacency (unknown neighbor) is pruned — remaining zones survive."""
     response_data = {
         "name": "Chambre",
         "description": "Une chambre.",
@@ -540,8 +543,8 @@ def test_zone_validation_error_does_not_crash_generation(
         "combat_zones": [
             {
                 "name": "Centre",
-                # References a zone that does not exist → Location validator
-                # will reject the whole graph; parser falls back to empty.
+                # "Inexistante" does not exist as a zone → must be pruned,
+                # keeping "Centre" in the graph with no neighbors.
                 "adjacent_zone_names": ["Inexistante"],
                 "tags": [],
             },
@@ -549,8 +552,6 @@ def test_zone_validation_error_does_not_crash_generation(
     }
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
 
-    # Should not raise; instead drops combat_zones and returns a usable
-    # Location with the rest of the fields.
     result = generator.generate(
         campaign_context="Manoir.",
         location_type="room",
@@ -558,7 +559,58 @@ def test_zone_validation_error_does_not_crash_generation(
 
     assert isinstance(result, Location)
     assert result.name == "Chambre"
-    assert result.combat_zones == []
+    assert len(result.combat_zones) == 1
+    assert result.combat_zones[0].name == "Centre"
+    assert result.combat_zones[0].adjacent_zone_names == []
+
+
+def test_symmetrize_idempotent_on_clean_graph(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """An already-symmetric graph is not modified by the symmetrizer."""
+    response_data = {
+        "name": "Salle ronde",
+        "description": "Une salle circulaire.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+        "combat_zones": [
+            {"name": "A", "adjacent_zone_names": ["B"], "tags": []},
+            {"name": "B", "adjacent_zone_names": ["A", "C"], "tags": []},
+            {"name": "C", "adjacent_zone_names": ["B"], "tags": []},
+        ],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(campaign_context="Donjon.", location_type="hall")
+
+    assert len(result.combat_zones) == 3
+    zones_by_name = {z.name: z for z in result.combat_zones}
+    assert zones_by_name["A"].adjacent_zone_names == ["B"]
+    assert zones_by_name["B"].adjacent_zone_names == ["A", "C"]
+    assert zones_by_name["C"].adjacent_zone_names == ["B"]
+
+
+def test_prunes_self_loop_adjacency(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """A zone listing itself as adjacent has the self-reference pruned."""
+    response_data = {
+        "name": "Puits",
+        "description": "Un puits profond.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+        "combat_zones": [
+            {"name": "Fond", "adjacent_zone_names": ["Fond"], "tags": []},
+        ],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(campaign_context="Puits.", location_type="well")
+
+    assert len(result.combat_zones) == 1
+    assert result.combat_zones[0].adjacent_zone_names == []
 
 
 def test_invalid_trigger_entry_dropped_silently(
@@ -588,3 +640,49 @@ def test_invalid_trigger_entry_dropped_silently(
 
     assert "Urne" not in result.combat_triggers
     assert "Sceau" in result.combat_triggers
+
+
+def test_generate_extracts_arrival_hook(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """arrival_hook from LLM output is passed through to the Location."""
+    response_data = {
+        "name": "La Place des Lanternes",
+        "description": "Une place pavée baignée dans la lumière orangée.",
+        "arrival_hook": (
+            "Vous venez de descendre de la carriole. L'air sent la cire brûlée "
+            "et les habitants vous dévisagent."
+        ),
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Village côtier.",
+        location_type="starting_area",
+    )
+
+    assert "Vous venez de descendre" in result.arrival_hook
+
+
+def test_generate_arrival_hook_defaults_to_empty(
+    httpx_mock: HTTPXMock, generator: WorldGenerator
+) -> None:
+    """When LLM omits arrival_hook, Location.arrival_hook stays empty string."""
+    response_data = {
+        "name": "Un Lieu Banal",
+        "description": "Description minimale.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = generator.generate(
+        campaign_context="Test.",
+        location_type="dungeon",
+    )
+
+    assert result.arrival_hook == ""

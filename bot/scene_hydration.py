@@ -407,6 +407,8 @@ def describe_scene_for_narrator(
     session: "GameSession",
     *,
     actor_name: str,
+    current_outcome_summary: str | None = None,
+    ongoing_dialogue_with: str | None = None,
 ) -> str:
     """Build a rich, narrator-facing description of the current scene.
 
@@ -414,9 +416,37 @@ def describe_scene_for_narrator(
     descriptions when available), and present NPCs (with disposition,
     description, and personality). Falls back gracefully when fields are
     empty so it works on freshly hydrated commoner NPCs.
+
+    Args:
+        session: The live game session.
+        actor_name: Name of the combatant acting this turn (for the Acting
+            character section).
+        current_outcome_summary: If set, an event whose text matches this
+            summary is excluded from the "Derniers événements mécaniques"
+            block. Prevents the narrator from seeing the current turn's
+            outcome twice (once as the action to narrate, once as past
+            history) and hallucinating a doubled narration.
+        ongoing_dialogue_with: NPC name when narrating a Talk action that
+            is a continuation of an existing dialogue. When the NPC has
+            at least one exchange prior to the current turn, this triggers
+            two behaviors: (1) suppress the verbose ``## NPCs present``
+            block so the narrator stops re-describing the NPC's appearance
+            every turn; (2) emit a compact ``## Dialogue in progress`` block
+            with up to 2 prior exchanges so the narrator can anchor on
+            continuity rather than scenery.
     """
     lines: list[str] = []
     location = session.current_location
+
+    # Determine if this call is a continuation of a multi-turn dialogue.
+    # A talk action is "ongoing" once there are at least 2 entries in the
+    # NPC's ``dialogue_history`` (one already past + the one just appended
+    # for the current turn).
+    ongoing_npc = None
+    if ongoing_dialogue_with and session.npcs:
+        candidate = session.npcs.get(ongoing_dialogue_with)
+        if candidate is not None and len(candidate.dialogue_history) >= 2:
+            ongoing_npc = candidate
 
     if location is not None:
         lines.append(f"## Location\n{location.name}\n{location.description}")
@@ -436,23 +466,28 @@ def describe_scene_for_narrator(
                     item_lines.append(f"- {name}")
             lines.append("## Visible items\n" + "\n".join(item_lines))
 
-        present = [
-            npc for npc in (session.npcs or {}).values()
-            if npc.location_name == location.name
-        ]
-        if present:
-            npc_lines = []
-            for npc in present:
-                bits = [npc.name]
-                if npc.race is not None:
-                    bits.append(f"({npc.race.value})")
-                bits.append(f"— disposition: {npc.disposition.value}")
-                if npc.description:
-                    bits.append(f"— {npc.description}")
-                if npc.personality:
-                    bits.append(f"— personality: {npc.personality}")
-                npc_lines.append(" ".join(bits))
-            lines.append("## NPCs present\n" + "\n".join(npc_lines))
+        # Skip the ## NPCs present block when narrating an ongoing dialogue:
+        # keeping it causes the narrator to re-describe the NPC's appearance
+        # at every exchange. The dialogue-in-progress block (below) provides
+        # sufficient continuity context.
+        if ongoing_npc is None:
+            present = [
+                npc for npc in (session.npcs or {}).values()
+                if npc.location_name == location.name
+            ]
+            if present:
+                npc_lines = []
+                for npc in present:
+                    bits = [npc.name]
+                    if npc.race is not None:
+                        bits.append(f"({npc.race.value})")
+                    bits.append(f"— disposition: {npc.disposition.value}")
+                    if npc.description:
+                        bits.append(f"— {npc.description}")
+                    if npc.personality:
+                        bits.append(f"— personality: {npc.personality}")
+                    npc_lines.append(" ".join(bits))
+                lines.append("## NPCs present\n" + "\n".join(npc_lines))
 
         if location.state_flags:
             active = [k.replace("_", " ") for k, v in location.state_flags.items() if v]
@@ -473,7 +508,22 @@ def describe_scene_for_narrator(
 
     combat_state = getattr(session, "combat_state", None)
     if isinstance(combat_state, CombatState) and combat_state.is_active:
-        lines.append(_describe_combat_for_narrator(combat_state))
+        lines.append(
+            _describe_combat_for_narrator(
+                combat_state,
+                current_outcome_summary=current_outcome_summary,
+            )
+        )
+
+    if ongoing_npc is not None:
+        # Skip the current turn's just-appended exchange; show the last 2
+        # prior exchanges so the narrator anchors on continuity.
+        prior = ongoing_npc.dialogue_history[:-1][-2:]
+        exchange_lines = [f"## Dialogue in progress with {ongoing_npc.name}"]
+        for ex in prior:
+            exchange_lines.append(f"Player: {ex.player_said}")
+            exchange_lines.append(f"{ongoing_npc.name}: {ex.npc_said}")
+        lines.append("\n".join(exchange_lines))
 
     lines.append(_describe_actor(session, actor_name))
     return "\n\n".join(lines)
@@ -487,9 +537,15 @@ def _describe_actor(session: "GameSession", actor_name: str) -> str:
     against ``session.characters`` as a fallback for out-of-combat PC
     actions. If nothing matches, falls back to just the name — the
     narrator still works, it just gets less texture.
+
+    Also surfaces the player's ``kit`` and ``motivation`` (captured at
+    onboarding) when the actor maps to a PC — these anchor the narrator's
+    framing turn after turn and keep a Shadow Blade mercenary reading as
+    a sellsword, not a destined hero.
     """
     character: Character | None = None
     inventory: Inventory | None = None
+    pc_user_id: int | None = None
 
     combat_state = getattr(session, "combat_state", None)
     if isinstance(combat_state, CombatState):
@@ -499,16 +555,17 @@ def _describe_actor(session: "GameSession", actor_name: str) -> str:
                 inventory = combatant.inventory
                 break
 
-    if character is None:
-        characters = getattr(session, "characters", None)
-        if isinstance(characters, dict):
-            inventories = getattr(session, "inventories", None)
-            for uid, pc in characters.items():
-                if isinstance(pc, Character) and pc.name == actor_name:
+    characters = getattr(session, "characters", None)
+    if isinstance(characters, dict):
+        inventories = getattr(session, "inventories", None)
+        for uid, pc in characters.items():
+            if isinstance(pc, Character) and pc.name == actor_name:
+                pc_user_id = uid
+                if character is None:
                     character = pc
                     if isinstance(inventories, dict):
                         inventory = inventories.get(uid)
-                    break
+                break
 
     if character is None:
         return f"## Acting character\n{actor_name}"
@@ -521,6 +578,19 @@ def _describe_actor(session: "GameSession", actor_name: str) -> str:
             f"niveau {character.level}."
         ),
     ]
+
+    if pc_user_id is not None:
+        kits = getattr(session, "character_kits", None)
+        if isinstance(kits, dict):
+            kit = kits.get(pc_user_id)
+            if kit:
+                lines.append(f"Kit : {kit}.")
+        motivations = getattr(session, "character_motivations", None)
+        if isinstance(motivations, dict):
+            motivation = motivations.get(pc_user_id)
+            if motivation:
+                lines.append(f"Motivation : {motivation}.")
+
     weapon_name = _main_weapon_name(inventory)
     if weapon_name:
         lines.append(f"Arme équipée : {weapon_name}.")
@@ -537,7 +607,11 @@ def _main_weapon_name(inventory: Inventory | None) -> str | None:
     return item.name
 
 
-def _describe_combat_for_narrator(state: CombatState) -> str:
+def _describe_combat_for_narrator(
+    state: CombatState,
+    *,
+    current_outcome_summary: str | None = None,
+) -> str:
     """Build the ``## COMBAT ACTIVE`` section for an active combat.
 
     Lists round number, active combatant, each participant with
@@ -545,6 +619,10 @@ def _describe_combat_for_narrator(state: CombatState) -> str:
     and a short flavor line from the stat block when present. Appends
     the last three ``state.recent_events`` as mechanical grounding and
     closes on an explicit rule reminder for the narrator.
+
+    ``current_outcome_summary`` is optionally used to dedup: the event
+    matching the current turn's outcome is filtered out of the past-events
+    list so the narrator doesn't see the current action twice.
     """
     lines: list[str] = ["## COMBAT ACTIVE"]
     lines.append(f"Round {state.round_number}")
@@ -558,10 +636,15 @@ def _describe_combat_for_narrator(state: CombatState) -> str:
         lines.append(_format_combatant_line(combatant))
 
     if state.recent_events:
-        lines.append("")
-        lines.append("### Derniers événements mécaniques")
-        for event_text in state.recent_events[-3:]:
-            lines.append(f"- {event_text}")
+        past_events = [
+            ev for ev in state.recent_events[-3:]
+            if current_outcome_summary is None or ev != current_outcome_summary
+        ]
+        if past_events:
+            lines.append("")
+            lines.append("### Derniers événements mécaniques")
+            for event_text in past_events:
+                lines.append(f"- {event_text}")
 
     lines.append("")
     lines.append(

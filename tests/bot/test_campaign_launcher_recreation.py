@@ -190,6 +190,69 @@ async def test_stale_gear_callback_ignored(launcher: CampaignLauncher) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Kit selection hands off to motivation view, not GEAR_DONE directly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gear_selected_stores_kit_and_requests_motivation(
+    launcher: CampaignLauncher,
+) -> None:
+    """After kit selection, progress is KIT_DONE and a MotivationView is shown.
+
+    GEAR_DONE must NOT be reached yet — the launch gate requires motivation too.
+    """
+    from engine.inventory import create_inventory
+    from engine.starter_gear import STARTER_KITS
+    _populate_player(launcher, PLAYER_A, PlayerProgress.CHARACTER_DONE)
+    # Use a real inventory + canonical kit so apply_starter_kit runs cleanly.
+    launcher.inventories[PLAYER_A] = create_inventory()
+    kit = STARTER_KITS[CharacterClass.ROGUE][0]  # Shadow Blade
+    interaction = _make_interaction()
+
+    await launcher._on_gear_selected(interaction, kit)
+
+    assert launcher.character_kits[PLAYER_A] == kit.name
+    assert launcher.player_progress[PLAYER_A] == PlayerProgress.KIT_DONE
+    # The ephemeral message must include a view (the MotivationView).
+    interaction.response.send_message.assert_called_once()
+    kwargs = interaction.response.send_message.call_args.kwargs
+    assert kwargs.get("ephemeral") is True
+    assert kwargs.get("view") is not None
+
+
+@pytest.mark.asyncio
+async def test_motivation_selected_finishes_onboarding(
+    launcher: CampaignLauncher,
+) -> None:
+    """Selecting a motivation stores it and advances to GEAR_DONE."""
+    _populate_player(launcher, PLAYER_A, PlayerProgress.KIT_DONE)
+    launcher.character_kits[PLAYER_A] = "Shadow Blade"
+    interaction = _make_interaction()
+
+    await launcher._on_motivation_selected(interaction, "Contract")
+
+    assert launcher.character_motivations[PLAYER_A] == "Contract"
+    assert launcher.player_progress[PLAYER_A] == PlayerProgress.GEAR_DONE
+    # Public announcement was posted to the channel.
+    assert launcher.channel.send.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_stale_motivation_callback_ignored(
+    launcher: CampaignLauncher,
+) -> None:
+    """_on_motivation_selected is a no-op when not at KIT_DONE."""
+    _populate_player(launcher, PLAYER_A, PlayerProgress.GEAR_DONE)
+    interaction = _make_interaction()
+
+    await launcher._on_motivation_selected(interaction, "Contract")
+
+    # Motivation was NOT stored — stale call was skipped.
+    assert PLAYER_A not in launcher.character_motivations
+
+
+# ---------------------------------------------------------------------------
 # CharacterEditFlow cascade tests
 # ---------------------------------------------------------------------------
 

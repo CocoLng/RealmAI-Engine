@@ -441,6 +441,12 @@ def advance_turn(state: CombatState) -> CombatState:
                 continue
             if boss.side == current.side:
                 continue
+            # A surprised boss cannot take reactions or legendary actions
+            # until its own turn ends (SRD 5e).
+            from engine.conditions import is_surprised
+
+            if is_surprised(boss.conditions):
+                continue
             summary = maybe_spend_legendary_action(state, boss, current)
             if summary is not None:
                 state.pending_legendary_summaries.append(summary)

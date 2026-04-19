@@ -27,6 +27,7 @@ from bot.views.character_create_view import CharacterCreateView
 from bot.views.character_edit_flow import CharacterEditFlow
 from bot.views.character_edit_view import CharacterEditView
 from bot.views.force_launch_view import ForceLaunchView
+from bot.views.motivation_view import MotivationView
 from bot.views.start_onboarding_view import StartOnboardingView
 from bot.views.starter_gear_view import StarterGearView
 from engine.character import (
@@ -63,6 +64,9 @@ class PlayerProgress(StrEnum):
 
     PENDING = "pending"
     CHARACTER_DONE = "character_done"
+    KIT_DONE = "kit_done"
+    """Kit selected, motivation still pending. Intermediate step — the launch
+    gate requires GEAR_DONE (kit AND motivation picked)."""
     GEAR_DONE = "gear_done"
 
 
@@ -96,6 +100,12 @@ class CampaignLauncher:
     inventories: dict[int, Inventory] = field(default_factory=dict)
     spellcasters: dict[int, SpellcasterState | None] = field(default_factory=dict)
     raw_assignments: dict[int, dict[Ability, int]] = field(default_factory=dict)
+    character_kits: dict[int, str] = field(default_factory=dict)
+    """Kit canonical English name (e.g. ``"Shadow Blade"``) per player.
+    Set when the player picks a starter kit, passed to the opening reframer."""
+    character_motivations: dict[int, str] = field(default_factory=dict)
+    """Motivation canonical English key (e.g. ``"Contract"``) per player.
+    Set when the player picks a motivation, passed to the opening reframer."""
     story_arc: StoryArc | None = None
     current_location: Location | None = None
     _generation_task: asyncio.Task[None] | None = field(
@@ -290,7 +300,12 @@ class CampaignLauncher:
         interaction: discord.Interaction,
         kit: StarterKit,
     ) -> None:
-        """Called when a player selects a starter gear kit."""
+        """Called when a player selects a starter gear kit.
+
+        After persisting the kit, prompts the player for a motivation — the
+        pair (kit, motivation) is what the opening reframer consumes to
+        anchor the campaign narrative to the player's intended role.
+        """
         user_id = interaction.user.id
 
         if self.player_progress.get(user_id) == PlayerProgress.PENDING:
@@ -308,7 +323,8 @@ class CampaignLauncher:
 
         inventory = apply_starter_kit(kit, inventory)
         self.inventories[user_id] = inventory
-        self.player_progress[user_id] = PlayerProgress.GEAR_DONE
+        self.character_kits[user_id] = kit.name
+        self.player_progress[user_id] = PlayerProgress.KIT_DONE
 
         logger.info(
             "ONBOARD gear user=%s kit=%s campaign=%s",
@@ -330,21 +346,79 @@ class CampaignLauncher:
             db_session.close()
 
         kit_display = get_kit_label(self.language, kit.name, "name")
-        race_display = get_label(RACE_LABELS, self.language, character.race.value)
-        cls_display = get_label(CLASS_LABELS, self.language, character.char_class.value)
 
-        # Confirm ephemerally
+        # Ask for motivation (ephemeral) — the GEAR_DONE gate is crossed
+        # only after motivation is selected (see _on_motivation_selected).
+        motivation_view = MotivationView(
+            on_selected=self._on_motivation_selected,
+            language=self.language,
+        )
         await interaction.response.send_message(
-            f"Kit **{kit_display}** equipe ! Tu es pret(e).", ephemeral=True,
+            f"Kit **{kit_display}** equipe !\n\n"
+            f"Une derniere question — **pourquoi ton personnage est-il la ?** "
+            f"Choisis la motivation qui colle le mieux :",
+            view=motivation_view,
+            ephemeral=True,
         )
         self._ephemeral_interactions.setdefault(user_id, []).append(interaction)
 
-        # Announce publicly
-        await self.channel.send(
-            f"**{character.name}** ({race_display} {cls_display}) est pret(e) ! [{kit_display}]",
+    async def _on_motivation_selected(
+        self,
+        interaction: discord.Interaction,
+        motivation_key: str,
+    ) -> None:
+        """Called when a player picks a motivation (last onboarding step).
+
+        ``motivation_key`` is the canonical English key (``"Contract"`` |
+        ``"Personal"`` | ``"Curiosity"`` | ``"Conviction"``) — stable across
+        display languages. Stored for the opening reframer.
+        """
+        user_id = interaction.user.id
+
+        if self.player_progress.get(user_id) != PlayerProgress.KIT_DONE:
+            logger.warning(
+                "ONBOARD stale motivation callback user=%s campaign=%s progress=%s",
+                interaction.user, self.campaign.id,
+                self.player_progress.get(user_id),
+            )
+            return
+
+        character = self.characters.get(user_id)
+        kit_name = self.character_kits.get(user_id)
+        if character is None or kit_name is None:
+            await interaction.response.send_message(
+                "Erreur interne.", ephemeral=True,
+            )
+            return
+
+        self.character_motivations[user_id] = motivation_key
+        self.player_progress[user_id] = PlayerProgress.GEAR_DONE
+
+        logger.info(
+            "ONBOARD motivation user=%s motivation=%s campaign=%s",
+            interaction.user, motivation_key, self.campaign.id,
         )
 
-        # Clean up ephemeral onboarding messages for this player
+        from bot.i18n import get_motivation_label
+        motivation_display = get_motivation_label(self.language, motivation_key)
+        kit_display = get_kit_label(self.language, kit_name, "name")
+        race_display = get_label(RACE_LABELS, self.language, character.race.value)
+        cls_display = get_label(CLASS_LABELS, self.language, character.char_class.value)
+
+        # Confirm ephemerally.
+        await interaction.response.send_message(
+            f"Motivation enregistree : **{motivation_display}**. Tu es pret(e) !",
+            ephemeral=True,
+        )
+        self._ephemeral_interactions.setdefault(user_id, []).append(interaction)
+
+        # Announce publicly.
+        await self.channel.send(
+            f"**{character.name}** ({race_display} {cls_display}) est pret(e) ! "
+            f"[{kit_display} — {motivation_display}]",
+        )
+
+        # Clean up ephemeral onboarding messages for this player.
         await self._cleanup_ephemeral(user_id)
 
         await self._check_ready()
@@ -712,6 +786,91 @@ class CampaignLauncher:
         )
         await self._launch_campaign()
 
+    async def _reframe_opening(self) -> None:
+        """Rewrite premise/situation/call_to_action/arrival_hook around the
+        real party before launch. Non-fatal — on any failure, logs and
+        leaves the original arc text in place.
+        """
+        if self.story_arc is None or self.current_location is None:
+            return
+
+        from ai.client import OllamaClient
+        from ai.opening_reframer import OpeningReframer, PartyMember
+
+        party: list[PartyMember] = []
+        for user_id, character in self.characters.items():
+            kit = self.character_kits.get(user_id)
+            motivation = self.character_motivations.get(user_id)
+            if kit is None or motivation is None:
+                # Incomplete onboarding (e.g. force-launch before motivation).
+                logger.info(
+                    "REFRAME skipped: player %s missing kit/motivation (force-launched?) campaign=%s",
+                    user_id, self.campaign.id,
+                )
+                return
+            party.append(PartyMember(
+                name=character.name,
+                race=character.race.value,
+                char_class=character.char_class.value,
+                kit=kit,
+                motivation=motivation,
+            ))
+
+        if not party:
+            return
+
+        try:
+            client = OllamaClient()
+        except Exception:
+            logger.warning(
+                "REFRAME skipped: Ollama unavailable campaign=%s",
+                self.campaign.id,
+            )
+            return
+
+        reframer = OpeningReframer(client)
+        first_beat = self.story_arc.beats[0] if self.story_arc.beats else None
+        first_beat_desc = first_beat.description if first_beat else ""
+
+        reframe_start = time.monotonic()
+        logger.info("REFRAME start campaign=%s", self.campaign.id)
+        try:
+            reframed = await self._retry_llm_call(
+                lambda: reframer.reframe(
+                    original_premise=self.story_arc.premise if self.story_arc else "",
+                    original_situation=self.story_arc.situation if self.story_arc else "",
+                    original_call_to_action=self.story_arc.call_to_action if self.story_arc else "",
+                    original_arrival_hook=self.current_location.arrival_hook if self.current_location else "",
+                    location_name=self.current_location.name if self.current_location else "",
+                    villain_name=self.story_arc.villain_name if self.story_arc else "",
+                    first_beat_description=first_beat_desc,
+                    party=party,
+                    language=self.language,
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "REFRAME failed — launching with original opening campaign=%s",
+                self.campaign.id, exc_info=True,
+            )
+            return
+
+        self.story_arc = self.story_arc.model_copy(update={
+            "premise": reframed.premise,
+            "situation": reframed.situation,
+            "call_to_action": reframed.call_to_action,
+            "party_premise": reframed.party_premise,
+        })
+        self.current_location = self.current_location.model_copy(update={
+            "arrival_hook": reframed.arrival_hook,
+        })
+        logger.info(
+            "REFRAME done campaign=%s elapsed=%.1fs party_premise=%r",
+            self.campaign.id,
+            time.monotonic() - reframe_start,
+            reframed.party_premise[:80],
+        )
+
     async def _launch_campaign(self) -> None:
         """Create the GameSession, send opening narrative, clean up."""
         if self._launched:
@@ -720,6 +879,11 @@ class CampaignLauncher:
 
         logger.info("LAUNCH starting campaign=%s", self.campaign.id)
 
+        # Re-anchor the opening around the real party composition BEFORE we
+        # persist the arc. Non-fatal: on failure we launch with the original
+        # (role-blind) opening and log the miss.
+        await self._reframe_opening()
+
         session = GameSession(
             campaign=self.campaign,
             characters=self.characters,
@@ -727,6 +891,8 @@ class CampaignLauncher:
             spellcasters=self.spellcasters,
             current_location=self.current_location,
             story_arc=self.story_arc,
+            character_kits=dict(self.character_kits),
+            character_motivations=dict(self.character_motivations),
             language=self.language,
         )
         create_ai_services(session)
@@ -773,6 +939,8 @@ class CampaignLauncher:
                     story_arc=self.story_arc,
                     location=self.current_location,
                     characters=self.characters,
+                    character_kits=self.character_kits,
+                    character_motivations=self.character_motivations,
                 )
             except Exception:
                 logger.warning(
@@ -872,6 +1040,7 @@ class CampaignLauncher:
             scene_embed = build_scene_embed(
                 location=self.current_location,
                 language=self.language,
+                arrival_hook=self.current_location.arrival_hook,
             )
             await self.channel.send(embed=scene_embed)
             logger.info(

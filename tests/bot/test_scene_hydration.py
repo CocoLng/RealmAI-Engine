@@ -20,7 +20,7 @@ from bot.scene_hydration import (
     hydrate_scene,
     take_scene_item,
 )
-from world.npc import NPC, NPCDisposition
+from world.npc import NPC, DialogueExchange, NPCDisposition
 from db.database import Base
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
@@ -629,6 +629,115 @@ def test_describe_scene_no_location():
 
 
 # ---------------------------------------------------------------------------
+# Dialogue continuity (fix 2) — ongoing_dialogue_with kwarg
+# ---------------------------------------------------------------------------
+
+
+def _npc_with_history(name: str, *, exchanges: list[tuple[str, str]]) -> NPC:
+    npc = _npc(name, location="Église", disposition=NPCDisposition.NEUTRAL,
+               description="Vieil ermite voûté.", personality="Méfiant.")
+    npc.dialogue_history = [
+        DialogueExchange(player_said=p, npc_said=n, revealed=[])
+        for p, n in exchanges
+    ]
+    return npc
+
+
+def test_describe_scene_ongoing_dialogue_skips_npcs_present_block():
+    """When ongoing_dialogue_with is set with prior history, ## NPCs present is
+    suppressed — the narrator mustn't see the full NPC description again."""
+    loc = Location(name="Église", description="…", npcs_present=["Élie"])
+    npc = _npc_with_history("Élie", exchanges=[
+        ("bonjour", "grognement méfiant"),
+        ("comment puis-je t'aider", "refuse poliment"),  # current exchange (just appended)
+    ])
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {"Élie": npc}
+    session.characters = {}
+
+    out = describe_scene_for_narrator(
+        session, actor_name="Xavier", ongoing_dialogue_with="Élie",
+    )
+    assert "## NPCs present" not in out
+    # The verbose NPC description MUST NOT leak into the narrator prompt.
+    assert "Vieil ermite voûté." not in out
+    assert "Méfiant." not in out
+
+
+def test_describe_scene_ongoing_dialogue_emits_prior_exchanges():
+    """The ongoing-dialogue block shows the prior exchange(s), excluding the
+    current turn's just-appended exchange."""
+    loc = Location(name="Église", description="…", npcs_present=["Élie"])
+    npc = _npc_with_history("Élie", exchanges=[
+        ("bonjour", "grognement méfiant"),
+        ("comment puis-je t'aider", "refuse poliment"),  # current (appended)
+    ])
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {"Élie": npc}
+    session.characters = {}
+
+    out = describe_scene_for_narrator(
+        session, actor_name="Xavier", ongoing_dialogue_with="Élie",
+    )
+    assert "Dialogue in progress with Élie" in out
+    # The PRIOR exchange is shown.
+    assert "bonjour" in out
+    assert "grognement méfiant" in out
+    # The CURRENT turn's exchange is NOT shown (it comes through npc_dialogue).
+    assert "refuse poliment" not in out
+
+
+def test_describe_scene_first_exchange_preserves_npcs_present_block():
+    """On the first exchange (only 1 entry in history = the just-appended one),
+    it's NOT ongoing — full NPCs present block stays for first-meeting narration."""
+    loc = Location(name="Église", description="…", npcs_present=["Élie"])
+    npc = _npc_with_history("Élie", exchanges=[
+        ("bonjour", "grognement méfiant"),  # only the just-appended current
+    ])
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {"Élie": npc}
+    session.characters = {}
+
+    out = describe_scene_for_narrator(
+        session, actor_name="Xavier", ongoing_dialogue_with="Élie",
+    )
+    # First meeting: keep full NPC block so narrator can describe appearance.
+    assert "## NPCs present" in out
+    assert "Vieil ermite voûté." in out
+    assert "Dialogue in progress" not in out
+
+
+def test_describe_scene_dialogue_history_capped_at_two_prior_exchanges():
+    """Only the last 2 prior exchanges are included (long histories are trimmed)."""
+    loc = Location(name="Église", description="…", npcs_present=["Élie"])
+    npc = _npc_with_history("Élie", exchanges=[
+        ("q1", "r1"),
+        ("q2", "r2"),
+        ("q3", "r3"),
+        ("q4", "r4"),
+        ("q5", "r5_current"),  # just-appended current
+    ])
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {"Élie": npc}
+    session.characters = {}
+
+    out = describe_scene_for_narrator(
+        session, actor_name="Xavier", ongoing_dialogue_with="Élie",
+    )
+    # The current turn exchange (q5/r5_current) is excluded.
+    assert "r5_current" not in out
+    # Only last 2 prior (q3/r3 and q4/r4) are included.
+    assert "q4" in out
+    assert "q3" in out
+    assert "q2" not in out
+    assert "q1" not in out
+
+
+# ---------------------------------------------------------------------------
 # Narrator combat context additions
 # ---------------------------------------------------------------------------
 
@@ -846,6 +955,54 @@ def test_describe_scene_includes_last_three_recent_events_only():
     assert "MISS." not in out
 
 
+def test_describe_scene_filters_current_outcome_from_recent_events():
+    """When narrating the current turn, the event representing THIS turn's outcome
+    must not appear in 'Derniers événements mécaniques' (dedup)."""
+    pc = _build_pc_combatant("Thorin")
+    current_summary = "Thorin touche Gob 1 avec Longsword — 8 dégâts"
+    state = _build_active_combat_state(
+        combatants=[pc],
+        recent_events=[
+            "Gob 1 attaque Thorin : MISS.",
+            "Thorin attaque Gob 1 : HIT 5 dégâts.",
+            current_summary,
+        ],
+    )
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(
+        session,
+        actor_name="Thorin",
+        current_outcome_summary=current_summary,
+    )
+    assert "Derniers événements mécaniques" in out
+    # The current-turn event is NOT duplicated into the past-events block.
+    recent_block = out.split("### Derniers événements mécaniques")[1]
+    assert current_summary not in recent_block
+    # But earlier past events still appear.
+    assert "HIT 5 dégâts." in recent_block
+    assert "MISS." in recent_block
+
+
+def test_describe_scene_no_filter_when_current_outcome_none():
+    """Without current_outcome_summary the behaviour is unchanged (backward compat)."""
+    pc = _build_pc_combatant("Thorin")
+    state = _build_active_combat_state(
+        combatants=[pc],
+        recent_events=["Thorin attaque Gob 1 : HIT 6 dégâts."],
+    )
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+    assert "HIT 6 dégâts." in out
+
+
 def test_describe_scene_combat_rule_reminder_present():
     pc = _build_pc_combatant("Thorin")
     state = _build_active_combat_state(combatants=[pc])
@@ -924,3 +1081,29 @@ def test_describe_scene_actor_enrichment_fallback_when_unknown():
     # Must not crash, must still produce the Acting character block.
     assert "Acting character" in out
     assert "Inconnu" in out
+
+
+def test_describe_scene_actor_enrichment_surfaces_kit_and_motivation():
+    """When the session holds the player's kit + motivation, the narrator
+    context must surface them so the LLM honors the chosen role."""
+    pc_char = create_character(
+        name="Roub",
+        race=Race.HUMAN,
+        char_class=CharacterClass.ROGUE,
+        ability_scores=AbilityScores(
+            STR=10, DEX=15, CON=12, INT=10, WIS=10, CHA=10,
+        ),
+    )
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = None
+    session.characters = {249630798498627585: pc_char}
+    session.inventories = {}
+    session.character_kits = {249630798498627585: "Shadow Blade"}
+    session.character_motivations = {249630798498627585: "Contract"}
+
+    out = describe_scene_for_narrator(session, actor_name="Roub")
+
+    assert "Kit : Shadow Blade" in out
+    assert "Motivation : Contract" in out

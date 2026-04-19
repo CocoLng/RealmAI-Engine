@@ -167,6 +167,42 @@ ABILITY_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# Motivation labels (why is this character here?)
+# ---------------------------------------------------------------------------
+# Canonical English keys are stored and passed to the narrative reframer.
+# The display label is looked up per language; English falls back to the key.
+
+MOTIVATION_KEYS: tuple[str, ...] = (
+    "Contract",
+    "Personal",
+    "Curiosity",
+    "Conviction",
+)
+
+MOTIVATION_LABELS: dict[str, dict[str, str]] = {
+    "fr": {
+        "Contract": "Contrat / Payé",
+        "Personal": "Dette ou vengeance",
+        "Curiosity": "Curiosité / Découverte",
+        "Conviction": "Conviction / Foi",
+    },
+    "en": {
+        "Contract": "Contract / Paid job",
+        "Personal": "Personal debt or revenge",
+        "Curiosity": "Curiosity / Discovery",
+        "Conviction": "Conviction / Faith",
+    },
+}
+
+
+def get_motivation_label(language: str, key: str) -> str:
+    """Return the localized display label for a motivation key.
+
+    Falls back to the English key if the language or key is unknown.
+    """
+    return MOTIVATION_LABELS.get(language, {}).get(key, key)
+
 PARTY_CARD_LABELS: dict[str, dict[str, str]] = {
     "fr": {
         "level": "Niveau",

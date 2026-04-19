@@ -296,8 +296,28 @@ class TurnManager:
 
     async def _resolve_npc_turn(self, combatant: Combatant) -> None:
         """Dispatch brain, execute plan, post dice embed + mechanics summary."""
+        from engine.conditions import is_surprised
+
         state = self.session.combat_state
         if state is None:
+            return
+
+        # A surprised combatant (5e surprise round) gets a no-op turn. The
+        # validator already rejects their actions as a safety net; we skip
+        # here so the UI never shows a "phantom" NPC action.
+        if is_surprised(combatant.conditions):
+            summary = f"{combatant.name} est surpris et ne peut pas agir ce tour."
+            await self._safe_send(content=f"📜 {summary}")
+            record_combat_event(state, summary)
+            await record_turn_and_maybe_check(
+                self.session,
+                user_name=combatant.name,
+                command="combat:npc:surprised",
+                args="",
+                mechanics=summary,
+                narrative=summary,
+            )
+            await self.on_action_resolved()
             return
 
         plan = self._dispatch_npc_brain(combatant, state)
