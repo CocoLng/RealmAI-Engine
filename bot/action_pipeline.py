@@ -599,20 +599,16 @@ class ActionPipeline:
         self,
         outcome: MechanicsOutcome,
         context_prompt: str,
+        has_npc_dialogue: bool = False,
     ) -> NarrativeResult:
-        def _do() -> NarrativeResult:
-            return self.narrator.narrate(
-                action_result_text=outcome.summary,
-                context_prompt=context_prompt,
-                language=self.language,
-                player_intent=outcome.player_intent,
-                outcome_facts=outcome.outcome_facts,
-                has_npc_dialogue=bool(outcome.npc_dialogue),
-            )
-
-        return await retry_llm_call(
-            _do,
-            log_label=f"ACTION campaign={self.campaign_id} narrate",
+        from bot.pipeline import narrate
+        return await narrate.call_narrator(
+            narrator=self.narrator,
+            outcome=outcome,
+            context_prompt=context_prompt,
+            language=self.language,
+            campaign_id=self.campaign_id,
+            has_npc_dialogue=has_npc_dialogue,
         )
 
     @staticmethod
@@ -1426,20 +1422,8 @@ class ActionPipeline:
             return {"completed": False, "confidence": 0.0}
 
     def _build_player_intent(self, action: InterpretedAction) -> str:
-        """Concatenate raw input with any interpreter-extracted intent extras."""
-        parts: list[str] = []
-        if action.raw_input:
-            parts.append(action.raw_input.strip())
-        extras = []
-        if action.search_detail:
-            extras.append(f"search detail: {action.search_detail}")
-        if action.talk_topic:
-            extras.append(f"talk topic: {action.talk_topic}")
-        if action.improvise_description:
-            extras.append(f"improvise: {action.improvise_description}")
-        if extras:
-            parts.append("; ".join(extras))
-        return " | ".join(parts)
+        from bot.pipeline import narrate
+        return narrate.build_player_intent(action)
 
     def _resolve_talk(self, action: InterpretedAction) -> MechanicsOutcome:
         """Run TALK through the NPC agent, persist state, build outcome."""
@@ -1757,88 +1741,30 @@ class ActionPipeline:
         current_outcome_summary: str | None = None,
         ongoing_dialogue_with: str | None = None,
     ) -> str:
-        """Build the narrator-facing context.
-
-        Delegates to :func:`bot.scene_hydration.describe_scene_for_narrator`
-        when a session is available; falls back to a minimal location-only
-        snippet otherwise (used by unit tests that construct the pipeline
-        without a full session).
-
-        ``current_outcome_summary``, when given, is forwarded to the scene
-        builder so the combat "Derniers événements mécaniques" block drops
-        the event that represents THIS turn's outcome — prevents the narrator
-        from seeing the current action twice.
-
-        ``ongoing_dialogue_with`` is the NPC name for a Talk action that is
-        a continuation of an existing dialogue. Triggers the scene builder
-        to drop the verbose ## NPCs present block and emit a compact
-        ## Dialogue in progress block instead.
-        """
-        if self.session is not None:
-            from bot.scene_hydration import describe_scene_for_narrator
-            return describe_scene_for_narrator(
-                self.session,
-                actor_name=action.actor_name,
-                current_outcome_summary=current_outcome_summary,
-                ongoing_dialogue_with=ongoing_dialogue_with,
-            )
-
-        loc = self.location
-        lines: list[str] = []
-        if loc is not None:
-            lines.append(f"## Location\n{loc.name}\n{loc.description}")
-        lines.append(f"## Acting character\n{action.actor_name}")
-        return "\n\n".join(lines)
+        from bot.pipeline import narrate
+        return narrate.assemble_context(
+            action=action,
+            actor_name=self.actor_name,
+            location=self.location,
+            npcs=self.npcs,
+            session=self.session,
+            combat_state=self.combat_state,
+            inventory=self.inventory,
+            campaign_id=self.campaign_id,
+            current_outcome_summary=current_outcome_summary,
+            ongoing_dialogue_with=ongoing_dialogue_with,
+        )
 
     async def _narrate_unknown(
         self,
         action: InterpretedAction,
         resolution: ResolutionResult,
     ) -> NarrativeResult:
-        """Narrate an in-character refusal, grounded in the real scene.
-
-        The narrator receives the actual ``npcs_present`` and ``connections``
-        from the current location, plus an explicit no-hallucination clause,
-        so it can suggest a real reformulation instead of inventing entities
-        (Lot A — scene awareness).
-        """
-        loc = self.location
-        loc_name = loc.name if loc is not None else "ce lieu"
-
-        if loc is not None and loc.npcs_present:
-            npcs_line = ", ".join(loc.npcs_present[:8])
-        else:
-            npcs_line = "aucun"
-
-        if loc is not None and loc.connections:
-            exits_line = ", ".join(loc.connections)
-        else:
-            exits_line = "aucune"
-
-        if loc is not None and loc.items_available:
-            items_line = ", ".join(loc.items_available[:8])
-        else:
-            items_line = "aucun"
-
-        verb = action.action_type.value.lower()
-        raw = resolution.raw_value or "cette cible"
-
-        action_summary = (
-            f"{action.actor_name} a tenté de {verb} '{raw}', "
-            f"mais cette cible n'existe pas à {loc_name}.\n\n"
-            f"Personnages réellement présents : {npcs_line}\n"
-            f"Objets disponibles : {items_line}\n"
-            f"Sorties réelles : {exits_line}\n\n"
-            "Décris en UN court paragraphe la réalisation du personnage et "
-            "propose-lui de reformuler en mentionnant un de ces "
-            "personnages/objets/sorties s'il y en a. "
-            "**N'invente AUCUN autre personnage, lieu ou objet.** "
-            "Reste strictement dans le monde décrit ci-dessus."
-        )
-        context = self._assemble_context(action)
-        return await self._call_narrator(
-            outcome=MechanicsOutcome(summary=action_summary),
-            context_prompt=context,
+        from bot.pipeline import narrate
+        return await narrate.narrate_unknown(
+            narrator=self.narrator, action=action, resolution=resolution,
+            actor_name=self.actor_name, location=self.location, language=self.language,
+            campaign_id=self.campaign_id, session=self.session,
         )
 
     async def _narrate_rule_failure(
@@ -1846,40 +1772,11 @@ class ActionPipeline:
         action: InterpretedAction,
         validation: ValidationResult,
     ) -> NarrativeResult:
-        """Narrate an in-character refusal when the rules forbid the action.
-
-        Like ``_narrate_unknown``, the narrator receives the real scene
-        context (npcs_present, connections) so its hesitation paragraph
-        stays grounded in the world (Lot A — scene awareness).
-        """
-        loc = self.location
-        loc_name = loc.name if loc is not None else "ce lieu"
-        npcs_line = (
-            ", ".join(loc.npcs_present[:8])
-            if (loc is not None and loc.npcs_present)
-            else "aucun"
-        )
-        exits_line = (
-            ", ".join(loc.connections)
-            if (loc is not None and loc.connections)
-            else "aucune"
-        )
-
-        verb = action.action_type.value.lower()
-        action_summary = (
-            f"{action.actor_name} a tenté de {verb}, mais les règles "
-            f"l'interdisent : {validation.error_message}.\n\n"
-            f"Lieu : {loc_name}\n"
-            f"Personnages présents : {npcs_line}\n"
-            f"Sorties : {exits_line}\n\n"
-            "Décris en UN court paragraphe l'hésitation du personnage, "
-            "en t'appuyant uniquement sur les éléments ci-dessus. "
-            "**N'invente AUCUN autre personnage, lieu ou objet.**"
-        )
-        context = self._assemble_context(action)
-        return await self._call_narrator(
-            outcome=MechanicsOutcome(summary=action_summary),
-            context_prompt=context,
+        from bot.pipeline import narrate
+        return await narrate.narrate_rule_failure(
+            narrator=self.narrator, action=action, validation=validation,
+            actor_name=self.actor_name, location=self.location, language=self.language,
+            campaign_id=self.campaign_id, session=self.session,
         )
 
     async def _emit(
