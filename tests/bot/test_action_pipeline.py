@@ -1649,9 +1649,9 @@ def test_pipeline_detects_attack_trigger_and_bootstraps() -> None:
     )
 
     with (
-        patch("bot.action_pipeline.detect_combat_trigger", return_value=fake_trigger),
-        patch("bot.action_pipeline.enter_combat", return_value=bootstrapped_state),
-        patch("bot.action_pipeline.start_combat", return_value=bootstrapped_state),
+        patch("bot.pipeline.interpret.detect_combat_trigger", return_value=fake_trigger),
+        patch("bot.pipeline.interpret.enter_combat", return_value=bootstrapped_state),
+        patch("bot.pipeline.interpret.start_combat", return_value=bootstrapped_state),
     ):
         pipeline._validate(action)
 
@@ -1699,9 +1699,9 @@ def test_pipeline_detects_lethal_intent_and_bootstraps() -> None:
     object.__setattr__(action, "is_lethal_intent", True)  # forward-compatibility shim
 
     with (
-        patch("bot.action_pipeline.detect_combat_trigger", return_value=fake_trigger),
-        patch("bot.action_pipeline.enter_combat", return_value=bootstrapped_state),
-        patch("bot.action_pipeline.start_combat", return_value=bootstrapped_state),
+        patch("bot.pipeline.interpret.detect_combat_trigger", return_value=fake_trigger),
+        patch("bot.pipeline.interpret.enter_combat", return_value=bootstrapped_state),
+        patch("bot.pipeline.interpret.start_combat", return_value=bootstrapped_state),
     ):
         pipeline._validate(action)
 

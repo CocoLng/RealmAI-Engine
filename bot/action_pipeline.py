@@ -48,23 +48,17 @@ from ai.models import (
 )
 from ai.narrator import Narrator
 from ai.scene_context import SceneContext, build_scene_context
-from bot.llm_retry import retry_llm_call
 from bot.persistence import persist_session
 from engine.combat import (
     CombatSide,
     CombatState,
     record_combat_event,
-    start_combat,
 )
-from bot.combat_entry import CombatTrigger, detect_combat_trigger, enter_combat
-from engine.inventory import EquipmentSlot, Inventory, Weapon
+from bot.combat_entry import CombatTrigger
+from engine.inventory import Inventory
 from engine.validators import (
-    Action,
     ActionType,
-    EXPLORATION_ACTION_TYPES,
     ValidationResult,
-    validate_action,
-    validate_exploration_action,
 )
 from world.location import Location
 from world.npc import NPC
@@ -544,17 +538,13 @@ class ActionPipeline:
         player_text: str,
         scene: SceneContext,
     ) -> InterpretedAction:
-        def _do() -> InterpretedAction:
-            return self.interpreter.interpret(
-                player_text=player_text,
-                actor_name=self.actor_name,
-                scene_context=scene,
-                language=self.language,
-            )
-
-        return await retry_llm_call(
-            _do,
-            log_label=f"ACTION campaign={self.campaign_id} interpret",
+        from bot.pipeline import interpret
+        return await interpret.call_interpreter(
+            interpreter=self.interpreter,
+            player_text=player_text,
+            scene=scene,
+            actor_name=self.actor_name,
+            language=self.language,
         )
 
     async def _call_narrator(
@@ -578,149 +568,50 @@ class ActionPipeline:
         weapon_name: str | None,
         inventory: Inventory | None,
     ) -> str | None:
-        """Return the canonical equipped weapon name, resolving player aliases.
-
-        When weapon_name is None → return MAIN_HAND weapon as before.
-        When weapon_name is given → try case-insensitive exact match first;
-        if no match and only one weapon is equipped, assume the player meant
-        that weapon (handles aliases like "épée", "sword", "mon arme").
-        Falls back to MAIN_HAND when multiple weapons are equipped and none match.
-        """
-        if inventory is None:
-            return None
-
-        equipped_weapons: list[Weapon] = [
-            item
-            for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND)
-            if (item := inventory.equipped.get(slot)) is not None
-            and isinstance(item, Weapon)
-        ]
-
-        if weapon_name is None:
-            main = inventory.equipped.get(EquipmentSlot.MAIN_HAND)
-            if main is not None and isinstance(main, Weapon):
-                return main.name
-            return equipped_weapons[0].name if equipped_weapons else None
-
-        # Case-insensitive exact match against equipped weapons.
-        for w in equipped_weapons:
-            if w.name.lower() == weapon_name.lower():
-                return w.name
-
-        # No match — if exactly one weapon is equipped, assume the player meant it.
-        if len(equipped_weapons) == 1:
-            return equipped_weapons[0].name
-
-        # Ambiguous or no weapon equipped — fall back to MAIN_HAND.
-        main = inventory.equipped.get(EquipmentSlot.MAIN_HAND)
-        return main.name if main is not None and isinstance(main, Weapon) else None
+        """Thin facade — delegates to :func:`bot.pipeline.interpret.auto_resolve_weapon_name`."""
+        from bot.pipeline import interpret
+        return interpret.auto_resolve_weapon_name(
+            weapon_name=weapon_name,
+            inventory=inventory,
+        )
 
     def _validate(self, action: InterpretedAction) -> ValidationResult:
-        """Convert InterpretedAction → Action and dispatch to the right validator.
+        """Thin facade — delegates to :func:`bot.pipeline.interpret.validate`.
 
-        Dispatch logic (in order):
-        1. If combat active AND action is MOVE → auto-convert to FLEE, store destination.
-        2. If no combat → try detect_combat_trigger; bootstrap if trigger found.
-        3. If combat active → combat validators (validate_action or validate_exploration_action).
-        4. If no combat → exploration validators, or trivial-kill check, or error.
+        Builds an :class:`~bot.pipeline.interpret.InterpretSideChannel` from
+        the current pending-* attributes, calls the module function, then
+        copies the updated side-channel values back so callers that read
+        ``self._pending_*`` and ``self.combat_state`` after this call still
+        see the mutations (combat bootstrap, FLEE destination, trivial kill).
         """
-        eng_action = Action(
-            actor_name=action.actor_name,
-            action_type=action.action_type,
-            target_name=action.target_name,
-            weapon_name=action.weapon_name,
-            spell_name=action.spell_name,
-            item_name=action.item_name,
+        from bot.pipeline import interpret
+        side = interpret.InterpretSideChannel(
+            pending_flee_destination=self._pending_flee_destination,
+            pending_combat_start_embed=self._pending_combat_start_embed,
+            trivial_kill_mechanics=self._trivial_kill_mechanics,
+            pending_dice_embeds=list(self._pending_dice_embeds),
         )
-
-        # --- 1. Auto-convert MOVE → FLEE in active combat ---
-        if (
-            eng_action.action_type == ActionType.MOVE
-            and self.combat_state is not None
-            and self.combat_state.is_active
-        ):
-            logger.info(
-                "MOVE auto-converted to FLEE campaign=%s actor=%s destination=%s",
-                self.campaign_id, action.actor_name, eng_action.target_name,
-            )
-            self._pending_flee_destination = eng_action.target_name
-            eng_action = eng_action.model_copy(
-                update={"action_type": ActionType.FLEE, "target_name": None},
-            )
-            # Fall through to combat dispatch below
-
-        # --- 2. If no combat, try to detect a trigger and bootstrap ---
-        if self.combat_state is None or not self.combat_state.is_active:
-            trigger: CombatTrigger | None = None
-            if self.session is not None:
-                trigger = detect_combat_trigger(action, self.session)
-
-            if trigger is not None:
-                logger.info(
-                    "COMBAT bootstrapped kind=%s campaign=%s aggressor=%s enemies=%s",
-                    trigger.kind, self.campaign_id,
-                    trigger.aggressor_name, trigger.enemy_names,
-                )
-                # Build party-wide CombatState, roll initiative, apply surprise
-                try:
-                    pre_state = enter_combat(self.session, trigger)  # type: ignore[arg-type]
-                except ValueError as exc:
-                    logger.warning("Combat bootstrap failed: %s", exc)
-                    return ValidationResult(is_valid=False, error_message=str(exc))
-                self.combat_state = start_combat(pre_state.combatants, trigger=trigger)
-                self.session.combat_state = self.combat_state  # type: ignore[union-attr]
-                if self.location is not None and self.location.has_combat_zones():
-                    _assign_initial_zones(self.combat_state, self.location)
-                self._pending_combat_start_embed = (self.combat_state, trigger)
-                # Fall through to combat dispatch below
-
-        # --- 3. Dispatch to the right validator ---
-        if self.combat_state is not None and self.combat_state.is_active:
-            if eng_action.action_type in EXPLORATION_ACTION_TYPES:
-                return validate_exploration_action(
-                    eng_action, combat_state=self.combat_state,
-                )
-            return validate_action(eng_action, self.combat_state)
-
-        # --- 4. No combat — exploration path or trivial kill ---
-        if eng_action.action_type in EXPLORATION_ACTION_TYPES:
-            return validate_exploration_action(eng_action, combat_state=None)
-
-        # Combat action requested with no active combat → check trivial kill
-        if (
-            eng_action.action_type == ActionType.ATTACK
-            and eng_action.target_name is not None
-            and self.npcs.get(eng_action.target_name) is not None
-        ):
-            target_npc = self.npcs[eng_action.target_name]
-            from bot.pipeline import resolve as _resolve_mod
-            if _resolve_mod.should_trivial_resolve(
-                npc=target_npc, session=self.session, campaign_id=self.campaign_id,
-            ):
-                side = _resolve_mod.ResolveSideChannel(
-                    pending_flee_destination=self._pending_flee_destination,
-                    pending_dice_embeds=list(self._pending_dice_embeds),
-                    trivial_kill_mechanics=self._trivial_kill_mechanics,
-                )
-                _resolve_mod.trivial_kill(
-                    target_npc=target_npc,
-                    actor_name=self.actor_name,
-                    location=self.location,
-                    npcs=self.npcs,
-                    session=self.session,
-                    campaign_id=self.campaign_id,
-                    db_factory=self.db_factory,
-                    side=side,
-                )
-                self._trivial_kill_mechanics = side.trivial_kill_mechanics
-                return ValidationResult(is_valid=True)
-
-        return ValidationResult(
-            is_valid=False,
-            error_message=(
-                f"'{eng_action.action_type.value}' nécessite un combat actif."
-            ),
+        result = interpret.validate(
+            action=action,
+            actor_name=self.actor_name,
+            location=self.location,
+            npcs=self.npcs,
+            combat_state=self.combat_state,
+            inventory=self.inventory,
+            session=self.session,
+            campaign_id=self.campaign_id,
+            db_factory=self.db_factory,
+            side=side,
         )
+        # Copy side-channel mutations back to instance attributes.
+        self._pending_flee_destination = side.pending_flee_destination
+        self._pending_combat_start_embed = side.pending_combat_start_embed
+        self._trivial_kill_mechanics = side.trivial_kill_mechanics
+        self._pending_dice_embeds = side.pending_dice_embeds
+        # If combat was bootstrapped, sync self.combat_state from the embed tuple.
+        if side.pending_combat_start_embed is not None:
+            self.combat_state = side.pending_combat_start_embed[0]
+        return result
 
     async def _resolve_mechanics(
         self, action: InterpretedAction,

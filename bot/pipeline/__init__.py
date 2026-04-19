@@ -9,7 +9,7 @@ The orchestrator wires them together and the Facade in
 ``bot.action_pipeline.ActionPipeline`` preserves the legacy public API.
 """
 
-from bot.pipeline import narrate, resolve
+from bot.pipeline import interpret, narrate, resolve
 from bot.pipeline.types import PipelineContext, PipelineDeps
 
-__all__ = ["PipelineContext", "PipelineDeps", "narrate", "resolve"]
+__all__ = ["PipelineContext", "PipelineDeps", "interpret", "narrate", "resolve"]
