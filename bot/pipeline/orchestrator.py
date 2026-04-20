@@ -501,18 +501,21 @@ class PipelineRunner:
         ):
             beat_completed = True
             arc = self.session.story_arc
-            beat = arc.beats[arc.current_beat_index]
-            hint = self._apply_beat_effects(beat.on_complete)
-            if hint:
-                outcome = outcome.model_copy(update={
-                    "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
-                })
-            from world.story_arc import advance_beat
-            self.session.story_arc = advance_beat(arc)
-            logger.info(
-                "BEAT trigger-complete campaign=%s beat=%d title=%r",
-                self.campaign_id, beat.beat_number, beat.title,
-            )
+            if arc is None:
+                logger.warning("BEAT trigger matched but story_arc is None — skipping")
+            else:
+                beat = arc.beats[arc.current_beat_index]
+                hint = self._apply_beat_effects(beat.on_complete)
+                if hint:
+                    outcome = outcome.model_copy(update={
+                        "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
+                    })
+                from world.story_arc import advance_beat
+                self.session.story_arc = advance_beat(arc)
+                logger.info(
+                    "BEAT trigger-complete campaign=%s beat=%d title=%r",
+                    self.campaign_id, beat.beat_number, beat.title,
+                )
         elif (
             self.session is not None
             and getattr(self.session, "story_arc", None) is not None
@@ -527,6 +530,7 @@ class PipelineRunner:
             and interpreted.action_type == ActionType.IMPROVISE
         ):
             arc = self.session.story_arc
+            assert arc is not None  # guaranteed by outer getattr(...) is not None guard
             beat = arc.beats[arc.current_beat_index]
             if (
                 beat.completion_trigger is not None
@@ -634,17 +638,18 @@ class PipelineRunner:
             if isinstance(candidate, StoryBeat):
                 new_beat = candidate
         if new_beat is not None and self.db_factory is not None:
+            assert self.session is not None  # new_beat is set only when session is not None
+            session_arc = self.session.story_arc
             try:
                 await asyncio.to_thread(
                     _persist_story_arc,
                     self.db_factory,
-                    self.session.story_arc,
+                    session_arc,
                 )
                 logger.info(
                     "BEAT advanced campaign=%s to=%d title=%r",
                     self.campaign_id,
-                    self.session.story_arc.current_beat_index
-                    if self.session.story_arc is not None else -1,
+                    session_arc.current_beat_index if session_arc is not None else -1,
                     new_beat.title,
                 )
             except Exception:
@@ -713,6 +718,7 @@ class PipelineRunner:
         if self.session is None or getattr(self.session, "story_arc", None) is None:
             return False
         arc = self.session.story_arc
+        assert arc is not None  # guaranteed by getattr guard above
         if arc.current_beat_index >= len(arc.beats):
             return False
         beat = arc.beats[arc.current_beat_index]
