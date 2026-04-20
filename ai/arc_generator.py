@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -12,6 +12,9 @@ from engine.arc_recipes import ArcRecipe
 from engine.npc_library import get_archetype
 from engine.npc_stat_block import NPCStatBlock
 from world.story_arc import StoryArc
+
+if TYPE_CHECKING:
+    from memory.indexer import SemanticIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +34,13 @@ class ArcGenerator:
 
     MODEL = "qwen3.5:9b"
 
-    def __init__(self, client: OllamaClient) -> None:
+    def __init__(
+        self,
+        client: OllamaClient,
+        indexer: "SemanticIndexer | None" = None,
+    ) -> None:
         self._client = client
+        self._indexer = indexer
 
     def generate(
         self,
@@ -40,6 +48,7 @@ class ArcGenerator:
         player_count: int,
         language: str = "fr",
         recipe: ArcRecipe | None = None,
+        campaign_id: str = "",
     ) -> StoryArc:
         """Generate a new story arc for the campaign.
 
@@ -51,6 +60,9 @@ class ArcGenerator:
                 (archetype, beat sequence, complications, tone, etc.).
                 When provided, the LLM fills in creative narrative content
                 guided by the recipe constraints.
+            campaign_id: Campaign identifier forwarded to the SemanticIndexer
+                when one is provided.  Defaults to ``""`` so existing callers
+                that omit it continue to work unchanged.
 
         Returns:
             A StoryArc ready to be saved.
@@ -85,6 +97,28 @@ class ArcGenerator:
             arc.theme, len(arc.beats), arc.villain_name,
             arc.villain_stat_block.archetype if arc.villain_stat_block else "none",
         )
+
+        if self._indexer is not None:
+            for beat in arc.beats:
+                self._indexer.index_beat(campaign_id, beat)
+            if arc.villain_name and arc.villain_stat_block is not None:
+                from ai.models import NPCSheet
+                villain_sheet = NPCSheet(
+                    personality=getattr(arc.villain_stat_block, "personality", None) or "Antagonist",
+                    description=(
+                        f"Villain: {arc.villain_name}. "
+                        f"Archetype: {arc.villain_stat_block.archetype}."
+                    ),
+                    secrets=["[Stat block hidden — for the engine.]"],
+                    knowledge=[f"Knows the campaign theme: {arc.theme}"],
+                )
+                self._indexer.index_npc(campaign_id, arc.villain_name, villain_sheet)
+            self._indexer.index_lore(
+                campaign_id,
+                content=f"Campaign theme: {arc.theme}",
+                metadata={"source": "arc_generator", "category": "theme"},
+            )
+
         return arc
 
     # Synonyms the LLM occasionally emits instead of the exact engine enum values.

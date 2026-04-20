@@ -723,3 +723,83 @@ class TestSanitizeArcData:
         assert data["villain_stat_block"]["attacks"][0]["range_value"] is None
         # damage_type is REQUIRED on NPCAttack — must NOT be touched
         assert data["villain_stat_block"]["attacks"][0]["damage_type"] == "Slashing"
+
+
+# ---------------------------------------------------------------------------
+# SemanticIndexer integration
+# ---------------------------------------------------------------------------
+
+
+class TestArcGeneratorIndexing:
+    """Verify SemanticIndexer is called when provided to ArcGenerator."""
+
+    def _arc_data_with_stat_block(self, beat_count: int = 10) -> dict:
+        """Minimal valid arc JSON with a valid villain stat block (min 8 beats)."""
+        data = _make_arc_data(beat_count)
+        data["villain_stat_block"] = _make_valid_villain_stat_block()
+        return data
+
+    def test_arc_generator_invokes_indexer_when_provided(
+        self,
+        httpx_mock: HTTPXMock,
+        ollama_client: OllamaClient,
+    ) -> None:
+        """When an indexer is supplied, beats + villain NPC + theme lore are indexed."""
+        from unittest.mock import MagicMock
+        from memory.indexer import SemanticIndexer
+
+        indexer: SemanticIndexer = MagicMock(spec=SemanticIndexer)
+
+        arc_data = self._arc_data_with_stat_block(beat_count=10)
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        gen = ArcGenerator(ollama_client, indexer=indexer)
+        arc = gen.generate(
+            theme="dark fantasy",
+            player_count=4,
+            campaign_id="cmp_test",
+        )
+
+        # All beats must be indexed.
+        assert indexer.index_beat.call_count == 10
+        # The villain must be indexed as an NPC.
+        villain_names = [call.args[1] for call in indexer.index_npc.call_args_list]
+        assert arc.villain_name in villain_names
+        # The arc theme must be indexed as lore.
+        assert indexer.index_lore.called
+
+    def test_arc_generator_no_indexer_no_indexing(
+        self,
+        httpx_mock: HTTPXMock,
+        ollama_client: OllamaClient,
+    ) -> None:
+        """When no indexer is provided (default None), generation works without errors."""
+        arc_data = self._arc_data_with_stat_block(beat_count=10)
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        gen = ArcGenerator(ollama_client)  # no indexer kwarg
+        result = gen.generate(theme="dark fantasy", player_count=4)
+
+        assert isinstance(result, StoryArc)
+        assert len(result.beats) == 10
+
+    def test_arc_generator_indexing_with_campaign_id(
+        self,
+        httpx_mock: HTTPXMock,
+        ollama_client: OllamaClient,
+    ) -> None:
+        """campaign_id is forwarded to index_beat calls."""
+        from unittest.mock import MagicMock
+        from memory.indexer import SemanticIndexer
+
+        indexer: SemanticIndexer = MagicMock(spec=SemanticIndexer)
+
+        arc_data = self._arc_data_with_stat_block(beat_count=10)
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        gen = ArcGenerator(ollama_client, indexer=indexer)
+        gen.generate(theme="dark fantasy", player_count=2, campaign_id="my_campaign")
+
+        # The campaign_id must be the first positional arg to index_beat.
+        call_campaign_id = indexer.index_beat.call_args_list[0].args[0]
+        assert call_campaign_id == "my_campaign"
