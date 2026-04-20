@@ -26,6 +26,7 @@ from ai.npc_agent import NPCAgent
 from ai.npc_generator import NPCGenerator
 from ai.story_director import StoryDirector
 from bot.story_bible_logger import StoryBibleLogger
+from memory.indexer import SemanticIndexer
 from memory.semantic import SemanticMemory
 
 if TYPE_CHECKING:
@@ -80,6 +81,7 @@ class GameSession:
     npc_generator: NPCGenerator | None = None
     story_director: StoryDirector | None = None
     semantic_memory: SemanticMemory | None = None
+    semantic_indexer: SemanticIndexer | None = None
 
     # Audit log — always created, independent of Ollama availability
     story_bible: StoryBibleLogger | None = None
@@ -172,6 +174,7 @@ def create_ai_services(session: GameSession) -> None:
         session.npc_generator = NPCGenerator(client)
         try:
             session.semantic_memory = SemanticMemory()
+            session.semantic_indexer = SemanticIndexer(session.semantic_memory)
             session.story_director = StoryDirector(client, session.semantic_memory)
         except Exception:
             logger.warning(
@@ -179,6 +182,7 @@ def create_ai_services(session: GameSession) -> None:
                 exc_info=True,
             )
             session.semantic_memory = None
+            session.semantic_indexer = None
             session.story_director = None
             session.ai_warnings.append(
                 "\u26a0\ufe0f M\u00e9moire s\u00e9mantique indisponible "

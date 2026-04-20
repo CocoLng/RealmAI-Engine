@@ -200,6 +200,7 @@ class ActionHandlerCog(commands.Cog):
             inventory=session.inventories.get(message.author.id),
             session=session,
             db_factory=self.bot.db_factory,
+            semantic_indexer=session.semantic_indexer,
         )
 
         logger.info(

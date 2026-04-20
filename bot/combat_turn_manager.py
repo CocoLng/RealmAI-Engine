@@ -812,6 +812,7 @@ class TurnManager:
             # ``on_action_resolved`` for the post-advance snapshot, so
             # combat survives disconnects cleanly.
             db_factory=self.db_factory,
+            semantic_indexer=self.session.semantic_indexer,
         )
 
     async def _safe_send(

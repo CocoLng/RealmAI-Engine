@@ -68,6 +68,26 @@ class TestCreateAIServices:
         assert session.interpreter is None
         assert session.npc_agent is None
 
+    def test_semantic_indexer_created_alongside_semantic_memory(self) -> None:
+        """When SemanticMemory initializes, so does SemanticIndexer."""
+        from memory.indexer import SemanticIndexer
+
+        session = GameSession(campaign=_make_campaign())
+        with patch("bot.game_session.OllamaClient"):
+            create_ai_services(session)
+        assert session.semantic_memory is not None
+        assert isinstance(session.semantic_indexer, SemanticIndexer)
+
+    def test_semantic_indexer_none_when_semantic_memory_fails(self) -> None:
+        """When SemanticMemory init raises, indexer is also None."""
+        session = GameSession(campaign=_make_campaign())
+        with patch("bot.game_session.OllamaClient"), patch(
+            "bot.game_session.SemanticMemory", side_effect=RuntimeError("chroma down")
+        ):
+            create_ai_services(session)
+        assert session.semantic_memory is None
+        assert session.semantic_indexer is None
+
 
 class TestGameSessionNpcsQuests:
     """Tests for npcs and quests fields on GameSession."""
