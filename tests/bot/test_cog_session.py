@@ -874,3 +874,180 @@ class TestEndCampaignArcTracker:
 
         # Archive was still called
         mock_archive.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# /story_catch_up — force_next_director_run flag
+# ---------------------------------------------------------------------------
+
+
+class TestStoryCatchUpFlagsSession:
+    """Verify /story_catch_up sets session.force_next_director_run = True."""
+
+    @pytest.mark.asyncio
+    async def test_story_catch_up_sets_force_flag_on_session(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After /story_catch_up succeeds, session.force_next_director_run is True."""
+        import asyncio
+
+        from ai.models import DirectorNote
+        from ai.story_director import StoryDirector
+
+        note = DirectorNote(
+            coherence_issues=[],
+            suggested_hooks=["Inspect the ruin"],
+            priority="low",
+            current_objective="Reach the fortress",
+        )
+
+        mock_director = MagicMock(spec=StoryDirector)
+        mock_director.check_coherence.return_value = note
+
+        session = GameSession(campaign=persisted_campaign)
+        assert session.force_next_director_run is False  # starts False
+        session.semantic_memory = MagicMock()
+        session.story_director = mock_director
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        async def fake_to_thread(fn, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return fn(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+        await cog.story_catch_up.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        # Flag must be set after successful recap
+        assert session.force_next_director_run is True
+
+
+# ---------------------------------------------------------------------------
+# ActionHandlerCog — force_next_director_run consumed by pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestActionHandlerConsumesForceDirectorFlag:
+    """When session.force_next_director_run is True, the next ActionPipeline
+    is constructed with force_director_run=True and the session flag is reset."""
+
+    @pytest.mark.asyncio
+    async def test_force_flag_passed_to_pipeline_and_consumed(self) -> None:
+        """force_next_director_run=True on session → pipeline gets force_director_run=True,
+        then session.force_next_director_run is reset to False."""
+        import asyncio
+        from dataclasses import dataclass, field as dc_field
+        from typing import Any
+        from unittest.mock import AsyncMock, MagicMock
+
+        from bot.action_pipeline import ActionPipelineResult, PipelinePhase
+        from bot.cogs.action_handler import ActionHandlerCog
+        from engine.character import AbilityScores, CharacterClass, Race, create_character
+        from world.campaign import Campaign
+
+        player_id = 42
+        scores = AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10)
+        char = create_character("Hero", Race.HUMAN, CharacterClass.FIGHTER, scores)
+
+        session = MagicMock()
+        session.campaign = Campaign(id="force-test", name="Force Test", player_names=[str(player_id)])
+        session.characters = {player_id: char}
+        session.npcs = {}
+        session.current_location = None
+        session.combat_state = None
+        session.combat_turn_manager = None
+        session.inventories = {}
+        session.language = "fr"
+        session.interpreter = MagicMock()
+        session.narrator = MagicMock()
+        session.action_lock = asyncio.Lock()
+        session.semantic_indexer = None
+        # Key: flag is set to True (as if /story_catch_up was called)
+        session.force_next_director_run = True
+
+        captured_kwargs: list[dict[str, Any]] = []
+
+        # Fake pipeline that captures kwargs and returns a valid result
+        from ai.models import InterpretedAction
+        from engine.validators import ActionType
+
+        action = MagicMock(spec=InterpretedAction)
+        action.action_type = ActionType.TALK
+        fake_result = ActionPipelineResult(
+            narrative="test",
+            tone="dramatic",
+            npc_name=None,
+            npc_dialogue=None,
+            mechanics_text="",
+            interpreted_action=action,
+            new_beat=None,
+        )
+
+        def fake_factory(**kwargs: Any) -> Any:
+            captured_kwargs.append(dict(kwargs))
+            pipeline = MagicMock()
+
+            async def process(player_text: str, progress_callback: Any = None) -> Any:
+                if progress_callback:
+                    await progress_callback(PipelinePhase.DONE)
+                return fake_result
+
+            pipeline.process = process
+            pipeline._pending_combat_start_embed = None
+            return pipeline
+
+        bot = MagicMock()
+        bot.user = MagicMock()
+        bot.user.id = 9999
+        bot.sessions = {100: session}
+        bot.db_factory = MagicMock()
+        # get_cog must return None so combat bootstrap path is skipped
+        bot.get_cog = MagicMock(return_value=None)
+
+        cog = ActionHandlerCog(bot)
+        cog._pipeline_factory = fake_factory  # type: ignore[method-assign]
+
+        @dataclass
+        class FakeAuthor:
+            id: int
+            bot: bool = False
+            display_name: str = "Hero"
+
+        @dataclass
+        class FakeChannel:
+            id: int
+            send: AsyncMock = dc_field(default_factory=AsyncMock)
+
+        @dataclass
+        class FakeMessage:
+            content: str
+            author: Any
+            channel: Any
+            mentions: list[Any] = dc_field(default_factory=list)
+            reply: AsyncMock = dc_field(default_factory=AsyncMock)
+
+        # Patch channel.send to return a message mock for the progress embed
+        channel = FakeChannel(id=100)
+        progress_msg = AsyncMock()
+        progress_msg.edit = AsyncMock()
+        channel.send = AsyncMock(return_value=progress_msg)
+
+        msg = FakeMessage(
+            content="<@9999> je fouille l'autel",
+            author=FakeAuthor(id=player_id),
+            channel=channel,
+            # Use the actual bot.user object so identity check passes (guard #3)
+            mentions=[bot.user],
+        )
+
+        await cog.on_message(msg)  # type: ignore[arg-type]
+
+        # Pipeline was constructed exactly once
+        assert len(captured_kwargs) == 1
+        # force_director_run was forwarded
+        assert captured_kwargs[0]["force_director_run"] is True
+        # Flag was consumed (reset to False)
+        assert session.force_next_director_run is False

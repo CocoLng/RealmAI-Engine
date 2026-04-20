@@ -539,6 +539,8 @@ class SessionCog(commands.Cog):
                 inline=False,
             )
 
+        session.force_next_director_run = True
+
         logger.info(
             "story_catch_up: recap posted campaign=%s objective=%r hooks=%d",
             session.campaign.id, note.current_objective, len(note.suggested_hooks),

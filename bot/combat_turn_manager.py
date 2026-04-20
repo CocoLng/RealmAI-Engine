@@ -792,6 +792,8 @@ class TurnManager:
         inventory = (
             self.session.inventories.get(user_id) if user_id is not None else None
         )
+        force_director = self.session.force_next_director_run
+        self.session.force_next_director_run = False  # consumed
         return self.pipeline_factory(
             interpreter=self.session.interpreter,
             narrator=self.session.narrator,
@@ -813,6 +815,7 @@ class TurnManager:
             # combat survives disconnects cleanly.
             db_factory=self.db_factory,
             semantic_indexer=self.session.semantic_indexer,
+            force_director_run=force_director,
         )
 
     async def _safe_send(

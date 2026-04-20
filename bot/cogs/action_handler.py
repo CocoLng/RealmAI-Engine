@@ -188,6 +188,8 @@ class ActionHandlerCog(commands.Cog):
                 )
 
         # 2. Build the pipeline for this action.
+        force_director = session.force_next_director_run
+        session.force_next_director_run = False  # consumed
         pipeline = self._pipeline_factory(
             interpreter=session.interpreter,
             narrator=session.narrator,
@@ -201,6 +203,7 @@ class ActionHandlerCog(commands.Cog):
             session=session,
             db_factory=self.bot.db_factory,
             semantic_indexer=session.semantic_indexer,
+            force_director_run=force_director,
         )
 
         logger.info(

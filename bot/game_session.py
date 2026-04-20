@@ -94,6 +94,11 @@ class GameSession:
     # Serializes player actions per session: only one pipeline runs at a time.
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
+    force_next_director_run: bool = False
+    """When True, the next ActionPipeline built for this session runs the
+    Story Director unconditionally. Set by /story_catch_up and consumed
+    exactly once by the next action handler call."""
+
     # ------------------------------------------------------------------
     # Lot D — story beat progression
     # ------------------------------------------------------------------
