@@ -46,11 +46,23 @@ class NarrativeResult(BaseModel):
 
 
 class DirectorNote(BaseModel):
-    """Output of the Story Director: coherence analysis and narrative hooks."""
+    """Output of the Story Director: coherence analysis and explicit narrative direction.
+
+    The legacy fields (``coherence_issues``, ``suggested_hooks``, ``priority``) feed
+    the semantic memory layer. The newer "direction" fields feed the Narrator's
+    prompt as an explicit ``[STORY DIRECTION]`` block on the next turn — they
+    tell the narrator what to set up, what to avoid re-revealing, and which
+    NPCs to weave back in.
+    """
 
     coherence_issues: list[str]
     suggested_hooks: list[str]
     priority: Literal["low", "medium", "high"]
+    current_objective: str = ""
+    next_beat_hint: str = ""
+    forbidden_topics: list[str] = Field(default_factory=list)
+    required_mentions: list[str] = Field(default_factory=list)
+    stale_quest_ids: list[str] = Field(default_factory=list)
 
 
 class NPCResponse(BaseModel):

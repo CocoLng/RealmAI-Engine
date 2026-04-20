@@ -167,3 +167,42 @@ def test_npc_sheet_full():
     )
     assert "corrompu" in sheet.secrets[0]
     assert len(sheet.knowledge) == 1
+
+
+class TestDirectorNoteDirection:
+    def test_old_payload_parses_with_defaults(self) -> None:
+        note = DirectorNote(
+            coherence_issues=["NPC contradiction"],
+            suggested_hooks=["Bring back Aldric"],
+            priority="medium",
+        )
+        assert note.current_objective == ""
+        assert note.next_beat_hint == ""
+        assert note.forbidden_topics == []
+        assert note.required_mentions == []
+        assert note.stale_quest_ids == []
+
+    def test_new_payload_carries_direction(self) -> None:
+        note = DirectorNote(
+            coherence_issues=[],
+            suggested_hooks=[],
+            priority="low",
+            current_objective="Retrieve the dungeon map before Vlaxos uses it.",
+            next_beat_hint="Encounter the spy who knows the cellar entrance.",
+            forbidden_topics=["map_hidden_in_cellar"],
+            required_mentions=["Aldric", "Elena"],
+            stale_quest_ids=["quest_42"],
+        )
+        assert note.current_objective.startswith("Retrieve")
+        assert note.required_mentions == ["Aldric", "Elena"]
+
+    def test_direction_fields_serialize_round_trip(self) -> None:
+        note = DirectorNote(
+            coherence_issues=[],
+            suggested_hooks=[],
+            priority="high",
+            current_objective="Stop the ritual.",
+            forbidden_topics=["ritual_target"],
+        )
+        rebuilt = DirectorNote.model_validate(note.model_dump())
+        assert rebuilt == note
