@@ -30,10 +30,19 @@ class InterpretedAction(BaseModel):
 
 
 class NarrativeResult(BaseModel):
-    """Output of the Narrator: immersive narrative description of resolved action."""
+    """Output of the Narrator: immersive narrative description of resolved action.
+
+    The ``narrative`` and ``tone`` fields drive the Discord embed shown to the
+    player. The remaining fields are *meta-telemetry* for the Story Director's
+    drift detector — they are NEVER displayed to the player.
+    """
 
     narrative: str
     tone: Literal["dramatic", "tense", "humorous", "somber"]
+    scene_goal_touched: bool = False
+    beat_advanced: bool = False
+    npcs_mentioned: list[str] = Field(default_factory=list)
+    locked_facts_used: list[str] = Field(default_factory=list)
 
 
 class DirectorNote(BaseModel):

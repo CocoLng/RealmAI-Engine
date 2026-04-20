@@ -12,6 +12,41 @@ from ai.models import (
 from engine.validators import ActionType
 
 
+class TestNarrativeResultMeta:
+    def test_old_payload_parses_with_defaults(self) -> None:
+        """A legacy {narrative, tone} payload still works — meta fields default."""
+        result = NarrativeResult(narrative="The blade flashes.", tone="dramatic")
+        assert result.scene_goal_touched is False
+        assert result.beat_advanced is False
+        assert result.npcs_mentioned == []
+        assert result.locked_facts_used == []
+
+    def test_new_payload_carries_meta(self) -> None:
+        result = NarrativeResult(
+            narrative="The blade flashes as Vlaxos parries.",
+            tone="dramatic",
+            scene_goal_touched=True,
+            beat_advanced=True,
+            npcs_mentioned=["Vlaxos"],
+            locked_facts_used=["map_hidden_in_cellar"],
+        )
+        assert result.scene_goal_touched is True
+        assert result.beat_advanced is True
+        assert result.npcs_mentioned == ["Vlaxos"]
+        assert result.locked_facts_used == ["map_hidden_in_cellar"]
+
+    def test_meta_fields_serialize_round_trip(self) -> None:
+        result = NarrativeResult(
+            narrative="x" * 60,
+            tone="tense",
+            beat_advanced=True,
+            npcs_mentioned=["Aldric"],
+        )
+        dumped = result.model_dump()
+        rebuilt = NarrativeResult.model_validate(dumped)
+        assert rebuilt == result
+
+
 def test_interpreted_action_valid() -> None:
     action = InterpretedAction(
         action_type=ActionType.ATTACK,
