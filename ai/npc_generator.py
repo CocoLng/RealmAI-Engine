@@ -2,10 +2,14 @@
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ai.client import OllamaClient
 from ai.language import language_instruction
 from ai.models import NPCSheet
+
+if TYPE_CHECKING:
+    from memory.indexer import SemanticIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +31,13 @@ class NPCGenerator:
 
     MODEL = "qwen3.5:4b"
 
-    def __init__(self, client: OllamaClient) -> None:
+    def __init__(
+        self,
+        client: OllamaClient,
+        indexer: "SemanticIndexer | None" = None,
+    ) -> None:
         self._client = client
+        self._indexer = indexer
 
     def generate(
         self,
@@ -37,6 +46,7 @@ class NPCGenerator:
         campaign_theme: str,
         language: str = "fr",
         archetype_context: str | None = None,
+        campaign_id: str = "",
     ) -> NPCSheet:
         """Generate a backstory sheet for ``npc_name``.
 
@@ -47,6 +57,9 @@ class NPCGenerator:
             language: ISO 639-1 language code for output.
             archetype_context: Optional archetype info (personality traits,
                 narrative hooks) to produce richer backstories.
+            campaign_id: Campaign identifier forwarded to the SemanticIndexer
+                when one is provided.  Defaults to ``""`` so existing callers
+                that omit it continue to work unchanged.
 
         Returns:
             An :class:`NPCSheet` with personality, description, secrets,
@@ -96,4 +109,8 @@ class NPCGenerator:
             "NPCGEN name=%r secrets=%d knowledge=%d",
             npc_name, len(sheet.secrets), len(sheet.knowledge),
         )
+
+        if self._indexer is not None and campaign_id:
+            self._indexer.index_npc(campaign_id, npc_name, sheet)
+
         return sheet

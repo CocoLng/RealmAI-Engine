@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 
 from ai.models import NPCSheet
 from ai.npc_generator import NPCGenerator
+from ai.client import OllamaClient
 
 
 def test_generate_returns_npc_sheet():
@@ -145,3 +146,69 @@ def test_generate_archetype_fallback_on_empty_secrets():
     assert "Kael" in sheet.secrets[0]
     assert len(sheet.knowledge) == 1
     assert "tour abandonnée" in sheet.knowledge[0]
+
+
+# ---------------------------------------------------------------------------
+# SemanticIndexer integration
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_client() -> MagicMock:
+    """Return a mock OllamaClient that returns a minimal valid NPCSheet payload."""
+    client = MagicMock(spec=OllamaClient)
+    client.chat_json.return_value = {
+        "personality": "Jovial.",
+        "description": "Grand et souriant.",
+        "secrets": ["Connaît le passage secret."],
+        "knowledge": ["Connaît bien la région."],
+    }
+    return client
+
+
+class TestNPCGeneratorIndexing:
+    """Tests that NPCGenerator calls SemanticIndexer when one is provided."""
+
+    def test_npc_generator_invokes_indexer_when_provided(self) -> None:
+        """index_npc is called with campaign_id, npc_name, and the sheet."""
+        from memory.indexer import SemanticIndexer
+
+        indexer = MagicMock(spec=SemanticIndexer)
+        gen = NPCGenerator(_make_mock_client(), indexer=indexer)
+
+        sheet = gen.generate(
+            npc_name="Aldric",
+            location_context="La taverne du port.",
+            campaign_theme="dark fantasy",
+            campaign_id="cmp_test",
+        )
+
+        indexer.index_npc.assert_called_once_with("cmp_test", "Aldric", sheet)
+
+    def test_npc_generator_no_indexer_works_unchanged(self) -> None:
+        """NPCGenerator without indexer kwarg works exactly as before."""
+        gen = NPCGenerator(_make_mock_client())
+
+        sheet = gen.generate(
+            npc_name="Aldric",
+            location_context="La taverne du port.",
+            campaign_theme="dark fantasy",
+        )
+
+        assert isinstance(sheet, NPCSheet)
+        assert sheet is not None
+
+    def test_npc_generator_indexer_not_called_without_campaign_id(self) -> None:
+        """index_npc is NOT called when campaign_id is empty string."""
+        from memory.indexer import SemanticIndexer
+
+        indexer = MagicMock(spec=SemanticIndexer)
+        gen = NPCGenerator(_make_mock_client(), indexer=indexer)
+
+        gen.generate(
+            npc_name="Aldric",
+            location_context="La taverne du port.",
+            campaign_theme="dark fantasy",
+            # campaign_id omitted → defaults to ""
+        )
+
+        indexer.index_npc.assert_not_called()
