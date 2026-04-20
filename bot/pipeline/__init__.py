@@ -10,13 +10,10 @@ from bot.pipeline.orchestrator import (
     ProgressCallback,
     UnknownEntityResult,
 )
-from bot.pipeline.types import PipelineContext, PipelineDeps
 
 __all__ = [
     "ActionPipelineResult",
     "AmbiguityResult",
-    "PipelineContext",
-    "PipelineDeps",
     "PipelineOutput",
     "PipelinePhase",
     "PipelineRunner",
