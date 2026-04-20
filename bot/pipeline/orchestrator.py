@@ -53,11 +53,53 @@ from engine.validators import (
 from world.location import Location
 from world.npc import NPC
 from world.story_arc import BeatEffects, StoryBeat
+from bot.pipeline.drift_tracker import DriftTracker
 
 if TYPE_CHECKING:
     from bot.game_session import GameSession
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Drift tracking + Story Director cadence
+# ---------------------------------------------------------------------------
+
+_DRIFT_TRACKER = DriftTracker()
+
+
+def get_drift_tracker() -> DriftTracker:
+    """Module-level singleton DriftTracker.
+
+    Tests reset state per-campaign via ``tracker.reset(campaign_id)``.
+    """
+    return _DRIFT_TRACKER
+
+
+def should_run_director(
+    *,
+    interaction_count: int,
+    combat_just_ended: bool,
+    drift_detected: bool,
+    force: bool,
+) -> bool:
+    """Decide whether the Story Director should run after this turn.
+
+    Triggers (any one is sufficient):
+    - ``force`` — caller explicitly requested (e.g. ``/story_catch_up``)
+    - ``drift_detected`` — DriftTracker reports a stale narrator
+    - ``combat_just_ended`` — the previous turn ended a combat
+    - ``interaction_count`` is a positive multiple of 6
+    """
+    if force:
+        return True
+    if drift_detected:
+        return True
+    if combat_just_ended:
+        return True
+    if interaction_count > 0 and interaction_count % 6 == 0:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -181,8 +223,11 @@ class PipelineRunner:
     inventory: Inventory | None = None
     session: "GameSession | None" = None
     db_factory: Callable[[], Any] | None = None
+    force_director_run: bool = False
+    """When True, the next pipeline run unconditionally schedules the Story Director."""
 
     _trivial_kill_mechanics: str | None = field(default=None, init=False)
+    _last_combat_active: bool = field(default=False, init=False)
 
     _pending_flee_destination: str | None = field(default=None, init=False)
     """Destination zone stored when MOVE is auto-converted to FLEE in combat.
@@ -544,6 +589,27 @@ class PipelineRunner:
             campaign_id=self.campaign_id,
         )
 
+        # --- Drift tracking + Story Director scheduling ---
+        tracker = get_drift_tracker()
+        tracker.record(self.campaign_id, beat_advanced=narration.beat_advanced)
+
+        combat_active_now = (
+            self.combat_state is not None and self.combat_state.is_active
+        )
+        combat_just_ended = self._last_combat_active and not combat_active_now
+        self._last_combat_active = combat_active_now
+
+        interaction_count = getattr(self.session, "interaction_count", 0) or 0
+
+        if should_run_director(
+            interaction_count=interaction_count,
+            combat_just_ended=combat_just_ended,
+            drift_detected=tracker.is_drifting(self.campaign_id),
+            force=self.force_director_run,
+        ):
+            self.force_director_run = False  # consume the flag
+            self._schedule_story_director(context_prompt=context_prompt)
+
         # Lot D — beat advancement (trigger-based or location-based fallback).
         new_beat: StoryBeat | None = None
         if beat_completed and self.session and self.session.story_arc:
@@ -775,6 +841,36 @@ class PipelineRunner:
                 exc_info=True,
             )
             return {"completed": False, "confidence": 0.0}
+
+    def _schedule_story_director(self, *, context_prompt: str) -> None:
+        """Fire-and-forget Story Director run. Result lands in semantic memory.
+
+        Uses ``self.narrator._client`` (existing pattern in this codebase) for
+        the OllamaClient. The Story Director is sync; we run it via
+        ``asyncio.to_thread`` to avoid blocking the event loop.
+        """
+        from ai.story_director import StoryDirector
+        from memory.semantic import SemanticMemory
+
+        async def _run() -> None:
+            try:
+                semantic = SemanticMemory()
+                director = StoryDirector(self.narrator._client, semantic)
+                await asyncio.to_thread(
+                    director.check_coherence, self.campaign_id, context_prompt,
+                )
+            except Exception:
+                logger.warning(
+                    "Background StoryDirector run failed for campaign=%s",
+                    self.campaign_id, exc_info=True,
+                )
+
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:
+            # No running event loop (e.g. during sync tests). Skip — drift
+            # tracking still works for the next loop turn.
+            logger.debug("No event loop, skipping Story Director schedule")
 
     async def _emit(
         self,

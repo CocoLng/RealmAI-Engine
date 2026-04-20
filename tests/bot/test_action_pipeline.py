@@ -2418,3 +2418,63 @@ class TestAssignInitialZones:
 
         assert pc.current_zone is None
         assert npc.current_zone is None
+
+
+class TestDriftTrackerWiring:
+    """Verify the DriftTracker singleton is wired into PipelineRunner."""
+
+    def test_get_drift_tracker_returns_singleton(self) -> None:
+        from bot.pipeline.orchestrator import get_drift_tracker
+        a = get_drift_tracker()
+        b = get_drift_tracker()
+        assert a is b
+
+    def test_should_run_director_on_force(self) -> None:
+        from bot.pipeline.orchestrator import should_run_director
+        assert should_run_director(
+            interaction_count=1, combat_just_ended=False,
+            drift_detected=False, force=True,
+        ) is True
+
+    def test_should_run_director_on_drift(self) -> None:
+        from bot.pipeline.orchestrator import should_run_director
+        assert should_run_director(
+            interaction_count=1, combat_just_ended=False,
+            drift_detected=True, force=False,
+        ) is True
+
+    def test_should_run_director_on_combat_end(self) -> None:
+        from bot.pipeline.orchestrator import should_run_director
+        assert should_run_director(
+            interaction_count=1, combat_just_ended=True,
+            drift_detected=False, force=False,
+        ) is True
+
+    def test_should_run_director_every_six_actions(self) -> None:
+        from bot.pipeline.orchestrator import should_run_director
+        assert should_run_director(
+            interaction_count=6, combat_just_ended=False,
+            drift_detected=False, force=False,
+        ) is True
+        assert should_run_director(
+            interaction_count=12, combat_just_ended=False,
+            drift_detected=False, force=False,
+        ) is True
+
+    def test_should_run_director_otherwise_false(self) -> None:
+        from bot.pipeline.orchestrator import should_run_director
+        assert should_run_director(
+            interaction_count=5, combat_just_ended=False,
+            drift_detected=False, force=False,
+        ) is False
+        assert should_run_director(
+            interaction_count=0, combat_just_ended=False,
+            drift_detected=False, force=False,
+        ) is False
+
+    def test_pipeline_runner_has_force_director_run_field(self) -> None:
+        """PipelineRunner exposes force_director_run on its dataclass."""
+        from bot.pipeline.orchestrator import PipelineRunner
+        from dataclasses import fields
+        field_names = {f.name for f in fields(PipelineRunner)}
+        assert "force_director_run" in field_names
