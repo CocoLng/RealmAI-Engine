@@ -41,3 +41,17 @@ class CampaignChannelRepository:
         row = self._session.get(CampaignChannelRow, channel_id)
         if row is not None:
             self._session.delete(row)
+
+    def get_arc_tracker_message_id(self, channel_id: int) -> int | None:
+        """Return the pinned Arc Tracker message ID, or None if unset/missing."""
+        row = self._session.get(CampaignChannelRow, channel_id)
+        return row.arc_tracker_message_id if row is not None else None
+
+    def update_arc_tracker_message_id(
+        self, channel_id: int, message_id: int | None,
+    ) -> None:
+        """Set the pinned Arc Tracker message ID. No-op if the row is missing."""
+        row = self._session.get(CampaignChannelRow, channel_id)
+        if row is None:
+            return
+        row.arc_tracker_message_id = message_id

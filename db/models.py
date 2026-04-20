@@ -171,6 +171,9 @@ class CampaignChannelRow(Base):
         unique=True,
     )
     guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    arc_tracker_message_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, default=None,
+    )
 
 
 class StoryArcRow(Base):
