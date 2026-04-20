@@ -686,3 +686,86 @@ def test_generate_arrival_hook_defaults_to_empty(
     )
 
     assert result.arrival_hook == ""
+
+
+# ---------------------------------------------------------------------------
+# SemanticIndexer integration
+# ---------------------------------------------------------------------------
+
+
+class TestWorldGeneratorIndexing:
+    """Tests that WorldGenerator calls SemanticIndexer when one is provided."""
+
+    _MINIMAL_RESPONSE = {
+        "name": "La Taverne du Corbeau",
+        "description": "Une auberge sombre.",
+        "connections": ["Place du marché"],
+        "npcs_present": [],
+        "items_available": [],
+    }
+
+    def test_world_generator_invokes_indexer_when_provided(
+        self,
+        httpx_mock: HTTPXMock,
+        ollama_client: OllamaClient,
+    ) -> None:
+        """index_location is called when indexer + campaign_id are provided."""
+        from unittest.mock import MagicMock
+
+        from memory.indexer import SemanticIndexer
+
+        indexer = MagicMock(spec=SemanticIndexer)
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(self._MINIMAL_RESPONSE),
+        )
+
+        gen = WorldGenerator(ollama_client, indexer=indexer)
+        location = gen.generate(
+            campaign_context="Un village médiéval.",
+            location_type="tavern",
+            campaign_id="cmp_test",
+        )
+
+        indexer.index_location.assert_called_once_with("cmp_test", location)
+
+    def test_world_generator_no_indexer_works_unchanged(
+        self,
+        httpx_mock: HTTPXMock,
+        ollama_client: OllamaClient,
+    ) -> None:
+        """WorldGenerator without indexer kwarg works exactly as before."""
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(self._MINIMAL_RESPONSE),
+        )
+
+        gen = WorldGenerator(ollama_client)
+        location = gen.generate(
+            campaign_context="Un village médiéval.",
+            location_type="tavern",
+        )
+
+        assert location.name == "La Taverne du Corbeau"
+
+    def test_world_generator_indexer_not_called_without_campaign_id(
+        self,
+        httpx_mock: HTTPXMock,
+        ollama_client: OllamaClient,
+    ) -> None:
+        """index_location is NOT called when campaign_id is empty string."""
+        from unittest.mock import MagicMock
+
+        from memory.indexer import SemanticIndexer
+
+        indexer = MagicMock(spec=SemanticIndexer)
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(self._MINIMAL_RESPONSE),
+        )
+
+        gen = WorldGenerator(ollama_client, indexer=indexer)
+        gen.generate(
+            campaign_context="Un village médiéval.",
+            location_type="tavern",
+            # campaign_id omitted → defaults to ""
+        )
+
+        indexer.index_location.assert_not_called()

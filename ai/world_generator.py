@@ -2,6 +2,7 @@
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -10,6 +11,9 @@ from ai.language import language_instruction
 from world.combat_trigger_def import CombatTriggerDef
 from world.combat_zone import Zone
 from world.location import Location
+
+if TYPE_CHECKING:
+    from memory.indexer import SemanticIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +32,13 @@ class WorldGenerator:
 
     MODEL = "qwen3.5:9b"
 
-    def __init__(self, client: OllamaClient) -> None:
+    def __init__(
+        self,
+        client: OllamaClient,
+        indexer: "SemanticIndexer | None" = None,
+    ) -> None:
         self._client = client
+        self._indexer = indexer
 
     def generate(
         self,
@@ -42,6 +51,7 @@ class WorldGenerator:
         beat_context: str | None = None,
         npc_count_hint: int | None = None,
         required_connections: list[str] | None = None,
+        campaign_id: str = "",
     ) -> Location:
         """Generate a new location for the campaign.
 
@@ -61,6 +71,9 @@ class WorldGenerator:
             required_connections: Names that MUST appear verbatim in the
                 output ``connections`` list — used to guarantee bidirectional
                 links when hydrating a stub back toward its parent location.
+            campaign_id: Campaign identifier forwarded to the SemanticIndexer
+                when one is provided.  Defaults to ``""`` so existing callers
+                that omit it continue to work unchanged.
 
         Returns:
             A Location ready to be saved.
@@ -221,6 +234,10 @@ class WorldGenerator:
             len(location.connections), len(location.exit_aliases),
             len(location.combat_zones), len(location.combat_triggers),
         )
+
+        if self._indexer is not None and campaign_id:
+            self._indexer.index_location(campaign_id, location)
+
         return location
 
     def _build_user_message(
