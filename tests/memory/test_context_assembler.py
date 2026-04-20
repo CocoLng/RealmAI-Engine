@@ -195,3 +195,51 @@ class TestContextAssembler:
         result = assembler.assemble(sample_campaign.id, "forest dangers")
 
         assert estimate_tokens(result) <= 250
+
+
+class TestRagQueryUsesRollingWindow:
+    """The RAG query must include the last 2-3 narrative exchanges, not just the current input."""
+
+    def test_build_rag_query_combines_recent_window_and_current_input(self) -> None:
+        """The static helper directly produces the combined query string."""
+        recent = [
+            NarrativeExchange(
+                campaign_id="cmp_1",
+                role=ExchangeRole.PLAYER,
+                content="Je fouille la pièce.",
+                interaction_number=1,
+            ),
+            NarrativeExchange(
+                campaign_id="cmp_1",
+                role=ExchangeRole.NARRATOR,
+                content="Tu trouves un coffre verrouillé sous le lit.",
+                interaction_number=2,
+            ),
+        ]
+        query = ContextAssembler._build_rag_query("Je crochette le coffre.", recent)
+        assert "Je fouille" in query
+        assert "coffre verrouillé" in query
+        assert "crochette" in query
+
+    def test_build_rag_query_with_empty_window_uses_only_input(self) -> None:
+        query = ContextAssembler._build_rag_query("Quelque chose.", [])
+        assert "Quelque chose." in query
+
+    def test_build_rag_query_uses_last_three_exchanges_only(self) -> None:
+        many = [
+            NarrativeExchange(
+                campaign_id="cmp_1",
+                role=ExchangeRole.PLAYER,
+                content=f"Exchange number {i}",
+                interaction_number=i,
+            )
+            for i in range(10)
+        ]
+        query = ContextAssembler._build_rag_query("current", many)
+        # Last 3 should be present
+        assert "Exchange number 7" in query
+        assert "Exchange number 8" in query
+        assert "Exchange number 9" in query
+        # Earlier should NOT
+        assert "Exchange number 0" not in query
+        assert "Exchange number 6" not in query

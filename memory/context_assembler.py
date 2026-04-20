@@ -73,7 +73,8 @@ class ContextAssembler:
             summaries, self._budget.layer3_max,
         )
 
-        relevant_docs = self._semantic.query(campaign_id, player_input)
+        rag_query = self._build_rag_query(player_input, window)
+        relevant_docs = self._semantic.query(campaign_id, rag_query)
         layer4_text = self._semantic.render(
             relevant_docs, self._budget.layer4_max,
         )
@@ -90,6 +91,19 @@ class ContextAssembler:
         return self._assemble_prompt(
             layer1_text, layer2_text, layer3_text, layer4_text,
         )
+
+    @staticmethod
+    def _build_rag_query(
+        player_input: str,
+        recent_exchanges: list["NarrativeExchange"],
+    ) -> str:
+        """Combine the current input with the last 3 narrative exchange snippets.
+
+        Truncates each exchange's content to ~120 characters so the query
+        remains short and focused on the freshest signal.
+        """
+        snippets = [ex.content[:120] for ex in recent_exchanges[-3:]]
+        return "\n".join(snippets + [player_input])
 
     def record_exchange(
         self,
