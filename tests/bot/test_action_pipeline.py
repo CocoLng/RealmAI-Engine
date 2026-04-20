@@ -84,6 +84,7 @@ class FakeNarrator:
         player_intent: str = "",
         outcome_facts: str = "",
         has_npc_dialogue: bool = False,
+        director_note: Any = None,
     ) -> NarrativeResult:
         self.calls.append(
             {
@@ -93,6 +94,7 @@ class FakeNarrator:
                 "player_intent": player_intent,
                 "outcome_facts": outcome_facts,
                 "has_npc_dialogue": has_npc_dialogue,
+                "director_note": director_note,
             },
         )
         if self.side_effect is not None:

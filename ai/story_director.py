@@ -14,6 +14,27 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system_story_director.txt").read_text()
 _BRAINSTORM_PROMPT = (Path(__file__).parent / "prompts" / "brainstorm_story_check.txt").read_text()
 
+# ---------------------------------------------------------------------------
+# Module-level note cache — populated after every check_coherence() call
+# ---------------------------------------------------------------------------
+
+_LATEST_NOTES: dict[str, DirectorNote] = {}
+
+
+def cached_note_for(campaign_id: str) -> DirectorNote | None:
+    """Most recent DirectorNote for ``campaign_id``, if any."""
+    return _LATEST_NOTES.get(campaign_id)
+
+
+def _store_latest_note(campaign_id: str, note: DirectorNote) -> None:
+    """Store the latest DirectorNote for ``campaign_id``."""
+    _LATEST_NOTES[campaign_id] = note
+
+
+def reset_latest_notes() -> None:
+    """Test helper — clear the cache."""
+    _LATEST_NOTES.clear()
+
 
 class StoryDirector:
     """Checks narrative coherence and stores hooks in semantic memory.
@@ -93,6 +114,7 @@ class StoryDirector:
             len(note.suggested_hooks), note.priority,
         )
         self._store_in_memory(campaign_id, note)
+        _store_latest_note(campaign_id, note)
         return note
 
     def _brainstorm(self, context_prompt: str) -> str | None:

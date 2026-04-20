@@ -311,3 +311,118 @@ class TestNarratorMetaParsing:
         assert result.beat_advanced is False
         assert result.npcs_mentioned == []
         assert result.locked_facts_used == []
+
+
+class TestNarratorDirectionInjection:
+    """Verify the [STORY DIRECTION] block is injected when a DirectorNote is provided."""
+
+    def test_call_narrator_with_director_note_injects_direction_block(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        from ai.models import DirectorNote
+        captured: list[dict] = []
+
+        def fake_chat_json(model, messages, *args, **kwargs):
+            captured.append(messages[-1])  # user message
+            return {
+                "narrative": "A long enough narrative that exceeds fifty characters easily for the test.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+
+        note = DirectorNote(
+            coherence_issues=[],
+            suggested_hooks=[],
+            priority="low",
+            current_objective="Find the map.",
+            next_beat_hint="Spy at the well.",
+            required_mentions=["Aldric"],
+            forbidden_topics=["map_in_cellar"],
+        )
+
+        narrator.narrate(
+            action_result_text="Player searches.",
+            context_prompt="Context.",
+            director_note=note,
+        )
+
+        user_content = captured[0]["content"]
+        assert "[STORY DIRECTION]" in user_content
+        assert "Find the map." in user_content
+        assert "Spy at the well." in user_content
+        assert "Aldric" in user_content
+        assert "map_in_cellar" in user_content
+
+    def test_call_narrator_without_director_note_no_direction_block(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        captured: list[dict] = []
+
+        def fake_chat_json(model, messages, *args, **kwargs):
+            captured.append(messages[-1])
+            return {
+                "narrative": "A long enough narrative that exceeds fifty characters easily for the test.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        narrator.narrate(
+            action_result_text="Player searches.",
+            context_prompt="Context.",
+        )
+
+        user_content = captured[0]["content"]
+        assert "[STORY DIRECTION]" not in user_content
+
+    def test_empty_director_note_skips_direction_block(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """A DirectorNote with all empty direction fields should not inject the block."""
+        from ai.models import DirectorNote
+        captured: list[dict] = []
+
+        def fake_chat_json(model, messages, *args, **kwargs):
+            captured.append(messages[-1])
+            return {
+                "narrative": "A long enough narrative that exceeds fifty characters easily for the test.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+
+        empty_note = DirectorNote(
+            coherence_issues=[],
+            suggested_hooks=[],
+            priority="low",
+        )
+        narrator.narrate(
+            action_result_text="Player searches.",
+            context_prompt="Context.",
+            director_note=empty_note,
+        )
+
+        user_content = captured[0]["content"]
+        assert "[STORY DIRECTION]" not in user_content
+
+
+class TestStoryDirectorCache:
+    """Verify the latest-note cache works end-to-end."""
+
+    def test_cached_note_for_returns_none_initially(self) -> None:
+        from ai.story_director import cached_note_for, reset_latest_notes
+        reset_latest_notes()
+        assert cached_note_for("cmp_unknown") is None
+
+    def test_cached_note_for_returns_stored_note(self) -> None:
+        from ai.models import DirectorNote
+        from ai.story_director import cached_note_for, reset_latest_notes, _store_latest_note
+        reset_latest_notes()
+        note = DirectorNote(
+            coherence_issues=[], suggested_hooks=[], priority="low",
+            current_objective="Test objective",
+        )
+        _store_latest_note("cmp_test", note)
+        retrieved = cached_note_for("cmp_test")
+        assert retrieved is not None
+        assert retrieved.current_objective == "Test objective"

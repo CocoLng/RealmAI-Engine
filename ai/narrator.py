@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ai.client import LLMParseError, OllamaClient, OllamaUnavailableError
 from ai.language import language_instruction
-from ai.models import NarrativeResult
+from ai.models import DirectorNote, NarrativeResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class Narrator:
         player_intent: str = "",
         outcome_facts: str = "",
         has_npc_dialogue: bool = False,
+        director_note: DirectorNote | None = None,
     ) -> NarrativeResult:
         """Generate an immersive narrative description of a resolved action.
 
@@ -52,6 +53,7 @@ class Narrator:
                 outcome_facts=outcome_facts,
                 has_npc_dialogue=has_npc_dialogue,
                 simplified=False,
+                director_note=director_note,
             )
             if len(result.narrative) >= 50:
                 return result
@@ -72,6 +74,7 @@ class Narrator:
                 outcome_facts="",
                 has_npc_dialogue=False,
                 simplified=True,
+                director_note=director_note,
             )
             if len(result.narrative) >= 50:
                 return result
@@ -95,6 +98,7 @@ class Narrator:
         outcome_facts: str,
         has_npc_dialogue: bool,
         simplified: bool,
+        director_note: DirectorNote | None = None,
     ) -> NarrativeResult:
         """Issue one LLM call and parse the response. May raise.
 
@@ -102,7 +106,15 @@ class Narrator:
         useful when the primary call failed and we suspect the prompt may
         have confused the model.
         """
-        sections: list[str] = [context_prompt, f"## What happened\n{action_result_text}"]
+        sections: list[str] = []
+        if director_note is not None and (
+            director_note.current_objective
+            or director_note.next_beat_hint
+            or director_note.required_mentions
+            or director_note.forbidden_topics
+        ):
+            sections.append(self._format_direction_block(director_note))
+        sections.extend([context_prompt, f"## What happened\n{action_result_text}"])
         if not simplified:
             if player_intent:
                 sections.append(f"## Player framing\n{player_intent}")
@@ -134,6 +146,20 @@ class Narrator:
         logger.info("NARRATE tone=%s output=%r", result.tone, result.narrative[:200])
         logger.debug("NARRATE full_output=%s", result.narrative)
         return result
+
+    @staticmethod
+    def _format_direction_block(note: DirectorNote) -> str:
+        """Format the Story Director's direction fields into a prompt block."""
+        lines = ["[STORY DIRECTION]"]
+        if note.current_objective:
+            lines.append(f"Current objective: {note.current_objective}")
+        if note.next_beat_hint:
+            lines.append(f"Next beat hint: {note.next_beat_hint}")
+        if note.required_mentions:
+            lines.append("Re-mention if natural: " + ", ".join(note.required_mentions))
+        if note.forbidden_topics:
+            lines.append("Do NOT re-reveal: " + ", ".join(note.forbidden_topics))
+        return "\n".join(lines)
 
     _TEMPLATES: dict[str, list[str]] = {
         "attack": [

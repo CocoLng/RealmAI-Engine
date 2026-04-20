@@ -18,6 +18,7 @@ from engine.validators import ValidationResult
 from world.location import Location
 
 if TYPE_CHECKING:
+    from ai.models import DirectorNote
     from ai.narrator import Narrator
     from bot.game_session import GameSession
     from engine.combat import CombatState
@@ -95,6 +96,7 @@ async def call_narrator(
     language: str,
     campaign_id: str,
     has_npc_dialogue: bool = False,
+    director_note: "DirectorNote | None" = None,
 ) -> NarrativeResult:
     """Call the Narrator LLM with retry logic and return the narrative result."""
     def _do() -> NarrativeResult:
@@ -105,6 +107,7 @@ async def call_narrator(
             player_intent=outcome.player_intent,
             outcome_facts=outcome.outcome_facts,
             has_npc_dialogue=bool(outcome.npc_dialogue),
+            director_note=director_note,
         )
 
     return await retry_llm_call(

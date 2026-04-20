@@ -581,12 +581,15 @@ class PipelineRunner:
         )
 
         await self._emit(progress_callback, PipelinePhase.NARRATING)
+        from ai.story_director import cached_note_for
+        director_note = cached_note_for(self.campaign_id)
         narration = await narrate.call_narrator(
             narrator=self.narrator,
             outcome=outcome,
             context_prompt=context_prompt,
             language=self.language,
             campaign_id=self.campaign_id,
+            director_note=director_note,
         )
 
         # --- Drift tracking + Story Director scheduling ---
