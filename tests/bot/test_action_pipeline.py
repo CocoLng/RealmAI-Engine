@@ -2480,3 +2480,58 @@ class TestDriftTrackerWiring:
         from dataclasses import fields
         field_names = {f.name for f in fields(PipelineRunner)}
         assert "force_director_run" in field_names
+
+
+class TestBeatCompletionIndexing:
+    """Verify the SemanticIndexer is called when beats complete."""
+
+    def test_apply_beat_effects_indexes_narrative_hint(self) -> None:
+        """When a runner has an indexer, beat completion indexes the narrative_hint."""
+        from unittest.mock import MagicMock
+        from bot.pipeline.orchestrator import PipelineRunner
+        from memory.indexer import SemanticIndexer
+        from world.story_arc import BeatEffects
+
+        # Build a minimal runner with mocked deps + an indexer.
+        # The runner must have campaign_id set for the indexing call.
+        indexer = MagicMock(spec=SemanticIndexer)
+        runner = PipelineRunner(
+            interpreter=MagicMock(),
+            narrator=MagicMock(),
+            location=None,
+            npcs={},
+            actor_name="Tester",
+            campaign_id="cmp_test",
+            semantic_indexer=indexer,
+        )
+        effects = BeatEffects(
+            narrative_hint="A breach opens in the wall.",
+            state_flags={"breach_open": True},
+        )
+        runner._apply_beat_effects(effects)
+
+        # narrative_hint indexed:
+        indexer.index_revealed_fact.assert_any_call(
+            "cmp_test", fact="A breach opens in the wall.",
+        )
+
+    def test_apply_beat_effects_no_indexer_works_unchanged(self) -> None:
+        """When no indexer is provided, _apply_beat_effects must not raise."""
+        from unittest.mock import MagicMock
+        from bot.pipeline.orchestrator import PipelineRunner
+        from world.story_arc import BeatEffects
+
+        runner = PipelineRunner(
+            interpreter=MagicMock(),
+            narrator=MagicMock(),
+            location=None,
+            npcs={},
+            actor_name="Tester",
+            campaign_id="cmp_test",
+        )
+        # No semantic_indexer.
+        effects = BeatEffects(
+            narrative_hint="A breach opens.", state_flags={"breach_open": True},
+        )
+        # Must not raise.
+        runner._apply_beat_effects(effects)

@@ -225,6 +225,8 @@ class PipelineRunner:
     db_factory: Callable[[], Any] | None = None
     force_director_run: bool = False
     """When True, the next pipeline run unconditionally schedules the Story Director."""
+    semantic_indexer: Any = None
+    """Optional SemanticIndexer — when set, beat completion indexes revealed facts."""
 
     _trivial_kill_mechanics: str | None = field(default=None, init=False)
     _last_combat_active: bool = field(default=False, init=False)
@@ -779,6 +781,19 @@ class PipelineRunner:
 
         Returns a narrative hint string for the narrator.
         """
+        # Index revealed facts regardless of whether a location exists.
+        if self.semantic_indexer is not None and self.campaign_id:
+            if effects.narrative_hint:
+                self.semantic_indexer.index_revealed_fact(
+                    self.campaign_id, fact=effects.narrative_hint,
+                )
+            for flag, value in effects.state_flags.items():
+                if value:
+                    self.semantic_indexer.index_revealed_fact(
+                        self.campaign_id,
+                        fact=f"State flag set: {flag}",
+                    )
+
         loc = self.location
         if loc is None:
             return effects.narrative_hint

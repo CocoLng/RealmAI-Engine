@@ -78,6 +78,7 @@ class ActionPipeline:
         inventory: "Inventory | None" = None,
         session: "GameSession | None" = None,
         db_factory: "Callable[[], Any] | None" = None,
+        semantic_indexer: Any = None,
     ) -> None:
         self._runner = PipelineRunner(
             interpreter=interpreter,
@@ -91,6 +92,7 @@ class ActionPipeline:
             inventory=inventory,
             session=session,
             db_factory=db_factory,
+            semantic_indexer=semantic_indexer,
         )
 
     def _sync_overrides_to_runner(self) -> None:
