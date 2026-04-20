@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -414,6 +415,74 @@ class SessionCog(commands.Cog):
             await interaction.response.send_message(
                 f"Mis a jour: {', '.join(parts)}", ephemeral=True,
             )
+
+    # ------------------------------------------------------------------
+    # /story_catch_up
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="story_catch_up",
+        description="Le MJ recadre la scene — recap de l'objectif actuel et des prochaines pistes.",
+    )
+    async def story_catch_up(self, interaction: discord.Interaction) -> None:
+        """Run the Story Director immediately and post a recap embed."""
+        await interaction.response.defer(thinking=True)
+
+        channel_id = interaction.channel_id
+        session = self.bot.get_session(channel_id) if channel_id else None
+        if session is None:
+            await interaction.followup.send(
+                "Aucune campagne active dans ce canal. Lance `/start_campaign` ou `/resume`.",
+                ephemeral=True,
+            )
+            return
+
+        if session.semantic_memory is None or session.story_director is None:
+            await interaction.followup.send(
+                "Le MJ n'a pas de memoire active pour cette campagne.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            note = await asyncio.to_thread(
+                session.story_director.check_coherence,
+                session.campaign.id,
+                "(catch-up request)",
+            )
+        except Exception:
+            logger.exception(
+                "story_catch_up: director failed campaign=%s", session.campaign.id,
+            )
+            await interaction.followup.send(
+                "Le MJ n'a pas pu rassembler ses idees. Reessaie dans un instant.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="Le MJ recadre la scene",
+            description=note.current_objective or "Aucun objectif clair pour l'instant.",
+            color=discord.Color.gold(),
+        )
+        if note.suggested_hooks:
+            embed.add_field(
+                name="Pistes possibles",
+                value="\n".join(f"• {h}" for h in note.suggested_hooks[:3]),
+                inline=False,
+            )
+        if note.next_beat_hint:
+            embed.add_field(
+                name="Prochaine direction",
+                value=note.next_beat_hint,
+                inline=False,
+            )
+
+        logger.info(
+            "story_catch_up: recap posted campaign=%s objective=%r hooks=%d",
+            session.campaign.id, note.current_objective, len(note.suggested_hooks),
+        )
+        await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------------
     # Internal helpers

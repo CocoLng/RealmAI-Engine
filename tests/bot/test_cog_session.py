@@ -609,3 +609,84 @@ class TestPersistSessionRoundTrip:
 
         assert restored is not None
         assert restored.combat_state_json is None
+
+
+# ---------------------------------------------------------------------------
+# /story_catch_up
+# ---------------------------------------------------------------------------
+
+
+class TestStoryCatchUpCommand:
+    """Tests for the /story_catch_up slash command."""
+
+    @pytest.mark.asyncio
+    async def test_no_active_session_returns_error(
+        self, cog: SessionCog, interaction: AsyncMock,
+    ) -> None:
+        """When no session exists for the channel, posts an ephemeral error."""
+        # No session registered for CHANNEL_ID
+        await cog.story_catch_up.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        interaction.response.defer.assert_called_once()
+        interaction.followup.send.assert_called_once()
+        call_kwargs = interaction.followup.send.call_args[1]
+        assert call_kwargs.get("ephemeral") is True
+        call_text = interaction.followup.send.call_args[0][0]
+        assert "Aucune campagne active" in call_text
+
+    @pytest.mark.asyncio
+    async def test_active_session_runs_director_and_posts_recap(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When a session exists, runs StoryDirector and posts a recap embed."""
+        from ai.models import DirectorNote
+        from ai.story_director import StoryDirector
+
+        note = DirectorNote(
+            coherence_issues=[],
+            suggested_hooks=["Visit the elder", "Search the wagon", "Follow the stranger"],
+            priority="low",
+            current_objective="Find the ancient map",
+            next_beat_hint="Head north",
+        )
+
+        mock_director = MagicMock(spec=StoryDirector)
+        mock_director.check_coherence.return_value = note
+
+        session = GameSession(campaign=persisted_campaign)
+        session.semantic_memory = MagicMock()
+        session.story_director = mock_director
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        # Patch asyncio.to_thread so it just calls check_coherence synchronously
+        import asyncio
+
+        async def fake_to_thread(fn, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return fn(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+        await cog.story_catch_up.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        interaction.response.defer.assert_called_once()
+        interaction.followup.send.assert_called_once()
+        # Should post an embed (not ephemeral)
+        call_kwargs = interaction.followup.send.call_args[1]
+        assert call_kwargs.get("ephemeral") is not True
+        embed = call_kwargs.get("embed")
+        assert embed is not None
+        # Embed description contains the objective
+        assert "Find the ancient map" in embed.description
+        # Embed fields contain the hooks
+        field_values = " ".join(f.value for f in embed.fields)
+        assert "Visit the elder" in field_values
+        assert "Search the wagon" in field_values
+        assert "Follow the stranger" in field_values
+        # Director was called with campaign_id
+        mock_director.check_coherence.assert_called_once_with(
+            persisted_campaign.id, "(catch-up request)"
+        )
