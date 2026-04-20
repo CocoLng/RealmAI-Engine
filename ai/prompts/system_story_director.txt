@@ -8,10 +8,25 @@ Return JSON only:
 {
   "coherence_issues": ["<issue 1>", "<issue 2>"],
   "suggested_hooks": ["<hook 1>", "<hook 2>"],
-  "priority": "<low|medium|high>"
+  "priority": "<low|medium|high>",
+  "current_objective": "Short sentence describing what the players are pursuing right now",
+  "next_beat_hint": "What the next narration should set up (a clue, an NPC, a complication)",
+  "forbidden_topics": ["List of facts the narrator must NOT re-reveal (already known)"],
+  "required_mentions": ["NPCs or items the next narration should weave back in"],
+  "stale_quest_ids": ["IDs of quests that have been ignored too long"]
 }
 
 - coherence_issues: list of specific narrative problems (empty list if none)
 - suggested_hooks: list of concrete story opportunities (at least 1)
 - priority: "high" if there are critical contradictions, "medium" for minor issues, "low" if story is coherent
 - Return valid JSON only
+
+Direction fields (fed back into the next Narrator prompt):
+
+- "current_objective": "Short sentence describing what the players are pursuing right now"
+- "next_beat_hint": "What the next narration should set up (a clue, an NPC, a complication)"
+- "forbidden_topics": ["List of facts the narrator must NOT re-reveal (already known)"]
+- "required_mentions": ["NPCs or items the next narration should weave back in"]
+- "stale_quest_ids": ["IDs of quests that have been ignored too long"]
+
+These direction fields are NOT shown to the player — they steer the narrator on the next turn.

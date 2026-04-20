@@ -141,3 +141,63 @@ def test_check_coherence_falls_back_on_brainstorm_failure(
 
     assert isinstance(result, DirectorNote)
     assert result.priority == "low"
+
+
+class TestStoryDirectorDirection:
+    def test_check_coherence_parses_direction_fields(
+        self,
+        httpx_mock: HTTPXMock,
+        director: StoryDirector,
+    ) -> None:
+        """check_coherence() parses and returns all direction fields from the LLM."""
+        brainstorm_response = {"options": []}
+        generate_response = {
+            "coherence_issues": [],
+            "suggested_hooks": ["Bring back Elena."],
+            "priority": "medium",
+            "current_objective": "Retrieve the dungeon map.",
+            "next_beat_hint": "Encounter the spy at the well.",
+            "forbidden_topics": ["map_in_cellar"],
+            "required_mentions": ["Elena"],
+            "stale_quest_ids": [],
+        }
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(brainstorm_response))
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(generate_response))
+
+        note = director.check_coherence(
+            campaign_id="cmp_1",
+            context_prompt="## Game State\nLast scene: the players reached the tavern.",
+        )
+
+        assert isinstance(note, DirectorNote)
+        assert note.current_objective == "Retrieve the dungeon map."
+        assert note.next_beat_hint == "Encounter the spy at the well."
+        assert note.forbidden_topics == ["map_in_cellar"]
+        assert note.required_mentions == ["Elena"]
+        assert note.stale_quest_ids == []
+
+    def test_check_coherence_direction_fields_default_when_absent(
+        self,
+        httpx_mock: HTTPXMock,
+        director: StoryDirector,
+    ) -> None:
+        """check_coherence() defaults direction fields when LLM omits them."""
+        brainstorm_response = {"options": []}
+        generate_response = {
+            "coherence_issues": [],
+            "suggested_hooks": ["Old legend about the forest"],
+            "priority": "low",
+        }
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(brainstorm_response))
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(generate_response))
+
+        note = director.check_coherence(
+            campaign_id="cmp_2",
+            context_prompt="Everything is fine.",
+        )
+
+        assert note.current_objective == ""
+        assert note.next_beat_hint == ""
+        assert note.forbidden_topics == []
+        assert note.required_mentions == []
+        assert note.stale_quest_ids == []

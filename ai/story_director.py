@@ -80,6 +80,11 @@ class StoryDirector:
             coherence_issues=data.get("coherence_issues", []),
             suggested_hooks=unique_hooks,
             priority=data.get("priority", "low"),
+            current_objective=str(data.get("current_objective", "")),
+            next_beat_hint=str(data.get("next_beat_hint", "")),
+            forbidden_topics=list(data.get("forbidden_topics") or []),
+            required_mentions=list(data.get("required_mentions") or []),
+            stale_quest_ids=list(data.get("stale_quest_ids") or []),
         )
 
         logger.info(
