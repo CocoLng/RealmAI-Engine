@@ -126,6 +126,10 @@ class Narrator:
         result = NarrativeResult(
             narrative=str(data.get("narrative", "")),
             tone=data.get("tone", "dramatic"),  # type: ignore[arg-type]
+            scene_goal_touched=bool(data.get("scene_goal_touched", False)),
+            beat_advanced=bool(data.get("beat_advanced", False)),
+            npcs_mentioned=list(data.get("npcs_mentioned") or []),
+            locked_facts_used=list(data.get("locked_facts_used") or []),
         )
         logger.info("NARRATE tone=%s output=%r", result.tone, result.narrative[:200])
         logger.debug("NARRATE full_output=%s", result.narrative)

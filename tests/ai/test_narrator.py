@@ -268,3 +268,46 @@ class TestNarratorFallbackChain:
         )
         assert call_count["n"] == 1  # Only the primary call
         assert "perfectly valid first-call narrative" in result.narrative
+
+
+class TestNarratorMetaParsing:
+    """Narrator parses meta fields when LLM emits them, falls back to defaults otherwise."""
+
+    def test_narrate_parses_meta_fields(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        def fake_chat_json(*args, **kwargs):
+            return {
+                "narrative": "Vlaxos parries with a snarl, pushing you back toward the cellar door.",
+                "tone": "tense",
+                "scene_goal_touched": True,
+                "beat_advanced": True,
+                "npcs_mentioned": ["Vlaxos"],
+                "locked_facts_used": ["map_hidden_in_cellar"],
+            }
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Player attacks Vlaxos. Hit, 8 damage.",
+            context_prompt="Context.",
+        )
+        assert result.scene_goal_touched is True
+        assert result.beat_advanced is True
+        assert result.npcs_mentioned == ["Vlaxos"]
+        assert result.locked_facts_used == ["map_hidden_in_cellar"]
+
+    def test_narrate_defaults_meta_fields_when_llm_omits(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        def fake_chat_json(*args, **kwargs):
+            return {
+                "narrative": "A long enough narrative that exceeds fifty characters with ease.",
+                "tone": "dramatic",
+            }
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Action.", context_prompt="Context.",
+        )
+        assert result.scene_goal_touched is False
+        assert result.beat_advanced is False
+        assert result.npcs_mentioned == []
+        assert result.locked_facts_used == []
