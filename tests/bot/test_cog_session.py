@@ -150,10 +150,13 @@ class TestStartCampaign:
         db_session: Session,
     ) -> None:
         # Simulate channel creation returning a mock channel
+        mock_msg = AsyncMock()
+        mock_msg.id = 555666777  # integer so Arc Tracker DB write succeeds
+        mock_msg.pin = AsyncMock()
         mock_channel = AsyncMock()
         mock_channel.id = 999000
         mock_channel.mention = "#campagne-foret-sombre"
-        mock_channel.send = AsyncMock()
+        mock_channel.send = AsyncMock(return_value=mock_msg)
         mock_create_channel.return_value = mock_channel
 
         await cog.start_campaign.callback(cog, interaction, "Foret sombre", f"<@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
@@ -162,8 +165,8 @@ class TestStartCampaign:
         interaction.response.defer.assert_called_once()
         # Channel was created
         mock_create_channel.assert_called_once()
-        # Welcome embed sent in new channel
-        mock_channel.send.assert_called_once()
+        # At least one message sent in new channel (welcome + arc tracker)
+        assert mock_channel.send.call_count >= 1
         # Launcher stored in bot (session is created later, after onboarding)
         assert 999000 in cog.bot.launchers
         launcher = cog.bot.launchers[999000]
@@ -208,9 +211,12 @@ class TestStartCampaign:
         interaction: AsyncMock,
     ) -> None:
         """If invoker already in the mention list, don't add twice."""
+        mock_msg2 = AsyncMock()
+        mock_msg2.id = 100200300
+        mock_msg2.pin = AsyncMock()
         mock_channel = AsyncMock()
         mock_channel.id = 999001
-        mock_channel.send = AsyncMock()
+        mock_channel.send = AsyncMock(return_value=mock_msg2)
         mock_channel.mention = "#test"
         mock_create_channel.return_value = mock_channel
 
@@ -690,3 +696,181 @@ class TestStoryCatchUpCommand:
         mock_director.check_coherence.assert_called_once_with(
             persisted_campaign.id, "(catch-up request)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Arc Tracker lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestCampaignChannelArcStore:
+    """Unit tests for _CampaignChannelArcStore — the store adapter."""
+
+    def test_get_message_id_returns_none_when_no_row(self, db_session: Session) -> None:
+        """get_message_id returns None when no mapping exists for the channel."""
+        from bot.cogs.session import _CampaignChannelArcStore
+
+        store = _CampaignChannelArcStore(lambda: db_session)
+        assert store.get_message_id(99999) is None
+
+    def test_get_and_set_message_id_roundtrip(self) -> None:
+        """set_message_id persists; get_message_id reads it back via a real factory."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from bot.cogs.session import _CampaignChannelArcStore
+        from db.database import Base
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        factory = sessionmaker(bind=engine)
+
+        # Seed a channel row so update_arc_tracker_message_id has a row to mutate
+        seed_session = factory()
+        CampaignChannelRepository(seed_session).save(CHANNEL_ID, "arc-rt-camp", GUILD_ID)
+        seed_session.commit()
+        seed_session.close()
+
+        store = _CampaignChannelArcStore(factory)
+
+        # Initially None
+        assert store.get_message_id(CHANNEL_ID) is None
+        # Set a value
+        store.set_message_id(CHANNEL_ID, 12345678)
+        assert store.get_message_id(CHANNEL_ID) == 12345678
+        # Clear it
+        store.set_message_id(CHANNEL_ID, None)
+        assert store.get_message_id(CHANNEL_ID) is None
+
+    def test_set_message_id_no_op_for_missing_row(self, db_session: Session) -> None:
+        """set_message_id on an unknown channel silently does nothing."""
+        from bot.cogs.session import _CampaignChannelArcStore
+
+        store = _CampaignChannelArcStore(lambda: db_session)
+        # Should not raise
+        store.set_message_id(88888, 99999)
+
+
+class TestStartCampaignArcTracker:
+    """Verify /start_campaign creates the pinned Arc Tracker message."""
+
+    @pytest.mark.asyncio
+    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
+    @patch("bot.cogs.session.create_session_channel")
+    async def test_start_campaign_creates_pin(
+        self,
+        mock_create_channel: AsyncMock,
+        mock_bg_tasks: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+    ) -> None:
+        """ensure_pinned is called: channel.send is awaited with an embed."""
+        mock_msg = AsyncMock()
+        mock_msg.id = 111222333444
+        mock_msg.pin = AsyncMock()
+
+        mock_channel = AsyncMock()
+        mock_channel.id = 998877
+        mock_channel.mention = "#test-pin"
+        # First call is launcher.start() welcome embed; second is Arc Tracker embed
+        mock_channel.send = AsyncMock(return_value=mock_msg)
+        mock_create_channel.return_value = mock_channel
+
+        await cog.start_campaign.callback(cog, interaction, "Foret sombre", f"<@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
+
+        # channel.send called at least twice: welcome + arc tracker
+        assert mock_channel.send.call_count >= 2
+        # pin() was called on the Arc Tracker message
+        mock_msg.pin.assert_called()
+
+    @pytest.mark.asyncio
+    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
+    @patch("bot.cogs.session.create_session_channel")
+    async def test_start_campaign_pin_failure_does_not_break(
+        self,
+        mock_create_channel: AsyncMock,
+        mock_bg_tasks: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+    ) -> None:
+        """If pinning raises, /start_campaign still succeeds."""
+        mock_msg = AsyncMock()
+        mock_msg.id = 999000111
+        mock_msg.pin = AsyncMock(side_effect=Exception("pin failed"))
+
+        mock_channel = AsyncMock()
+        mock_channel.id = 998876
+        mock_channel.mention = "#test-pin-fail"
+        mock_channel.send = AsyncMock(return_value=mock_msg)
+        mock_create_channel.return_value = mock_channel
+
+        # Should not raise even if pin fails
+        await cog.start_campaign.callback(cog, interaction, "Donjon", f"<@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
+
+        # Followup still sent (campaign created successfully)
+        interaction.followup.send.assert_called()
+        last_call = interaction.followup.send.call_args_list[-1]
+        assert "Campagne" in last_call[0][0]
+
+
+class TestEndCampaignArcTracker:
+    """Verify /end_campaign removes the pinned Arc Tracker message."""
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_campaign_removes_pin(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """If a message ID is stored, remove() unpins + deletes it."""
+        from db.repositories import CampaignChannelRepository
+
+        # Store an Arc Tracker message ID in the DB
+        CampaignChannelRepository(db_session).update_arc_tracker_message_id(
+            CHANNEL_ID, 777888999000,
+        )
+        db_session.flush()
+
+        # Mock the Discord message that will be fetched
+        mock_msg = AsyncMock()
+        mock_msg.unpin = AsyncMock()
+        mock_msg.delete = AsyncMock()
+        interaction.channel.fetch_message = AsyncMock(return_value=mock_msg)
+
+        session = GameSession(campaign=persisted_campaign)
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        # The message should have been unpinned
+        mock_msg.unpin.assert_called_once()
+        # DB should be cleared
+        stored = CampaignChannelRepository(db_session).get_arc_tracker_message_id(CHANNEL_ID)
+        assert stored is None
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_campaign_remove_failure_does_not_break(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """If Arc Tracker removal raises, /end_campaign still archives channel."""
+        session = GameSession(campaign=persisted_campaign)
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        # fetch_message raises so manager.remove raises internally
+        interaction.channel.fetch_message = AsyncMock(side_effect=Exception("fetch failed"))
+
+        # Should not raise
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        # Archive was still called
+        mock_archive.assert_called_once()

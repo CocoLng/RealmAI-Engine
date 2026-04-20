@@ -7,7 +7,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 import discord
 from discord import app_commands
@@ -34,6 +34,37 @@ if TYPE_CHECKING:
     from bot.bot import RealmBot
 
 logger = logging.getLogger(__name__)
+
+
+class _CampaignChannelArcStore:
+    """Adapts CampaignChannelRepository to the ArcTrackerStore Protocol.
+
+    Holds a db_factory callable rather than a session so each call opens
+    and commits its own short-lived session — consistent with how other
+    repo calls in this cog work.
+    """
+
+    def __init__(self, db_factory: Callable[[], Any]) -> None:
+        self._db_factory = db_factory
+
+    def get_message_id(self, channel_id: int) -> int | None:
+        """Return the stored Arc Tracker message ID, or None."""
+        from db.repositories.campaign_channel_repo import CampaignChannelRepository as _Repo
+        db_session = self._db_factory()
+        try:
+            return _Repo(db_session).get_arc_tracker_message_id(channel_id)
+        finally:
+            db_session.close()
+
+    def set_message_id(self, channel_id: int, message_id: int | None) -> None:
+        """Persist the Arc Tracker message ID (or clear it with None)."""
+        from db.repositories.campaign_channel_repo import CampaignChannelRepository as _Repo
+        db_session = self._db_factory()
+        try:
+            _Repo(db_session).update_arc_tracker_message_id(channel_id, message_id)
+            db_session.commit()
+        finally:
+            db_session.close()
 
 
 class SessionCog(commands.Cog):
@@ -157,6 +188,26 @@ class SessionCog(commands.Cog):
 
         # Send welcome embed + onboarding view in the new channel
         await launcher.start()
+
+        # Arc Tracker pin — best effort, never blocks campaign creation
+        try:
+            from bot.utils.arc_tracker import ArcTrackerData, ArcTrackerManager
+            store = _CampaignChannelArcStore(self.bot.db_factory)
+            manager = ArcTrackerManager(store=store)
+            await manager.ensure_pinned(
+                channel=channel,
+                campaign_id=campaign.id,
+                channel_id=channel.id,
+                data=ArcTrackerData(
+                    chapter_title="Chapitre 1 — Début de la campagne",
+                    current_objective="Découvrez le monde et le pourquoi de votre quête.",
+                    recent_beats=[],
+                    active_quests=[],
+                    last_updated_relative="à l'instant",
+                ),
+            )
+        except Exception:
+            logger.warning("Failed to pin Arc Tracker on /start_campaign", exc_info=True)
 
         await interaction.followup.send(f"Campagne lancee dans {channel.mention} !")
 
@@ -349,8 +400,18 @@ class SessionCog(commands.Cog):
             f"Campagne **{session.campaign.name}** terminee. Le canal sera archive.",
         )
 
-        # Archive the channel
+        # Arc Tracker removal — best effort, never blocks campaign end
         channel = interaction.channel
+        if channel is not None and channel_id is not None:
+            try:
+                from bot.utils.arc_tracker import ArcTrackerManager
+                store = _CampaignChannelArcStore(self.bot.db_factory)
+                manager = ArcTrackerManager(store=store)
+                await manager.remove(channel=channel, channel_id=channel_id)
+            except Exception:
+                logger.warning("Failed to remove Arc Tracker on /end_campaign", exc_info=True)
+
+        # Archive the channel
         guild = interaction.guild
         if channel and guild:
             await archive_channel(channel, guild)  # type: ignore[arg-type]
