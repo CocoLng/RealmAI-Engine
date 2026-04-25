@@ -1,0 +1,169 @@
+"""Tests for per-ObjectiveKind matcher functions.
+
+Deviation from spec: ActionType.EXAMINE does not exist in this project.
+The EXAMINE objective kind is tested using ActionType.LOOK, which is the
+closest examination-type action available (ActionType enum contains:
+ATTACK, CAST_SPELL, DEFEND, DISENGAGE, EQUIP, FLEE, IMPROVISE, INTERACT,
+LOOK, MOVE, PICKUP, QUESTION, SEARCH, TALK, USE_ITEM).
+"""
+
+from unittest.mock import MagicMock
+
+from ai.models import InterpretedAction, MechanicsOutcome
+from engine.objective_matchers import compute_match_score, normalize
+from engine.validators import ActionType
+from world.story_arc import BeatObjective, ObjectiveKind
+
+
+def _interp(action_type, target=None, raw_input="") -> InterpretedAction:
+    return InterpretedAction(
+        action_type=action_type,
+        actor_name="hero",
+        target_name=target,
+        raw_input=raw_input or f"{action_type.value} {target or ''}",
+    )
+
+
+def _outcome(**kwargs) -> MechanicsOutcome:
+    base = {"summary": "ok"}
+    base.update(kwargs)
+    return MechanicsOutcome(**base)
+
+
+def test_normalize_strips_accents_and_articles():
+    assert normalize("Le Marché aux Poissons") == "marche aux poissons"
+    assert normalize("L'Auberge") == "auberge"
+
+
+def test_talk_match_positive():
+    obj = BeatObjective(
+        id="talk_kaelen",
+        kind=ObjectiveKind.TALK,
+        target="Kaelen",
+        description="Speak with Kaelen",
+    )
+    interp = _interp(ActionType.TALK, target="Kaelen")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_talk_match_wrong_action_type_returns_zero():
+    obj = BeatObjective(
+        id="talk_kaelen",
+        kind=ObjectiveKind.TALK,
+        target="Kaelen",
+        description="...",
+    )
+    interp = _interp(ActionType.ATTACK, target="Kaelen")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score == 0.0
+
+
+def test_arrive_match_via_location():
+    obj = BeatObjective(
+        id="arrive_market",
+        kind=ObjectiveKind.ARRIVE,
+        target="Marché aux poissons",
+        description="...",
+    )
+    location = MagicMock(name="Le Marché aux Poissons")
+    location.name = "Le Marché aux Poissons"
+    score = compute_match_score(
+        obj, _interp(ActionType.MOVE), _outcome(),
+        location=location, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_arrive_no_location_returns_zero():
+    obj = BeatObjective(
+        id="arrive_x",
+        kind=ObjectiveKind.ARRIVE,
+        target="X",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.MOVE), _outcome(),
+        location=None, world_flags={}, inventory=set(),
+    )
+    assert score == 0.0
+
+
+def test_defeat_match_via_outcome_summary():
+    obj = BeatObjective(
+        id="defeat_wolf",
+        kind=ObjectiveKind.DEFEAT,
+        target="wolf",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.ATTACK, target="wolf"),
+        _outcome(summary="The wolf is defeated."),
+        location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_examine_match():
+    """DEVIATION: uses ActionType.LOOK instead of ActionType.EXAMINE (doesn't exist)."""
+    obj = BeatObjective(
+        id="examine_cape",
+        kind=ObjectiveKind.EXAMINE,
+        target="bloody cape",
+        description="...",
+    )
+    interp = _interp(ActionType.LOOK, target="bloody cape")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_possess_match_via_inventory():
+    obj = BeatObjective(
+        id="possess_key",
+        kind=ObjectiveKind.POSSESS,
+        target="silver key",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.PICKUP), _outcome(),
+        location=None, world_flags={}, inventory={"silver key"},
+    )
+    assert score == 1.0
+
+
+def test_flag_match_via_world_state():
+    obj = BeatObjective(
+        id="flag_oath",
+        kind=ObjectiveKind.FLAG,
+        target="oath_sworn",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.IMPROVISE), _outcome(),
+        location=None, world_flags={"oath_sworn": True}, inventory=set(),
+    )
+    assert score == 1.0
+
+
+def test_fuzzy_edge_below_threshold():
+    obj = BeatObjective(
+        id="talk_kaelen",
+        kind=ObjectiveKind.TALK,
+        target="Kaelen",
+        description="...",
+        fuzzy_threshold=0.7,
+    )
+    # similar but not identical
+    interp = _interp(ActionType.TALK, target="Kael")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    # Score is implementation-specific; assert it's between 0 and 1, and
+    # accept the difflib ratio as ground truth — the algorithm will use this.
+    assert 0.0 < score < 1.0

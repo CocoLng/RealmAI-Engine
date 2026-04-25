@@ -1,0 +1,133 @@
+"""Per-ObjectiveKind matcher functions.
+
+Each matcher returns a float in [0.0, 1.0] indicating how well the player
+action matches the objective. Threshold check happens in the engine, not here.
+
+Pure functions. No I/O. No mutable state. Safe to call N times per turn.
+
+Implementation note — ActionType deviation:
+    The spec references ``ActionType.EXAMINE``, but this project's ActionType
+    enum does not include EXAMINE. The EXAMINE objective kind is therefore
+    matched against ``ActionType.LOOK``, which is the closest examination-type
+    action available in the enum.
+"""
+
+from __future__ import annotations
+
+import difflib
+import re
+import unicodedata
+from typing import Any
+
+from ai.models import InterpretedAction, MechanicsOutcome
+from engine.validators import ActionType
+from world.location import Location
+from world.story_arc import BeatObjective, ObjectiveKind
+
+
+_ARTICLES = frozenset({
+    "the", "a", "an",
+    "le", "la", "les", "l", "un", "une", "des", "du", "de",
+})
+
+
+def normalize(text: str) -> str:
+    """Lowercase, strip accents, remove leading articles and punctuation.
+
+    Examples::
+
+        normalize("Le Marché aux Poissons") == "marche aux poissons"
+        normalize("L'Auberge") == "auberge"
+    """
+    if not text:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", text)
+    ascii_lower = nfkd.encode("ascii", "ignore").decode("ascii").lower()
+    cleaned = re.sub(r"[^\w\s]", " ", ascii_lower)
+    words = [w for w in cleaned.split() if w not in _ARTICLES]
+    return " ".join(words)
+
+
+def _fuzzy(a: str, b: str) -> float:
+    """SequenceMatcher ratio after normalization."""
+    return difflib.SequenceMatcher(None, normalize(a), normalize(b)).ratio()
+
+
+def compute_match_score(
+    obj: BeatObjective,
+    interpreted: InterpretedAction,
+    outcome: MechanicsOutcome,
+    location: Location | None,
+    world_flags: dict[str, Any],
+    inventory: set[str],
+) -> float:
+    """Compute how well this action matches this objective.
+
+    Returns 0.0 for definite no-match (wrong action_type, no location for
+    ARRIVE, etc.). Returns up to 1.0 for a perfect match. The threshold
+    comparison (score >= obj.fuzzy_threshold) is the caller's responsibility.
+
+    Args:
+        obj:         The beat objective to evaluate against.
+        interpreted: The player's parsed action for this turn.
+        outcome:     The mechanical result produced by the engine.
+        location:    The player's current location after the action, or None.
+        world_flags: Mutable world-state flags (flag_name → truthy value).
+        inventory:   The player's current inventory as a set of item names.
+
+    Returns:
+        float in [0.0, 1.0].
+    """
+    if obj.kind == ObjectiveKind.TALK:
+        if interpreted.action_type != ActionType.TALK:
+            return 0.0
+        if not interpreted.target_name:
+            return 0.0
+        return _fuzzy(interpreted.target_name, obj.target)
+
+    if obj.kind == ObjectiveKind.DEFEAT:
+        # Defeat is detected via the outcome summary mentioning the target as
+        # defeated. The combat engine writes "X is defeated" / "X tombe" /
+        # "X est vaincu" into summary.
+        summary = (outcome.summary or "").lower()
+        if (
+            "defeated" not in summary
+            and "tombe" not in summary
+            and "vaincu" not in summary
+        ):
+            return 0.0
+        # If the normalized target is a substring of the normalized summary,
+        # that's a definitive match (e.g. "wolf" in "the wolf is defeated").
+        norm_target = normalize(obj.target)
+        norm_summary = normalize(summary)
+        if norm_target and norm_target in norm_summary:
+            return 1.0
+        return _fuzzy(obj.target, summary)
+
+    if obj.kind == ObjectiveKind.ARRIVE:
+        if location is None:
+            return 0.0
+        return _fuzzy(location.name, obj.target)
+
+    if obj.kind == ObjectiveKind.EXAMINE:
+        # ActionType.EXAMINE does not exist in this project; LOOK is the
+        # examination-type action (see module docstring).
+        if interpreted.action_type != ActionType.LOOK:
+            return 0.0
+        if not interpreted.target_name:
+            return 0.0
+        return _fuzzy(interpreted.target_name, obj.target)
+
+    if obj.kind == ObjectiveKind.POSSESS:
+        # POSSESS is binary: the item is in inventory or it isn't.
+        normalized_target = normalize(obj.target)
+        for item in inventory:
+            if normalize(item) == normalized_target:
+                return 1.0
+        return 0.0
+
+    if obj.kind == ObjectiveKind.FLAG:
+        # FLAG is binary: world_flags[target] is truthy.
+        return 1.0 if world_flags.get(obj.target) else 0.0
+
+    return 0.0
