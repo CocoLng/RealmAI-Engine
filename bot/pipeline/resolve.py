@@ -74,6 +74,7 @@ class ResolveSideChannel:
     pending_flee_destination: str | None = None
     pending_dice_embeds: list[Any] = field(default_factory=list)
     trivial_kill_mechanics: str | None = None
+    trivial_kill_target: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,7 @@ async def resolve_mechanics(
             summary=side.trivial_kill_mechanics,
             player_intent=intent,
             outcome_facts=side.trivial_kill_mechanics,
+            target_defeated=side.trivial_kill_target,
         )
 
     at = action.action_type
@@ -820,6 +822,7 @@ def resolve_pc_attack(
         player_intent=intent,
         outcome_facts=facts,
         public_effects=public,
+        target_defeated=target.name if result.hit and not target.is_alive else None,
     )
 
 
@@ -939,6 +942,8 @@ def trivial_kill(
     weapon = find_attacker_weapon(attacker_pc=attacker_pc, session=session)
     result = trivial_resolve(attacker_pc, target_npc, weapon=weapon)
     side.trivial_kill_mechanics = result.description
+    if result.target_killed:
+        side.trivial_kill_target = target_npc.name
     logger.info(
         "TRIVIAL_KILL campaign=%s attacker=%s target=%s hit=%s damage=%d killed=%s",
         campaign_id, attacker_pc.name, target_npc.name,

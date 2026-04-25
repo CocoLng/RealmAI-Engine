@@ -93,7 +93,9 @@ def test_arrive_no_location_returns_zero():
     assert score == 0.0
 
 
-def test_defeat_match_via_outcome_summary():
+def test_defeat_match_via_target_defeated_field():
+    """DEFEAT objectives complete when the combat engine writes
+    target_defeated on the outcome (not via summary string-scan)."""
     obj = BeatObjective(
         id="defeat_wolf",
         kind=ObjectiveKind.DEFEAT,
@@ -102,7 +104,41 @@ def test_defeat_match_via_outcome_summary():
     )
     score = compute_match_score(
         obj, _interp(ActionType.ATTACK, target="wolf"),
-        _outcome(summary="The wolf is defeated."),
+        _outcome(target_defeated="wolf"),
+        location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_defeat_no_target_defeated_returns_zero():
+    """If outcome.target_defeated is None (no death this turn),
+    DEFEAT score is 0 regardless of summary content."""
+    obj = BeatObjective(
+        id="defeat_wolf",
+        kind=ObjectiveKind.DEFEAT,
+        target="wolf",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.ATTACK, target="wolf"),
+        _outcome(summary="The wolf is defeated.", target_defeated=None),
+        location=None, world_flags={}, inventory=set(),
+    )
+    assert score == 0.0
+
+
+def test_defeat_fuzzy_tolerates_casing():
+    """target_defeated='Wolf' should still match obj.target='wolf'
+    via fuzzy normalization."""
+    obj = BeatObjective(
+        id="defeat_wolf",
+        kind=ObjectiveKind.DEFEAT,
+        target="wolf",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.ATTACK, target="Wolf"),
+        _outcome(target_defeated="Wolf"),
         location=None, world_flags={}, inventory=set(),
     )
     assert score >= 0.7

@@ -86,23 +86,13 @@ def compute_match_score(
         return _fuzzy(interpreted.target_name, obj.target)
 
     if obj.kind == ObjectiveKind.DEFEAT:
-        # Defeat is detected via the outcome summary mentioning the target as
-        # defeated. The combat engine writes "X is defeated" / "X tombe" /
-        # "X est vaincu" into summary.
-        summary = (outcome.summary or "").lower()
-        if (
-            "defeated" not in summary
-            and "tombe" not in summary
-            and "vaincu" not in summary
-        ):
+        # Defeat is a structured signal — combat code paths set
+        # outcome.target_defeated when an action kills a creature.
+        # We do a fuzzy match (not exact) so casing/articles/typos
+        # in the beat objective's target don't cause false negatives.
+        if not outcome.target_defeated:
             return 0.0
-        # If the normalized target is a substring of the normalized summary,
-        # that's a definitive match (e.g. "wolf" in "the wolf is defeated").
-        norm_target = normalize(obj.target)
-        norm_summary = normalize(summary)
-        if norm_target and norm_target in norm_summary:
-            return 1.0
-        return _fuzzy(obj.target, summary)
+        return _fuzzy(outcome.target_defeated, obj.target)
 
     if obj.kind == ObjectiveKind.ARRIVE:
         if location is None:

@@ -103,6 +103,10 @@ class MechanicsOutcome(BaseModel):
     # NPC's mood shift (-N if the conversation went badly).
     talk_reveals_count: int = 0
     talk_disposition_change: int = 0
+    # Structured defeat signal — populated by combat code paths when an
+    # action results in a defeat. Used by BeatProgressionEngine's DEFEAT
+    # matcher (anti-cheat: deterministic, no LLM string scanning).
+    target_defeated: str | None = None
 
 
 class PublicEffects(BaseModel):
