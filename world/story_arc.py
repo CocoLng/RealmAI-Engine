@@ -88,6 +88,15 @@ class StoryBeat(BaseModel):
     encounter_type: Literal["social", "combat", "exploration", "puzzle", "boss"]
     encounter_subtype: str | None = None
     is_twist: bool = False
+
+    # NEW: structured objectives (replaces single completion_trigger)
+    objectives: list[BeatObjective] = Field(default_factory=list)
+    advance_rule: AdvanceRule = AdvanceRule.ALL_REQUIRED
+    advance_threshold: int | None = None  # for AdvanceRule.M_OF_N
+    player_visible_hint: str | None = None  # for /hint level 1
+    judge_rubric: str | None = None  # for BeatJudge LLM context
+
+    # LEGACY: kept for read-back compat, auto-migrated to `objectives` on load
     completion_trigger: CompletionTrigger | None = None
     on_complete: BeatEffects = Field(default_factory=BeatEffects)
 

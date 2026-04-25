@@ -47,3 +47,50 @@ def test_beat_objective_defaults():
     assert obj.required is True
     assert obj.fuzzy_threshold == 0.7
     assert obj.gate is None
+
+
+def test_story_beat_new_fields_defaults():
+    from world.story_arc import StoryBeat
+    beat = StoryBeat(
+        beat_number=1,
+        title="The hook",
+        description="Players meet the patron at the inn.",
+        location_hint="The Inn of the Rusty Anchor",
+        encounter_type="social",
+    )
+    assert beat.objectives == []
+    assert beat.advance_rule == AdvanceRule.ALL_REQUIRED
+    assert beat.advance_threshold is None
+    assert beat.player_visible_hint is None
+    assert beat.judge_rubric is None
+
+
+def test_story_beat_with_objectives():
+    from world.story_arc import StoryBeat
+    objectives = [
+        BeatObjective(
+            id="talk_patron",
+            kind=ObjectiveKind.TALK,
+            target="patron",
+            description="Speak with the patron",
+        ),
+        BeatObjective(
+            id="accept_offer",
+            kind=ObjectiveKind.FLAG,
+            target="patron_offer_accepted",
+            description="Accept the contract",
+        ),
+    ]
+    beat = StoryBeat(
+        beat_number=1,
+        title="The hook",
+        description="Players meet the patron at the inn.",
+        location_hint="The Inn of the Rusty Anchor",
+        encounter_type="social",
+        objectives=objectives,
+        advance_rule=AdvanceRule.ALL_REQUIRED,
+        player_visible_hint="The patron seems eager to talk.",
+        judge_rubric="Accept any creative way to commit to the contract.",
+    )
+    assert len(beat.objectives) == 2
+    assert beat.player_visible_hint == "The patron seems eager to talk."
