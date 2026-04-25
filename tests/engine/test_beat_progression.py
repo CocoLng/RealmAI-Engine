@@ -1,5 +1,6 @@
 """Tests for the BeatProgressionEngine — pure deterministic logic."""
 
+from ai.models import InterpretedAction, MechanicsOutcome
 from engine.beat_progression import (
     BeatHistory,
     BeatProgress,
@@ -8,7 +9,13 @@ from engine.beat_progression import (
     ObjectivePartialMatch,
     ObjectiveState,
 )
-from world.story_arc import StoryBeat
+from engine.validators import ActionType
+from world.story_arc import (
+    BeatObjective,
+    ObjectiveKind,
+    StoryArc,
+    StoryBeat,
+)
 
 
 def test_objective_state_defaults():
@@ -70,3 +77,74 @@ def test_judge_request_includes_partial_objectives():
         npcs_present=["Kaelen"],
     )
     assert len(req.objectives) == 1
+
+
+# ---------------------------------------------------------------------------
+# B4 helpers
+# ---------------------------------------------------------------------------
+
+def _make_arc(beats: list[StoryBeat], current_index: int = 0) -> StoryArc:
+    while len(beats) < 8:  # arc requires min 8 beats
+        beats.append(StoryBeat(
+            beat_number=len(beats) + 1,
+            title=f"Filler {len(beats) + 1}",
+            description="...",
+            location_hint="...",
+            encounter_type="exploration",
+        ))
+    arc = StoryArc(
+        campaign_id="test",
+        theme="test",
+        premise="A long enough premise here.",
+        beats=beats,
+        villain_name="X",
+        villain_motivation="Y",
+        current_beat_index=current_index,
+    )
+    return arc
+
+
+def _interp(action_type: ActionType, target: str | None = None, raw: str = "") -> InterpretedAction:
+    return InterpretedAction(
+        action_type=action_type,
+        actor_name="hero",
+        target_name=target,
+        raw_input=raw or f"{action_type.value} {target or ''}",
+    )
+
+
+def _outcome(**kwargs) -> MechanicsOutcome:
+    return MechanicsOutcome(summary=kwargs.pop("summary", "ok"), **kwargs)
+
+
+def _history() -> BeatHistory:
+    return BeatHistory(recent_decisions=[], current_beat_turns=0)
+
+
+# ---------------------------------------------------------------------------
+# B4 tests
+# ---------------------------------------------------------------------------
+
+def test_stay_when_no_match():
+    obj = BeatObjective(
+        id="talk_npc", kind=ObjectiveKind.TALK, target="Bob", description="...",
+    )
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="social", objectives=[obj],
+    )
+    arc = _make_arc([beat])
+    from engine.beat_progression import BeatProgressionEngine
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc,
+        interpreted=_interp(ActionType.MOVE, target="north"),
+        outcome=_outcome(),
+        location=None,
+        history=_history(),
+        world_flags={},
+        inventory=set(),
+    )
+    assert result.decision == "STAY"
+    assert result.new_beat is None
+    assert result.judge_request is None

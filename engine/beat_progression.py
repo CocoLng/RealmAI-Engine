@@ -12,7 +12,7 @@ NO LLM CALLS in this module. The engine is testable without Ollama.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,11 @@ from world.story_arc import (
     StoryBeat,
 )
 
+if TYPE_CHECKING:
+    from ai.models import InterpretedAction, MechanicsOutcome
+    from world.location import Location
+    from world.story_arc import StoryArc
+
 __all__ = [
     "ObjectiveState",
     "BeatProgress",
@@ -29,6 +34,7 @@ __all__ = [
     "ObjectivePartialMatch",
     "JudgeRequest",
     "BeatProgressionResult",
+    "BeatProgressionEngine",
 ]
 
 
@@ -93,3 +99,190 @@ class BeatProgressionResult(BaseModel):
     new_beat: StoryBeat | None = None
     judge_request: JudgeRequest | None = None
     reasons: list[str] = Field(default_factory=list)
+
+
+class BeatProgressionEngine:
+    """Single-decision-point engine for beat advancement.
+
+    Pure deterministic. NO LLM CALLS. The LLM judge fires from outside this
+    class (in the orchestrator), only when ``evaluate()`` returns NEEDS_JUDGE.
+    """
+
+    def evaluate(
+        self,
+        arc: "StoryArc",
+        interpreted: "InterpretedAction",
+        outcome: "MechanicsOutcome",
+        location: "Location | None",
+        history: BeatHistory,
+        world_flags: dict[str, Any],
+        inventory: set[str],
+    ) -> BeatProgressionResult:
+        """Evaluate the current action against the active beat's objectives.
+
+        Returns a BeatProgressionResult with decision, progress, and optional
+        ``new_beat`` (on ADVANCE) or ``judge_request`` (on NEEDS_JUDGE).
+
+        Args:
+            arc:         The current story arc (provides beats + current index).
+            interpreted: The player's parsed action for this turn.
+            outcome:     The mechanical result produced by the engine.
+            location:    The player's current location after the action, or None.
+            history:     Sliding window of recent decisions (for context only).
+            world_flags: Mutable world-state flags (flag_name → truthy value).
+            inventory:   The player's current inventory as a set of item names.
+
+        Returns:
+            BeatProgressionResult with decision, progress snapshot, and optional
+            new_beat (ADVANCE) or judge_request (NEEDS_JUDGE).
+        """
+        from engine.objective_matchers import compute_match_score, evaluate_gate
+        from world.story_arc import AdvanceRule, advance_beat
+
+        reasons: list[str] = []
+
+        # 1. Bounds check — arc complete?
+        if arc.current_beat_index >= len(arc.beats):
+            empty_progress = BeatProgress(
+                beat=arc.beats[-1],
+                objective_states={},
+                progress_score=100,
+                last_action_advanced=False,
+            )
+            return BeatProgressionResult(
+                decision="STAY",
+                progress=empty_progress,
+                reasons=["arc_complete"],
+            )
+
+        current_beat = arc.beats[arc.current_beat_index]
+
+        # 2. Empty objectives → no progression possible (legacy beats with
+        # un-mappable triggers, or generator hadn't filled them).
+        if not current_beat.objectives:
+            return BeatProgressionResult(
+                decision="STAY",
+                progress=BeatProgress(
+                    beat=current_beat,
+                    objective_states={},
+                    progress_score=0,
+                    last_action_advanced=False,
+                ),
+                reasons=["no_objectives"],
+            )
+
+        # 3. Score every objective.
+        states: dict[str, ObjectiveState] = {}
+        partial_matches: list[ObjectivePartialMatch] = []
+
+        for obj in current_beat.objectives:
+            score = compute_match_score(
+                obj, interpreted, outcome, location, world_flags, inventory,
+            )
+
+            if score >= obj.fuzzy_threshold:
+                # Match passed. Now check the gate.
+                if obj.gate is None or evaluate_gate(
+                    obj.gate, outcome, world_flags, inventory,
+                ):
+                    states[obj.id] = ObjectiveState(
+                        status="completed",
+                        last_attempt_score=score,
+                    )
+                    reasons.append(f"{obj.id}:match_full")
+                else:
+                    states[obj.id] = ObjectiveState(
+                        status="partial",
+                        last_attempt_score=score,
+                    )
+                    reasons.append(f"{obj.id}:gate_failed:{obj.gate.kind.value}")
+                    partial_matches.append(ObjectivePartialMatch(
+                        id=obj.id, kind=obj.kind, target=obj.target,
+                        description=obj.description,
+                        match_score=score, gate_failed=True,
+                        gate_kind=obj.gate.kind,
+                    ))
+            elif score >= 0.5:
+                states[obj.id] = ObjectiveState(
+                    status="partial",
+                    last_attempt_score=score,
+                )
+                reasons.append(f"{obj.id}:match_below_threshold")
+                partial_matches.append(ObjectivePartialMatch(
+                    id=obj.id, kind=obj.kind, target=obj.target,
+                    description=obj.description,
+                    match_score=score, gate_failed=False, gate_kind=None,
+                ))
+            else:
+                states[obj.id] = ObjectiveState(
+                    status="pending",
+                    last_attempt_score=score,
+                )
+
+        # 4. Compute progress score.
+        completed_count = sum(1 for s in states.values() if s.status == "completed")
+        total_count = len(states)
+        progress_score = int((completed_count / total_count) * 100) if total_count else 0
+
+        # 5. Evaluate advance_rule.
+        required_objectives = [o for o in current_beat.objectives if o.required]
+        required_completed = sum(
+            1 for o in required_objectives if states[o.id].status == "completed"
+        )
+
+        will_advance = False
+        if current_beat.advance_rule == AdvanceRule.ALL_REQUIRED:
+            will_advance = (
+                len(required_objectives) > 0
+                and required_completed == len(required_objectives)
+            )
+        elif current_beat.advance_rule == AdvanceRule.ANY:
+            will_advance = completed_count >= 1
+        elif current_beat.advance_rule == AdvanceRule.M_OF_N:
+            threshold = current_beat.advance_threshold or len(states)
+            will_advance = completed_count >= threshold
+
+        progress = BeatProgress(
+            beat=current_beat,
+            objective_states=states,
+            progress_score=progress_score,
+            last_action_advanced=will_advance,
+        )
+
+        if will_advance:
+            new_arc = advance_beat(arc)
+            new_beat = new_arc.beats[new_arc.current_beat_index] if (
+                new_arc.current_beat_index < len(new_arc.beats)
+            ) else None
+            reasons.append(f"advance_rule:{current_beat.advance_rule.value}")
+            return BeatProgressionResult(
+                decision="ADVANCE",
+                progress=progress,
+                new_beat=new_beat,
+                reasons=reasons,
+            )
+
+        # 6. Partial match this turn → defer to judge.
+        if partial_matches:
+            return BeatProgressionResult(
+                decision="NEEDS_JUDGE",
+                progress=progress,
+                judge_request=JudgeRequest(
+                    beat_title=current_beat.title,
+                    beat_description=current_beat.description,
+                    beat_judge_rubric=current_beat.judge_rubric,
+                    objectives=partial_matches,
+                    player_action_text=interpreted.raw_input,
+                    interpreted_action=interpreted.model_dump(),
+                    outcome_summary=outcome.summary,
+                    location_name=location.name if location else None,
+                    npcs_present=[],  # caller fills in if needed
+                ),
+                reasons=reasons,
+            )
+
+        return BeatProgressionResult(
+            decision="STAY",
+            progress=progress,
+            reasons=reasons or ["no_match"],
+        )
