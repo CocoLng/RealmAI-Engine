@@ -7,7 +7,7 @@ from introduction through resolution.
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from engine.npc_stat_block import NPCStatBlock
 
@@ -131,6 +131,32 @@ class StoryArc(BaseModel):
     ``None`` for legacy arcs — the hydration layer (task 43) falls back
     to ``engine.npc_library.get_archetype('generic_boss')`` in that case.
     """
+
+    @model_validator(mode="after")
+    def _migrate_legacy_completion_triggers(self) -> "StoryArc":
+        """Convert legacy `completion_trigger` to a single `BeatObjective` per beat.
+
+        Triggered automatically on every StoryArc construction (load from DB or
+        in-memory). Only runs on beats whose `objectives` list is empty.
+        Trigger types not mappable to ObjectiveKind are silently skipped.
+        """
+        valid_kinds = {k.value for k in ObjectiveKind}
+        for beat in self.beats:
+            if beat.objectives:
+                continue  # explicit objectives win
+            ct = beat.completion_trigger
+            if ct is None or ct.type not in valid_kinds:
+                continue
+            beat.objectives = [
+                BeatObjective(
+                    id=f"legacy_{ct.type}_{ct.target}",
+                    kind=ObjectiveKind(ct.type),
+                    target=ct.target,
+                    description=f"{ct.type} {ct.target}",
+                    required=True,
+                ),
+            ]
+        return self
 
 
 def advance_beat(arc: StoryArc) -> StoryArc:
