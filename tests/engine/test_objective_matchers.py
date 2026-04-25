@@ -203,3 +203,61 @@ def test_fuzzy_edge_below_threshold():
     # Score is implementation-specific; assert it's between 0 and 1, and
     # accept the difflib ratio as ground truth — the algorithm will use this.
     assert 0.0 < score < 1.0
+
+
+def test_gate_min_reveals_passes():
+    from engine.objective_matchers import evaluate_gate
+    from world.story_arc import GateKind, ObjectiveGate
+    gate = ObjectiveGate(kind=GateKind.MIN_REVEALS, value=1)
+    out = _outcome(talk_reveals_count=2)
+    assert evaluate_gate(gate, out, world_flags={}, inventory=set()) is True
+
+
+def test_gate_min_reveals_fails():
+    from engine.objective_matchers import evaluate_gate
+    from world.story_arc import GateKind, ObjectiveGate
+    gate = ObjectiveGate(kind=GateKind.MIN_REVEALS, value=1)
+    out = _outcome(talk_reveals_count=0)
+    assert evaluate_gate(gate, out, world_flags={}, inventory=set()) is False
+
+
+def test_gate_min_disposition():
+    from engine.objective_matchers import evaluate_gate
+    from world.story_arc import GateKind, ObjectiveGate
+    gate = ObjectiveGate(kind=GateKind.MIN_DISPOSITION, value=0)
+    assert evaluate_gate(
+        gate, _outcome(talk_disposition_change=1),
+        world_flags={}, inventory=set(),
+    ) is True
+    assert evaluate_gate(
+        gate, _outcome(talk_disposition_change=-1),
+        world_flags={}, inventory=set(),
+    ) is False
+
+
+def test_gate_has_item():
+    from engine.objective_matchers import evaluate_gate
+    from world.story_arc import GateKind, ObjectiveGate
+    gate = ObjectiveGate(kind=GateKind.HAS_ITEM, value="rope")
+    assert evaluate_gate(
+        gate, _outcome(),
+        world_flags={}, inventory={"rope", "lantern"},
+    ) is True
+    assert evaluate_gate(
+        gate, _outcome(),
+        world_flags={}, inventory={"lantern"},
+    ) is False
+
+
+def test_gate_flag_set():
+    from engine.objective_matchers import evaluate_gate
+    from world.story_arc import GateKind, ObjectiveGate
+    gate = ObjectiveGate(kind=GateKind.FLAG_SET, value="oath_sworn")
+    assert evaluate_gate(
+        gate, _outcome(),
+        world_flags={"oath_sworn": True}, inventory=set(),
+    ) is True
+    assert evaluate_gate(
+        gate, _outcome(),
+        world_flags={"oath_sworn": False}, inventory=set(),
+    ) is False

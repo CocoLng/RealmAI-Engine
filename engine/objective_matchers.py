@@ -22,7 +22,7 @@ from typing import Any
 from ai.models import InterpretedAction, MechanicsOutcome
 from engine.validators import ActionType
 from world.location import Location
-from world.story_arc import BeatObjective, ObjectiveKind
+from world.story_arc import BeatObjective, GateKind, ObjectiveGate, ObjectiveKind
 
 
 _ARTICLES = frozenset({
@@ -121,3 +121,29 @@ def compute_match_score(
         return 1.0 if world_flags.get(obj.target) else 0.0
 
     return 0.0
+
+
+def evaluate_gate(
+    gate: ObjectiveGate,
+    outcome: MechanicsOutcome,
+    world_flags: dict[str, Any],
+    inventory: set[str],
+) -> bool:
+    """Evaluate a gate constraint. Returns True if the gate is satisfied."""
+    if gate.kind == GateKind.MIN_REVEALS:
+        threshold = int(gate.value)
+        return outcome.talk_reveals_count >= threshold
+
+    if gate.kind == GateKind.MIN_DISPOSITION:
+        threshold = int(gate.value)
+        return outcome.talk_disposition_change >= threshold
+
+    if gate.kind == GateKind.HAS_ITEM:
+        target = str(gate.value)
+        normalized_target = normalize(target)
+        return any(normalize(item) == normalized_target for item in inventory)
+
+    if gate.kind == GateKind.FLAG_SET:
+        return bool(world_flags.get(str(gate.value)))
+
+    return False
