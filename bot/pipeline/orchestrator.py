@@ -666,6 +666,9 @@ class PipelineRunner:
                     log_shadow_decision,
                 )
 
+                arc = self.session.story_arc
+                assert arc is not None  # guaranteed by outer getattr guard
+
                 # Determine what the legacy code did this turn.
                 legacy_decision = "ADVANCE" if beat_completed or new_beat is not None else "STAY"
 
@@ -673,12 +676,12 @@ class PipelineRunner:
                 inventory_items: set[str] = set()
                 if self.inventory is not None:
                     inventory_items = {it.name for it in self.inventory.items}
-                world_flags: dict = {}
+                world_flags: dict[str, Any] = {}
                 if self.location is not None:
                     world_flags = dict(self.location.state_flags)
 
                 shadow_result = shadow_engine.evaluate(
-                    arc=self.session.story_arc,
+                    arc=arc,
                     interpreted=interpreted,
                     outcome=outcome,
                     location=self.location,
@@ -686,11 +689,9 @@ class PipelineRunner:
                     world_flags=world_flags,
                     inventory=inventory_items,
                 )
-                current_beat = self.session.story_arc.beats[
-                    self.session.story_arc.current_beat_index
-                ] if self.session.story_arc.current_beat_index < len(
-                    self.session.story_arc.beats,
-                ) else self.session.story_arc.beats[-1]
+                current_beat = arc.beats[arc.current_beat_index] \
+                    if arc.current_beat_index < len(arc.beats) \
+                    else arc.beats[-1]
                 log_shadow_decision(
                     campaign_id=self.campaign_id,
                     beat_number=current_beat.beat_number,
