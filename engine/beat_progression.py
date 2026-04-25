@@ -12,6 +12,10 @@ NO LLM CALLS in this module. The engine is testable without Ollama.
 
 from __future__ import annotations
 
+import json
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
@@ -35,6 +39,7 @@ __all__ = [
     "JudgeRequest",
     "BeatProgressionResult",
     "BeatProgressionEngine",
+    "log_shadow_decision",
 ]
 
 
@@ -294,3 +299,38 @@ class BeatProgressionEngine:
             progress=progress,
             reasons=reasons or ["no_match"],
         )
+
+
+_SHADOW_LOG_PATH = Path("logs/beat_progression_shadow.jsonl")
+_logger = logging.getLogger(__name__)
+
+
+def log_shadow_decision(
+    *,
+    campaign_id: str,
+    beat_number: int,
+    legacy_decision: str,
+    shadow_result: BeatProgressionResult,
+) -> None:
+    """Append one JSON line to the shadow log.
+
+    Used during phase B (shadow mode) to compare the new engine's decision
+    against the legacy code without applying it. Failures here are swallowed
+    — shadow logging must never break a real action.
+    """
+    try:
+        _SHADOW_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(UTC).isoformat(),
+            "campaign_id": campaign_id,
+            "beat_number": beat_number,
+            "legacy_decision": legacy_decision,
+            "shadow_decision": shadow_result.decision,
+            "divergence": legacy_decision != shadow_result.decision,
+            "progress_score": shadow_result.progress.progress_score,
+            "reasons": shadow_result.reasons,
+        }
+        with _SHADOW_LOG_PATH.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        _logger.exception("shadow log failed for campaign=%s", campaign_id)

@@ -657,6 +657,50 @@ class PipelineRunner:
                     "BEAT persist failed campaign=%s", self.campaign_id,
                 )
 
+        # ----- Shadow mode: run new engine without applying its decision -----
+        if self.session is not None and getattr(self.session, "story_arc", None) is not None:
+            try:
+                from engine.beat_progression import (
+                    BeatHistory,
+                    BeatProgressionEngine,
+                    log_shadow_decision,
+                )
+
+                # Determine what the legacy code did this turn.
+                legacy_decision = "ADVANCE" if beat_completed or new_beat is not None else "STAY"
+
+                shadow_engine = BeatProgressionEngine()
+                inventory_items: set[str] = set()
+                if self.inventory is not None:
+                    inventory_items = {it.name for it in self.inventory.items}
+                world_flags: dict = {}
+                if self.location is not None:
+                    world_flags = dict(self.location.state_flags)
+
+                shadow_result = shadow_engine.evaluate(
+                    arc=self.session.story_arc,
+                    interpreted=interpreted,
+                    outcome=outcome,
+                    location=self.location,
+                    history=BeatHistory(),
+                    world_flags=world_flags,
+                    inventory=inventory_items,
+                )
+                current_beat = self.session.story_arc.beats[
+                    self.session.story_arc.current_beat_index
+                ] if self.session.story_arc.current_beat_index < len(
+                    self.session.story_arc.beats,
+                ) else self.session.story_arc.beats[-1]
+                log_shadow_decision(
+                    campaign_id=self.campaign_id,
+                    beat_number=current_beat.beat_number,
+                    legacy_decision=legacy_decision,
+                    shadow_result=shadow_result,
+                )
+            except Exception:
+                logger.exception("SHADOW eval failed campaign=%s", self.campaign_id)
+        # ----- end shadow mode -----
+
         # Auto-checkpoint: persist full session state after every resolved action (B1).
         if self.db_factory is not None and self.session is not None:
             try:
