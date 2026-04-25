@@ -239,7 +239,11 @@ class BeatProgressionEngine:
         elif current_beat.advance_rule == AdvanceRule.ANY:
             will_advance = completed_count >= 1
         elif current_beat.advance_rule == AdvanceRule.M_OF_N:
-            threshold = current_beat.advance_threshold or len(states)
+            if current_beat.advance_threshold is None:
+                threshold = len(current_beat.objectives)
+                reasons.append("advance_rule:m_of_n_no_threshold_fallback")
+            else:
+                threshold = current_beat.advance_threshold
             will_advance = completed_count >= threshold
 
         progress = BeatProgress(
@@ -251,9 +255,13 @@ class BeatProgressionEngine:
 
         if will_advance:
             new_arc = advance_beat(arc)
-            new_beat = new_arc.beats[new_arc.current_beat_index] if (
-                new_arc.current_beat_index < len(new_arc.beats)
-            ) else None
+            # advance_beat is idempotent at the last beat — if it returned the
+            # same object, the arc is complete (no further beat exists).
+            if new_arc is arc:
+                new_beat = None
+                reasons.append("arc_complete_on_advance")
+            else:
+                new_beat = new_arc.beats[new_arc.current_beat_index]
             reasons.append(f"advance_rule:{current_beat.advance_rule.value}")
             return BeatProgressionResult(
                 decision="ADVANCE",

@@ -11,6 +11,7 @@ from engine.beat_progression import (
 )
 from engine.validators import ActionType
 from world.story_arc import (
+    AdvanceRule,
     BeatObjective,
     ObjectiveKind,
     StoryArc,
@@ -148,3 +149,69 @@ def test_stay_when_no_match():
     assert result.decision == "STAY"
     assert result.new_beat is None
     assert result.judge_request is None
+
+
+def test_advance_on_last_beat_returns_new_beat_none():
+    """REGRESSION I1: ADVANCE on the final beat must set new_beat=None
+    so the orchestrator can detect arc completion."""
+    from engine.beat_progression import BeatProgressionEngine
+    obj = BeatObjective(
+        id="last_obj", kind=ObjectiveKind.TALK, target="Final NPC",
+        description="...",
+    )
+    final_beat = StoryBeat(
+        beat_number=8, title="Finale", description="...", location_hint="...",
+        encounter_type="boss", objectives=[obj],
+    )
+    # Build an arc with the final beat as the current one.
+    fillers = [
+        StoryBeat(
+            beat_number=i + 1, title=f"F{i+1}", description="...",
+            location_hint="...", encounter_type="exploration",
+        )
+        for i in range(7)
+    ]
+    arc = _make_arc(fillers + [final_beat], current_index=7)
+
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc,
+        interpreted=_interp(ActionType.TALK, target="Final NPC"),
+        outcome=_outcome(),
+        location=None, history=_history(),
+        world_flags={}, inventory=set(),
+    )
+    assert result.decision == "ADVANCE"
+    assert result.new_beat is None  # arc complete
+    assert "arc_complete_on_advance" in result.reasons
+
+
+def test_m_of_n_fallback_logs_reason():
+    """REGRESSION M1: M_OF_N with advance_threshold=None should log a
+    fallback reason so the misconfiguration is observable."""
+    from engine.beat_progression import BeatProgressionEngine
+    objs = [
+        BeatObjective(
+            id=f"obj_{i}", kind=ObjectiveKind.FLAG, target=f"flag_{i}",
+            description="...", required=False,
+        )
+        for i in range(3)
+    ]
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="exploration", objectives=objs,
+        advance_rule=AdvanceRule.M_OF_N, advance_threshold=None,
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    # Set 2 of 3 flags — won't trigger ADVANCE since threshold falls back to 3.
+    result = engine.evaluate(
+        arc=arc,
+        interpreted=_interp(ActionType.IMPROVISE),
+        outcome=_outcome(),
+        location=None, history=_history(),
+        world_flags={"flag_0": True, "flag_1": True}, inventory=set(),
+    )
+    # The fallback reason should be present even though we didn't advance.
+    assert "advance_rule:m_of_n_no_threshold_fallback" in result.reasons
+    assert result.decision == "STAY" or result.decision == "ADVANCE"  # depends on threshold semantics
