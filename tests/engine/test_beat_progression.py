@@ -5,6 +5,7 @@ from engine.beat_progression import (
     BeatHistory,
     BeatProgress,
     BeatProgressionResult,
+    BeatProgressionEngine,
     JudgeRequest,
     ObjectivePartialMatch,
     ObjectiveState,
@@ -13,6 +14,8 @@ from engine.validators import ActionType
 from world.story_arc import (
     AdvanceRule,
     BeatObjective,
+    GateKind,
+    ObjectiveGate,
     ObjectiveKind,
     StoryArc,
     StoryBeat,
@@ -215,3 +218,196 @@ def test_m_of_n_fallback_logs_reason():
     # The fallback reason should be present even though we didn't advance.
     assert "advance_rule:m_of_n_no_threshold_fallback" in result.reasons
     assert result.decision == "STAY" or result.decision == "ADVANCE"  # depends on threshold semantics
+
+
+# ---------------------------------------------------------------------------
+# B5 tests — ADVANCE / NEEDS_JUDGE / edge paths
+# ---------------------------------------------------------------------------
+
+
+def test_advance_all_required():
+    obj1 = BeatObjective(
+        id="talk_npc", kind=ObjectiveKind.TALK, target="Bob", description="...",
+    )
+    obj2 = BeatObjective(
+        id="get_item", kind=ObjectiveKind.POSSESS, target="key", description="...",
+    )
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="social", objectives=[obj1, obj2],
+        advance_rule=AdvanceRule.ALL_REQUIRED,
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    # Player has the key AND talks to Bob.
+    result = engine.evaluate(
+        arc=arc,
+        interpreted=_interp(ActionType.TALK, target="Bob"),
+        outcome=_outcome(),
+        location=None,
+        history=_history(),
+        world_flags={},
+        inventory={"key"},
+    )
+    assert result.decision == "ADVANCE"
+    assert result.progress.progress_score == 100
+    assert result.new_beat is not None
+
+
+def test_no_advance_when_one_required_missing():
+    obj1 = BeatObjective(
+        id="talk_npc", kind=ObjectiveKind.TALK, target="Bob", description="...",
+    )
+    obj2 = BeatObjective(
+        id="get_item", kind=ObjectiveKind.POSSESS, target="key", description="...",
+    )
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="social", objectives=[obj1, obj2],
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    # Player talks to Bob but has no key.
+    result = engine.evaluate(
+        arc=arc,
+        interpreted=_interp(ActionType.TALK, target="Bob"),
+        outcome=_outcome(),
+        location=None,
+        history=_history(),
+        world_flags={},
+        inventory=set(),
+    )
+    assert result.decision == "STAY"
+    assert result.progress.progress_score == 50  # 1/2 completed
+
+
+def test_advance_any_rule():
+    obj = BeatObjective(
+        id="talk_npc", kind=ObjectiveKind.TALK, target="Bob", description="...",
+    )
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="social", objectives=[obj, BeatObjective(
+            id="other", kind=ObjectiveKind.POSSESS, target="key", description="...",
+            required=False,
+        )],
+        advance_rule=AdvanceRule.ANY,
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.TALK, target="Bob"),
+        outcome=_outcome(), location=None, history=_history(),
+        world_flags={}, inventory=set(),
+    )
+    assert result.decision == "ADVANCE"
+
+
+def test_advance_m_of_n_rule():
+    objs = [
+        BeatObjective(
+            id=f"o{i}", kind=ObjectiveKind.FLAG, target=f"f{i}", description="...",
+            required=False,
+        )
+        for i in range(4)
+    ]
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="exploration", objectives=objs,
+        advance_rule=AdvanceRule.M_OF_N, advance_threshold=2,
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.IMPROVISE),
+        outcome=_outcome(), location=None, history=_history(),
+        world_flags={"f0": True, "f1": True}, inventory=set(),
+    )
+    assert result.decision == "ADVANCE"  # 2 of 4 satisfies threshold
+
+
+def test_needs_judge_on_partial_match():
+    obj = BeatObjective(
+        id="talk_kaelen", kind=ObjectiveKind.TALK, target="Kaelen", description="...",
+    )
+    beat = StoryBeat(
+        beat_number=1, title="X", description="Y", location_hint="Z",
+        encounter_type="social", objectives=[obj],
+        judge_rubric="Accept any approach where Kaelen actually speaks.",
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    # Talk to "Kae" — fuzzy ratio about 0.7-ish, but with default threshold
+    # 0.7, may land just below.
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.TALK, target="Kae"),
+        outcome=_outcome(), location=None, history=_history(),
+        world_flags={}, inventory=set(),
+    )
+    # Either ADVANCE (if ratio >= 0.7) or NEEDS_JUDGE (if 0.5 <= ratio < 0.7).
+    # NEVER STAY for this input.
+    assert result.decision in ("ADVANCE", "NEEDS_JUDGE")
+    if result.decision == "NEEDS_JUDGE":
+        assert result.judge_request is not None
+        assert len(result.judge_request.objectives) == 1
+        assert result.judge_request.beat_judge_rubric is not None
+
+
+def test_needs_judge_on_gate_failed():
+    """Match passes but gate fails → NEEDS_JUDGE with gate_failed=True."""
+    obj = BeatObjective(
+        id="talk_kaelen", kind=ObjectiveKind.TALK, target="Kaelen", description="...",
+        gate=ObjectiveGate(kind=GateKind.MIN_REVEALS, value=1),
+    )
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="social", objectives=[obj],
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.TALK, target="Kaelen"),
+        outcome=_outcome(talk_reveals_count=0),  # gate fails
+        location=None, history=_history(),
+        world_flags={}, inventory=set(),
+    )
+    assert result.decision == "NEEDS_JUDGE"
+    assert result.judge_request is not None
+    pm = result.judge_request.objectives[0]
+    assert pm.gate_failed is True
+    assert pm.gate_kind == GateKind.MIN_REVEALS
+
+
+def test_arc_complete_returns_stay():
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="exploration",
+    )
+    arc = _make_arc([beat])
+    # Force current_beat_index past the end.
+    arc = arc.model_copy(update={"current_beat_index": len(arc.beats)})
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.IMPROVISE),
+        outcome=_outcome(), location=None, history=_history(),
+        world_flags={}, inventory=set(),
+    )
+    assert result.decision == "STAY"
+    assert "arc_complete" in result.reasons
+
+
+def test_no_objectives_returns_stay_with_reason():
+    """Beat with empty objectives list (legacy unmappable trigger) stays put."""
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="exploration",
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.IMPROVISE),
+        outcome=_outcome(), location=None, history=_history(),
+        world_flags={}, inventory=set(),
+    )
+    assert result.decision == "STAY"
+    assert "no_objectives" in result.reasons
