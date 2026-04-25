@@ -4,6 +4,7 @@ Represents the narrative plan for a campaign — a sequence of story beats
 from introduction through resolution.
 """
 
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -16,6 +17,53 @@ class CompletionTrigger(BaseModel):
 
     type: Literal["interact", "defeat", "talk", "arrive", "search", "pickup"]
     target: str
+
+
+class ObjectiveKind(str, Enum):
+    """Type of player action a BeatObjective listens for."""
+
+    TALK = "talk"
+    DEFEAT = "defeat"
+    ARRIVE = "arrive"
+    EXAMINE = "examine"
+    POSSESS = "possess"
+    FLAG = "flag"
+
+
+class GateKind(str, Enum):
+    """Additional mechanical condition layered on top of an ObjectiveKind match."""
+
+    MIN_REVEALS = "min_reveals"
+    MIN_DISPOSITION = "min_disposition"
+    HAS_ITEM = "has_item"
+    FLAG_SET = "flag_set"
+
+
+class ObjectiveGate(BaseModel):
+    """A post-match constraint on an objective."""
+
+    kind: GateKind
+    value: int | str
+
+
+class BeatObjective(BaseModel):
+    """A verifiable condition that contributes to beat completion."""
+
+    id: str = Field(min_length=1)
+    kind: ObjectiveKind
+    target: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    required: bool = True
+    fuzzy_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    gate: ObjectiveGate | None = None
+
+
+class AdvanceRule(str, Enum):
+    """How objective completion combines into beat completion."""
+
+    ALL_REQUIRED = "all_required"
+    ANY = "any"
+    M_OF_N = "m_of_n"
 
 
 class BeatEffects(BaseModel):
