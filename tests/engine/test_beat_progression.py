@@ -1,5 +1,7 @@
 """Tests for the BeatProgressionEngine — pure deterministic logic."""
 
+from unittest.mock import MagicMock
+
 from ai.models import InterpretedAction, MechanicsOutcome
 from engine.beat_progression import (
     BeatHistory,
@@ -411,3 +413,78 @@ def test_no_objectives_returns_stay_with_reason():
     )
     assert result.decision == "STAY"
     assert "no_objectives" in result.reasons
+
+
+# ---------------------------------------------------------------------------
+# B6 tests — anti-regression + required-only-subset edge case
+# ---------------------------------------------------------------------------
+
+
+def test_no_double_advance_in_one_turn():
+    """REGRESSION: legacy code could advance two beats in one turn because
+    the deterministic check (orchestrator.py:500) and location-based check
+    (game_session.py:106) ran in series. The new engine returns ONE decision
+    per evaluate() call — no double-advance possible at the engine level."""
+    # Beat 1: talk to Kaelen at the Forge
+    beat1 = StoryBeat(
+        beat_number=1, title="Find Kaelen", description="...",
+        location_hint="Forge",
+        encounter_type="social",
+        objectives=[BeatObjective(
+            id="talk_kaelen", kind=ObjectiveKind.TALK, target="Kaelen",
+            description="Speak with Kaelen",
+        )],
+    )
+    # Beat 2: arrive at the Marketplace
+    beat2 = StoryBeat(
+        beat_number=2, title="Find the witness", description="...",
+        location_hint="Marketplace",
+        encounter_type="exploration",
+        objectives=[BeatObjective(
+            id="arrive_market", kind=ObjectiveKind.ARRIVE, target="Marketplace",
+            description="Reach the marketplace",
+        )],
+    )
+    arc = _make_arc([beat1, beat2])
+    engine = BeatProgressionEngine()
+
+    # Player talks to Kaelen — should ONLY satisfy beat 1, not jump to beat 2.
+    location = MagicMock()
+    location.name = "Forge"
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.TALK, target="Kaelen"),
+        outcome=_outcome(), location=location, history=_history(),
+        world_flags={}, inventory=set(),
+    )
+
+    assert result.decision == "ADVANCE"
+    # The new beat must be beat 2 (index 1), not beat 3 (index 2).
+    assert result.new_beat is not None
+    assert result.new_beat.beat_number == 2
+
+
+def test_advance_required_only_subset():
+    """When a beat has both required and optional objectives, completing only
+    the required ones should ADVANCE — even though progress_score < 100."""
+    required_obj = BeatObjective(
+        id="talk_npc", kind=ObjectiveKind.TALK, target="Bob",
+        description="...", required=True,
+    )
+    optional_obj = BeatObjective(
+        id="optional_item", kind=ObjectiveKind.POSSESS, target="bonus key",
+        description="...", required=False,
+    )
+    beat = StoryBeat(
+        beat_number=1, title="X", description="...", location_hint="...",
+        encounter_type="social", objectives=[required_obj, optional_obj],
+        advance_rule=AdvanceRule.ALL_REQUIRED,
+    )
+    arc = _make_arc([beat])
+    engine = BeatProgressionEngine()
+    result = engine.evaluate(
+        arc=arc, interpreted=_interp(ActionType.TALK, target="Bob"),
+        outcome=_outcome(), location=None, history=_history(),
+        world_flags={}, inventory=set(),  # no bonus key
+    )
+    assert result.decision == "ADVANCE"
+    assert result.progress.progress_score == 50  # 1 of 2 completed, but ALL_REQUIRED met
