@@ -221,7 +221,9 @@ class TestOnMessageFilters:
         msg.reply.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_rejects_non_player_user(self) -> None:
+    async def test_silently_ignores_non_player_user(self) -> None:
+        """Viewers (added via /add_member post-launch) ping the bot freely
+        but the handler must NOT reply — they're spectators by design."""
         session = _make_session(player_id=1)
         bot = _make_bot(sessions={1: session})
         cog = _make_cog(bot)
@@ -232,9 +234,7 @@ class TestOnMessageFilters:
             mentions=[bot.user],
         )
         await cog.on_message(msg)  # type: ignore[arg-type]
-        msg.reply.assert_called_once()
-        sent = msg.reply.call_args.args[0]
-        assert "personnage" in sent.lower()
+        msg.reply.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_replies_when_interpreter_unavailable(self) -> None:

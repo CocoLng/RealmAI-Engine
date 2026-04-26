@@ -184,7 +184,12 @@ class SessionCog(commands.Cog):
             db_session.close()
 
         # Build lobby state
-        lobby = LobbyState(creator_id=creator_id, language=language)
+        lobby = LobbyState(
+            creator_id=creator_id,
+            language=language,
+            campaign_name=campaign_name,
+            theme=theme,
+        )
         # Serialise concurrent edits of the public lobby message — multiple
         # players may finish setup or leave at the same instant.
         lobby_refresh_lock = asyncio.Lock()
@@ -418,6 +423,7 @@ class SessionCog(commands.Cog):
             lobby_msg = await channel.send(embed=embed, view=lobby_view)
         # Stash the message so callbacks can re-edit when no interaction is in scope
         lobby_view._lobby_message = lobby_msg  # type: ignore[attr-defined]
+        lobby.lobby_message = lobby_msg
 
         self.bot.lobbies[channel.id] = lobby
 
@@ -445,6 +451,152 @@ class SessionCog(commands.Cog):
             await interaction.followup.send(
                 f"Lobby ouvert dans {channel.mention} — les joueurs peuvent rejoindre.",
             )
+
+    # ------------------------------------------------------------------
+    # /add_member — host-only, host adds a player or viewer to the channel
+    # ------------------------------------------------------------------
+
+    async def _refresh_lobby_embed(
+        self, lobby: LobbyState, guild: discord.Guild,
+    ) -> None:
+        """Rebuild the lobby roster embed in place. Safe no-op if no message."""
+        if lobby.lobby_message is None:
+            return
+        roster = []
+        for p in lobby.players.values():
+            m = guild.get_member(p.user_id)
+            disp = m.display_name if m else f"User {p.user_id}"
+            roster.append((p, disp))
+        host_member = guild.get_member(lobby.creator_id)
+        host_name = (
+            host_member.display_name if host_member
+            else f"User {lobby.creator_id}"
+        )
+        new_embed = build_lobby_embed(
+            campaign_name=lobby.campaign_name,
+            theme=lobby.theme,
+            host_name=host_name,
+            roster=roster,
+            language=lobby.language,
+        )
+        try:
+            await lobby.lobby_message.edit(embed=new_embed)
+        except discord.HTTPException:
+            logger.warning("_refresh_lobby_embed: edit failed", exc_info=True)
+
+    @app_commands.command(
+        name="add_member",
+        description="Ajoute un joueur (lobby) ou un spectateur (campagne lancée) au salon",
+    )
+    @app_commands.describe(user="Utilisateur à ajouter au salon de campagne")
+    async def add_member(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+    ) -> None:
+        """Add a member to the campaign channel.
+
+        Behaviour depends on campaign state:
+        - **Lobby phase** (channel.id in bot.lobbies): the new member is
+          slotted as JOINED and can click Rejoindre to create a character
+          normally — useful when the host forgot to mention someone in
+          /start_campaign.
+        - **Active session** (channel.id in bot.sessions): the new member
+          becomes a *viewer* — they can read and chat in the channel, but
+          ActionHandlerCog ignores them when they ping the bot (only
+          users in ``session.characters`` can drive actions).
+
+        Host-only; refuses outside campaign channels.
+        """
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Cette commande doit être utilisée dans un salon de campagne.",
+                ephemeral=True,
+            )
+            return
+
+        lobby = self.bot.lobbies.get(channel.id)
+        session = self.bot.sessions.get(channel.id)
+        if lobby is None and session is None:
+            await interaction.response.send_message(
+                "Ce salon n'a aucune campagne active. "
+                "Utilise cette commande dans un salon créé par `/start_campaign`.",
+                ephemeral=True,
+            )
+            return
+
+        host_id = (
+            lobby.creator_id if lobby is not None
+            else session.creator_id  # type: ignore[union-attr]
+        )
+        if interaction.user.id != host_id:
+            await interaction.response.send_message(
+                "Seul le host de la campagne peut ajouter des membres.",
+                ephemeral=True,
+            )
+            return
+
+        if user.bot:
+            await interaction.response.send_message(
+                "Tu ne peux pas ajouter un bot.", ephemeral=True,
+            )
+            return
+        if user.id == host_id:
+            await interaction.response.send_message(
+                "Tu es déjà dans le salon (host).", ephemeral=True,
+            )
+            return
+
+        # Grant channel access (idempotent).
+        try:
+            await channel.set_permissions(
+                user, read_messages=True, send_messages=True,
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Permissions insuffisantes pour modifier le salon.",
+                ephemeral=True,
+            )
+            return
+
+        ping_only = discord.AllowedMentions(
+            everyone=False, roles=False, users=[user],
+        )
+        if lobby is not None:
+            try:
+                lobby.add_player(user.id)
+            except ValueError as exc:
+                await interaction.response.send_message(
+                    f"Impossible : {exc}", ephemeral=True,
+                )
+                return
+            await self._refresh_lobby_embed(lobby, channel.guild)
+            await channel.send(
+                f"🎭 {user.mention} a été ajouté au lobby — clique "
+                f"**Rejoindre** pour créer ton personnage.",
+                allowed_mentions=ping_only,
+            )
+            await interaction.response.send_message(
+                f"✅ {user.mention} ajouté au lobby.", ephemeral=True,
+            )
+        else:
+            # Post-launch: viewer. ActionHandlerCog ignores non-players.
+            await channel.send(
+                f"👁️ {user.mention} rejoint la table en **spectateur** — "
+                f"tu peux suivre l'aventure et discuter, mais le bot ne "
+                f"traitera pas tes pings.",
+                allowed_mentions=ping_only,
+            )
+            await interaction.response.send_message(
+                f"✅ {user.mention} ajouté en spectateur.", ephemeral=True,
+            )
+
+        logger.info(
+            "ADD_MEMBER channel=%s host=%s added=%s mode=%s",
+            channel.id, host_id, user.id,
+            "lobby" if lobby is not None else "viewer",
+        )
 
     # ------------------------------------------------------------------
     # Background pre-generation (arc + starting location)
@@ -603,6 +755,7 @@ class SessionCog(commands.Cog):
         # ---- Build GameSession ----
         session = GameSession(
             campaign=campaign,
+            creator_id=lobby.creator_id,
             characters=characters,
             inventories=inventories,
             spellcasters=spellcasters,
@@ -842,9 +995,12 @@ class SessionCog(commands.Cog):
             from engine.combat import CombatState
             combat_state = CombatState.model_validate_json(campaign.combat_state_json)
 
-        # Rebuild in-memory session
+        # Rebuild in-memory session. ``creator_id`` is set from the resumer
+        # — we don't persist it on Campaign yet, so /resume effectively
+        # transfers host rights to whoever brings the campaign back online.
         session = GameSession(
             campaign=campaign,
+            creator_id=interaction.user.id,
             current_location=location,
             combat_state=combat_state,
             npcs={npc.name: npc for npc in npcs},

@@ -104,11 +104,9 @@ class ActionHandlerCog(commands.Cog):
             return
 
         # 4. Author must be a registered player in the session.
+        # Viewers (added via /add_member after launch) live here — silently
+        # ignored so they can chat freely without spamming a refusal.
         if message.author.id not in session.characters:
-            await message.reply(
-                "Tu n'as pas de personnage dans cette campagne. "
-                "Utilise `/create_character` pour rejoindre la partie.",
-            )
             return
 
         # 5. AI must be available.

@@ -42,6 +42,10 @@ class GameSession:
     """
 
     campaign: Campaign
+    creator_id: int = 0
+    """Discord user_id of the campaign host. Used for host-only commands
+    (e.g. /add_member). Defaults to 0 for legacy/test sessions; live
+    sessions always set this from the lobby creator."""
     characters: dict[int, Character] = field(default_factory=dict)
     inventories: dict[int, Inventory] = field(default_factory=dict)
     spellcasters: dict[int, SpellcasterState | None] = field(default_factory=dict)

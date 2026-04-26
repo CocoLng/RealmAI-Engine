@@ -12,6 +12,8 @@ from enum import IntEnum, StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import discord
+
     from engine.character import Character
     from engine.inventory import Inventory
     from engine.spells import SpellcasterState
@@ -66,7 +68,12 @@ class LobbyState:
 
     creator_id: int
     language: str = "fr"
+    campaign_name: str = ""
+    theme: str = ""
     players: dict[int, LobbyPlayer] = field(default_factory=dict)
+    # Reference to the public lobby Discord message so any cog can refresh
+    # the embed without having to thread the message through closures.
+    lobby_message: discord.Message | None = field(default=None, repr=False)
     # Background generation results — populated by the pre-gen task.
     pregen_phase: GenerationPhase = GenerationPhase.PENDING
     pregen_task: asyncio.Task[None] | None = field(default=None, repr=False)
