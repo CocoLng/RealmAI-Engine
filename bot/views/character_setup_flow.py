@@ -123,7 +123,11 @@ class CharacterSetupFlow(LoggedView):
                 view=self,
             )
         elif next_step == SetupStep.KIT_MOTIV:
-            raise NotImplementedError("KIT_MOTIV step lands in Task B7")
+            self._build_kit_motiv_components()
+            await interaction.response.edit_message(
+                content="**Étape 5/6** — Choisis ton équipement et ta motivation.",
+                view=self,
+            )
         elif next_step == SetupStep.REVIEW:
             raise NotImplementedError("REVIEW step lands in Task B8")
         else:
@@ -375,4 +379,69 @@ class CharacterSetupFlow(LoggedView):
         from engine.character import Skill
         self.skill_proficiencies = [Skill(v) for v in values]
         self._build_skills_components()
+        await interaction.response.edit_message(view=self)
+
+    def _build_kit_motiv_components(self) -> None:
+        from engine.starter_gear import get_starter_kits
+
+        from bot.i18n import MOTIVATION_KEYS, get_motivation_label
+
+        self.clear_items()
+        assert self.char_class is not None
+        kits = get_starter_kits(self.char_class)
+        kit_options = [
+            discord.SelectOption(
+                label=k.name,
+                value=k.name,
+                description=k.description[:100] if k.description else None,
+                default=(self.kit_name == k.name),
+            )
+            for k in kits
+        ]
+        kit_select = ui.Select(
+            placeholder="Choisis ton kit de départ...",
+            options=kit_options,
+            custom_id="setup_kit",
+        )
+        kit_select.callback = lambda i: self._on_kit_selected(i, kit_select.values)
+        self.add_item(kit_select)
+
+        motiv_options = [
+            discord.SelectOption(
+                label=get_motivation_label(self.language, m),
+                value=m,
+                default=(self.motivation_key == m),
+            )
+            for m in MOTIVATION_KEYS
+        ]
+        motiv_select = ui.Select(
+            placeholder="Choisis ta motivation...",
+            options=motiv_options,
+            custom_id="setup_motivation",
+        )
+        motiv_select.callback = lambda i: self._on_motivation_selected(i, motiv_select.values)
+        self.add_item(motiv_select)
+
+        continue_btn = ui.Button(
+            label="Continuer",
+            emoji="➡️",
+            style=discord.ButtonStyle.success,
+            disabled=not (self.kit_name and self.motivation_key),
+            custom_id="setup_kit_motiv_continue",
+        )
+        continue_btn.callback = lambda i: self.transition_to(i, SetupStep.REVIEW)
+        self.add_item(continue_btn)
+
+    async def _on_kit_selected(
+        self, interaction: discord.Interaction, values: list[str],
+    ) -> None:
+        self.kit_name = values[0]
+        self._build_kit_motiv_components()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_motivation_selected(
+        self, interaction: discord.Interaction, values: list[str],
+    ) -> None:
+        self.motivation_key = values[0]
+        self._build_kit_motiv_components()
         await interaction.response.edit_message(view=self)

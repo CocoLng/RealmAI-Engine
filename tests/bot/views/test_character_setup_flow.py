@@ -139,3 +139,19 @@ async def test_skills_step_uses_class_skill_choices():
     config = CLASS_SKILL_CHOICES[CharacterClass.WIZARD]
     assert len(select.options) == len(config.options)
     assert select.max_values == config.choose
+
+
+@pytest.mark.asyncio
+async def test_kit_motiv_step_records_kit_and_motivation():
+    from engine.character import CharacterClass
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.char_class = CharacterClass.FIGHTER
+    view.state = SetupStep.KIT_MOTIV
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view._on_kit_selected(interaction, ["Iron Vow"])
+    await view._on_motivation_selected(interaction, ["Contract"])
+    assert view.kit_name == "Iron Vow"
+    assert view.motivation_key == "Contract"
