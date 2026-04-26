@@ -37,7 +37,10 @@ class HintCog(commands.Cog):
     def _get_repo(self) -> "HintUsageRepository":
         """Build a HintUsageRepository on a fresh DB session."""
         from db.repositories.hint_usage_repo import HintUsageRepository
-        db_session = self.bot.db_factory()
+        db_factory = getattr(self.bot, "db_factory", None)
+        if db_factory is None:
+            raise RuntimeError("Bot is missing db_factory")
+        db_session = db_factory()
         return HintUsageRepository(db_session)
 
     def _build_judge(self, session: "GameSession"):  # type: ignore[return]
@@ -46,6 +49,8 @@ class HintCog(commands.Cog):
         Overridable in tests.
         """
         from ai.beat_judge import BeatJudge
+        if session.ollama_client is None:
+            raise RuntimeError("BeatJudge requires an OllamaClient")
         return BeatJudge(session.ollama_client)
 
     # ----- commands -----
@@ -60,7 +65,14 @@ class HintCog(commands.Cog):
         public: bool = False,
     ) -> None:
         """Three-level progressive hint, escalates on repeat use within a beat."""
-        session = self._get_session(interaction.channel_id)
+        channel_id = interaction.channel_id
+        if channel_id is None:
+            await interaction.response.send_message(
+                "Cette commande n'est pas disponible dans ce contexte.",
+                ephemeral=True,
+            )
+            return
+        session = self._get_session(channel_id)
         if session is None or session.story_arc is None:
             await interaction.response.send_message(
                 "Aucune campagne active dans ce salon.", ephemeral=True,
