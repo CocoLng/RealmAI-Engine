@@ -74,3 +74,39 @@ async def test_race_class_step_continue_disabled_until_both_selected():
     view.char_class = CharacterClass.WIZARD
     view._refresh_continue_state()
     assert not continue_btn.disabled
+
+
+@pytest.mark.asyncio
+async def test_stats_step_preset_button_applies_class_preset():
+    from engine.character import CharacterClass, Race
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.race = Race.ELF
+    view.char_class = CharacterClass.WIZARD
+    view.state = SetupStep.STATS
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view._on_preset_stats(interaction)
+    assert view.ability_scores is not None
+    # Wizard preset has INT=15
+    assert view.ability_scores.INT == 15
+
+
+@pytest.mark.asyncio
+async def test_stats_step_random_button_rolls_and_assigns():
+    import random
+    random.seed(42)
+    from engine.character import CharacterClass, Race
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.race = Race.HUMAN
+    view.char_class = CharacterClass.FIGHTER
+    view.state = SetupStep.STATS
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view._on_random_stats(interaction)
+    assert view.ability_scores is not None
+    # All 6 abilities filled
+    assert all(getattr(view.ability_scores, a.name) >= 3 for a in __import__("engine.character", fromlist=["Ability"]).Ability)

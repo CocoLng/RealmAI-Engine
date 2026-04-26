@@ -105,8 +105,11 @@ class CharacterSetupFlow(LoggedView):
                 view=self,
             )
         elif next_step == SetupStep.STATS:
-            # Implemented in B5
-            raise NotImplementedError("STATS step lands in Task B5")
+            self._build_stats_components()
+            await interaction.response.edit_message(
+                content=self._stats_status_text(),
+                view=self,
+            )
         elif next_step == SetupStep.SKILLS:
             raise NotImplementedError("SKILLS step lands in Task B6")
         elif next_step == SetupStep.KIT_MOTIV:
@@ -218,3 +221,79 @@ class CharacterSetupFlow(LoggedView):
         for child in self.children:
             if isinstance(child, ui.Button) and child.label and "Continuer" in child.label:
                 child.disabled = not (self.race and self.char_class)
+
+    def _stats_status_text(self) -> str:
+        if self.ability_scores is None:
+            return (
+                f"**Étape 3/6** — Choisis tes statistiques pour ton "
+                f"{self.char_class.value if self.char_class else ''}.\n\n"
+                f"_Choisis une méthode :_"
+            )
+        s = self.ability_scores
+        return (
+            f"**Étape 3/6** — Statistiques\n"
+            f"```STR {s.STR:2d}  DEX {s.DEX:2d}  CON {s.CON:2d}\n"
+            f"INT {s.INT:2d}  WIS {s.WIS:2d}  CHA {s.CHA:2d}```\n"
+            f"_Confirme ou change de méthode._"
+        )
+
+    def _build_stats_components(self) -> None:
+        self.clear_items()
+
+        # Preset button
+        preset_btn = ui.Button(
+            label=f"Optimisé pour {self.char_class.value if self.char_class else ''}",
+            emoji="✨",
+            style=discord.ButtonStyle.primary,
+            custom_id="setup_stats_preset",
+        )
+        preset_btn.callback = lambda i: self._on_preset_stats(i)
+        self.add_item(preset_btn)
+
+        # Random button
+        random_btn = ui.Button(
+            label="Aléatoire (4d6)",
+            emoji="🎲",
+            style=discord.ButtonStyle.secondary,
+            custom_id="setup_stats_random",
+        )
+        random_btn.callback = lambda i: self._on_random_stats(i)
+        self.add_item(random_btn)
+
+        # Continue button (only enabled if scores chosen)
+        continue_btn = ui.Button(
+            label="Continuer",
+            emoji="➡️",
+            style=discord.ButtonStyle.success,
+            disabled=(self.ability_scores is None),
+            custom_id="setup_stats_continue",
+        )
+        continue_btn.callback = lambda i: self.transition_to(i, SetupStep.SKILLS)
+        self.add_item(continue_btn)
+
+    async def _on_preset_stats(self, interaction: discord.Interaction) -> None:
+        from engine.character import Ability, AbilityScores
+        from engine.character.presets import get_class_preset
+
+        assert self.char_class is not None
+        preset = get_class_preset(self.char_class)
+        self.ability_scores = AbilityScores(
+            STR=preset[Ability.STR], DEX=preset[Ability.DEX], CON=preset[Ability.CON],
+            INT=preset[Ability.INT], WIS=preset[Ability.WIS], CHA=preset[Ability.CHA],
+        )
+        self._build_stats_components()
+        await interaction.response.edit_message(content=self._stats_status_text(), view=self)
+
+    async def _on_random_stats(self, interaction: discord.Interaction) -> None:
+        from engine.character import Ability, AbilityScores
+        from engine.character.random_stats import auto_assign_random, roll_4d6_drop_lowest
+
+        assert self.char_class is not None
+        rolls = roll_4d6_drop_lowest()
+        assignment = auto_assign_random(self.char_class, rolls)
+        self.ability_scores = AbilityScores(
+            STR=assignment[Ability.STR], DEX=assignment[Ability.DEX], CON=assignment[Ability.CON],
+            INT=assignment[Ability.INT], WIS=assignment[Ability.WIS], CHA=assignment[Ability.CHA],
+        )
+        self._build_stats_components()
+        await interaction.response.edit_message(content=self._stats_status_text(), view=self)
