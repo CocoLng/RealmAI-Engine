@@ -97,26 +97,10 @@ class ActionPipeline:
             force_director_run=force_director_run,
         )
 
-    def _sync_overrides_to_runner(self) -> None:
-        """Propagate any instance-level overrides from the facade to the runner.
-
-        When tests (or other callers) use ``patch.object(pipeline, "_llm_beat_fallback",
-        mock_fn)``, Python sets the attribute directly on the facade instance, shadowing
-        the method descriptor. We copy it to the runner so the runner's
-        ``_continue_from_resolution`` sees the same override.
-        """
-        override = self.__dict__.get("_llm_beat_fallback")
-        if override is not None:
-            self._runner._llm_beat_fallback = override  # type: ignore[method-assign]
-        elif "_llm_beat_fallback" in self._runner.__dict__:
-            # Clear any previously propagated override (e.g. after the patch context exits).
-            del self._runner.__dict__["_llm_beat_fallback"]
-
     async def process(
         self, player_text: str, progress_callback: ProgressCallback | None = None,
     ) -> PipelineOutput:
         """Run the full pipeline for a fresh player action."""
-        self._sync_overrides_to_runner()
         return await self._runner.process(player_text, progress_callback)
 
     async def resume_with_resolution(
@@ -124,7 +108,6 @@ class ActionPipeline:
         progress_callback: ProgressCallback | None = None,
     ) -> PipelineOutput:
         """Continue a paused pipeline after the user picked a candidate."""
-        self._sync_overrides_to_runner()
         return await self._runner.resume_with_resolution(
             ambiguity, chosen_entity_id, progress_callback,
         )
@@ -134,7 +117,6 @@ class ActionPipeline:
         progress_callback: ProgressCallback | None = None,
     ) -> PipelineOutput:
         """Run the pipeline from a pre-built InterpretedAction."""
-        self._sync_overrides_to_runner()
         return await self._runner.process_interpreted_action(action, progress_callback)
 
     # --- Passthrough properties for callers that read side-channel state ---
@@ -312,23 +294,6 @@ class ActionPipeline:
             current_outcome_summary=current_outcome_summary,
             ongoing_dialogue_with=ongoing_dialogue_with,
         )
-
-    async def _llm_beat_fallback(
-        self,
-        action: "InterpretedAction",
-        beat: Any,
-        outcome: Any,
-    ) -> dict:
-        """Delegate to PipelineRunner._llm_beat_fallback."""
-        return await self._runner._llm_beat_fallback(action, beat, outcome)
-
-    def _check_beat_completion(
-        self,
-        action: "InterpretedAction",
-        outcome: Any = None,
-    ) -> bool:
-        """Delegate to PipelineRunner._check_beat_completion."""
-        return self._runner._check_beat_completion(action, outcome)
 
     def _apply_beat_effects(self, effects: Any) -> str:
         """Delegate to PipelineRunner._apply_beat_effects."""

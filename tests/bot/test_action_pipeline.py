@@ -743,8 +743,14 @@ class TestBeatCompletion:
     """Deterministic beat completion via triggers."""
 
     @pytest.mark.asyncio
-    async def test_llm_fallback_fires_on_creative_solution(self):
-        """When deterministic trigger doesn't match but player is creative, LLM fallback fires."""
+    async def test_improvise_without_matching_objective_stays(self):
+        """IMPROVISE actions that don't match any objective → engine returns STAY, beat stays.
+
+        The new BeatProgressionEngine routes IMPROVISE to NEEDS_JUDGE only when
+        an objective scores as a partial match.  Since ObjectiveKind.INTERACT
+        requires ActionType.INTERACT, an IMPROVISE action scores 0.0 and produces
+        no partial match → STAY → beat does not advance.
+        """
         loc = Location(
             name="Bone Barrier",
             description="A wall of bones.",
@@ -794,15 +800,12 @@ class TestBeatCompletion:
         )
         pipeline.session = session
 
-        from unittest.mock import AsyncMock, patch
-        mock_judge = AsyncMock(return_value={"completed": True, "confidence": 0.9})
-        with patch.object(pipeline, "_llm_beat_fallback", mock_judge):
-            result = await pipeline.process("I use the sand")
+        result = await pipeline.process("I use the sand")
 
         assert isinstance(result, ActionPipelineResult)
-        assert result.new_beat is not None
-        assert result.new_beat.beat_number == 2
-        assert "Inner Court" in loc.unlocked_exits
+        # IMPROVISE scores 0 against ObjectiveKind.INTERACT → STAY → no beat advance.
+        assert result.new_beat is None
+        assert "Inner Court" not in loc.unlocked_exits
 
     @pytest.mark.asyncio
     async def test_interact_trigger_completes_beat(self):
@@ -1057,13 +1060,8 @@ class TestBeatCompletion:
         )
         pipeline.session = session
 
-        # Spy on the LLM fallback — it must NEVER be called for TALK.
-        from unittest.mock import AsyncMock, patch
-        spy_judge = AsyncMock(return_value={"completed": True, "confidence": 1.0})
-        with patch.object(pipeline, "_llm_beat_fallback", spy_judge):
-            result = await pipeline.process("bonjour garde")
+        result = await pipeline.process("bonjour garde")
 
-        spy_judge.assert_not_called()
         assert isinstance(result, ActionPipelineResult)
         assert result.new_beat is None  # beat did NOT advance
 

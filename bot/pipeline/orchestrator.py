@@ -21,7 +21,6 @@ Phases (also reported via the optional ``progress_callback``):
 from __future__ import annotations
 
 import asyncio
-import difflib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -34,7 +33,6 @@ from ai.entity_resolver import EntityCandidate, EntityResolver
 from ai.interpreter import Interpreter
 from ai.models import (
     InterpretedAction,
-    MechanicsOutcome,
     PublicEffects,
 )
 from ai.narrator import Narrator
@@ -228,6 +226,9 @@ class PipelineRunner:
     semantic_indexer: Any = None
     """Optional SemanticIndexer — when set, beat completion indexes revealed facts."""
 
+    beat_judge: Any = field(default=None, init=False)
+    """BeatJudge instance, lazily wired when ollama_client is available on session."""
+
     _trivial_kill_mechanics: str | None = field(default=None, init=False)
     _last_combat_active: bool = field(default=False, init=False)
 
@@ -245,6 +246,13 @@ class PipelineRunner:
     _pending_dice_embeds: list[Any] = field(default_factory=list, init=False)
     """Dice roll results to display as embeds (task 60). Populated by
     _resolve_flee and future combat resolvers. Consumed by the caller."""
+
+    def __post_init__(self) -> None:
+        """Wire BeatJudge when an ollama_client is available on session."""
+        _ollama = getattr(self.session, "ollama_client", None) if self.session is not None else None
+        if _ollama is not None:
+            from ai.beat_judge import BeatJudge
+            self.beat_judge = BeatJudge(_ollama)
 
     # ------------------------------------------------------------------
     # Public API
@@ -492,85 +500,79 @@ class PipelineRunner:
             if event_text:
                 record_combat_event(self.combat_state, event_text)
 
-        # Shadow mode: snapshot the arc BEFORE legacy code can mutate it.
-        # The shadow engine evaluates the same state the legacy code starts from,
-        # so divergences accurately reflect "what would the shadow have done given
-        # the same input as the legacy code". Without this snapshot, the shadow
-        # reads the post-legacy-mutation arc and reports apparent divergences
-        # that are actually just shadow seeing the next beat.
-        _snap_arc = getattr(self.session, "story_arc", None) if self.session is not None else None
-        shadow_arc_snapshot = _snap_arc.model_copy(deep=True) if _snap_arc is not None else None
-
-        # Beat completion check — deterministic trigger.
+        # ----- Beat progression — single decision point -----
+        new_beat: StoryBeat | None = None
         beat_completed = False
-        if (
-            self.session is not None
-            and interpreted.action_type != ActionType.QUESTION
-            and self._check_beat_completion(interpreted, outcome)
-        ):
-            beat_completed = True
-            arc = self.session.story_arc
-            if arc is None:
-                logger.warning("BEAT trigger matched but story_arc is None — skipping")
-            else:
-                beat = arc.beats[arc.current_beat_index]
-                hint = self._apply_beat_effects(beat.on_complete)
+        if self.session is not None and getattr(self.session, "story_arc", None) is not None:
+            from typing import Any as _Any
+            from engine.beat_progression import (
+                BeatHistory,
+                BeatProgressionEngine,
+            )
+            from world.story_arc import StoryArc as _StoryArc
+
+            arc: _StoryArc = self.session.story_arc  # type: ignore[assignment]
+
+            inventory_items: set[str] = set()
+            if self.inventory is not None:
+                inventory_items = {it.name for it in self.inventory.items}
+            world_flags: dict[str, _Any] = {}
+            if self.location is not None:
+                world_flags = dict(self.location.state_flags)
+
+            engine = BeatProgressionEngine()
+            beat_eval = engine.evaluate(
+                arc=arc,
+                interpreted=interpreted,
+                outcome=outcome,
+                location=self.location,
+                history=BeatHistory(),
+                world_flags=world_flags,
+                inventory=inventory_items,
+            )
+
+            should_advance = beat_eval.decision == "ADVANCE"
+
+            # If the engine asks for a judge, fire BeatJudge and re-decide.
+            if beat_eval.decision == "NEEDS_JUDGE" and getattr(self, "beat_judge", None) is not None:
+                judge = self.beat_judge
+                if judge is not None and beat_eval.judge_request is not None:
+                    judge.begin_turn(turn_id=str(id(interpreted)))
+                    judge_resp = judge.evaluate(beat_eval.judge_request)
+                    if judge_resp.passed and judge_resp.confidence >= 0.7:
+                        should_advance = True
+                        logger.info(
+                            "BEAT advance via judge campaign=%s confidence=%.2f reasoning=%r",
+                            self.campaign_id, judge_resp.confidence, judge_resp.reasoning,
+                        )
+                    else:
+                        logger.info(
+                            "BEAT judge declined campaign=%s passed=%s confidence=%.2f reasoning=%r",
+                            self.campaign_id, judge_resp.passed, judge_resp.confidence, judge_resp.reasoning,
+                        )
+
+            if should_advance:
+                beat_completed = True
+                old_beat = arc.beats[arc.current_beat_index]
+                hint = self._apply_beat_effects(old_beat.on_complete)
                 if hint:
                     outcome = outcome.model_copy(update={
                         "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
                     })
                 from world.story_arc import advance_beat
-                self.session.story_arc = advance_beat(arc)
+                advanced_arc = advance_beat(arc)
+                self.session.story_arc = advanced_arc
+                if advanced_arc.current_beat_index < len(advanced_arc.beats):
+                    new_beat = advanced_arc.beats[advanced_arc.current_beat_index]
+                else:
+                    new_beat = None
                 logger.info(
-                    "BEAT trigger-complete campaign=%s beat=%d title=%r",
-                    self.campaign_id, beat.beat_number, beat.title,
+                    "BEAT advance campaign=%s to=%d title=%r reasons=%s",
+                    self.campaign_id,
+                    advanced_arc.current_beat_index,
+                    new_beat.title if new_beat else "—",
+                    beat_eval.reasons,
                 )
-        elif (
-            self.session is not None
-            and getattr(self.session, "story_arc", None) is not None
-            # Only IMPROVISE is eligible for creative-completion fallback.
-            # Standard actions (TALK, ATTACK, PICKUP, MOVE, …) have
-            # direct triggers via _check_beat_completion. If the direct
-            # match failed, the beat is NOT done — we must not let the
-            # 4B judge second-guess standard actions, otherwise players
-            # skip ahead without narrative justification (observed
-            # 2026-04-11: saying hi to an NPC advanced the interrogation
-            # beat at confidence 0.95 via the LLM fallback).
-            and interpreted.action_type == ActionType.IMPROVISE
-        ):
-            arc = self.session.story_arc
-            assert arc is not None  # guaranteed by outer getattr(...) is not None guard
-            beat = arc.beats[arc.current_beat_index]
-            if (
-                beat.completion_trigger is not None
-                and self.location is not None
-            ):
-                from bot.game_session import _normalize_location
-                loc_ratio = difflib.SequenceMatcher(
-                    None,
-                    _normalize_location(self.location.name),
-                    _normalize_location(beat.location_hint),
-                ).ratio()
-                if loc_ratio >= 0.5:
-                    judge = await self._llm_beat_fallback(interpreted, beat, outcome)
-                    logger.info(
-                        "BEAT fallback campaign=%s completed=%s confidence=%.2f",
-                        self.campaign_id,
-                        judge.get("completed"), judge.get("confidence"),
-                    )
-                    if judge.get("completed") and judge.get("confidence", 0) >= 0.85:
-                        beat_completed = True
-                        hint = self._apply_beat_effects(beat.on_complete)
-                        if hint:
-                            outcome = outcome.model_copy(update={
-                                "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
-                            })
-                        from world.story_arc import advance_beat
-                        self.session.story_arc = advance_beat(arc)
-                        logger.info(
-                            "BEAT fallback-complete campaign=%s beat=%d title=%r",
-                            self.campaign_id, beat.beat_number, beat.title,
-                        )
 
         await self._emit(progress_callback, PipelinePhase.ASSEMBLING_CONTEXT)
         # Detect a Talk-action continuation: outcome.npc_dialogue is only set
@@ -628,87 +630,16 @@ class PipelineRunner:
             self.force_director_run = False  # consume the flag
             self._schedule_story_director(context_prompt=context_prompt)
 
-        # Lot D — beat advancement (trigger-based or location-based fallback).
-        new_beat: StoryBeat | None = None
-        if beat_completed and self.session and self.session.story_arc:
-            new_beat = self.session.story_arc.beats[
-                self.session.story_arc.current_beat_index
-            ]
-        elif self.session is not None and hasattr(
-            self.session, "advance_beat_if_ready",
-        ):
-            try:
-                candidate = self.session.advance_beat_if_ready()
-            except Exception:
-                logger.exception(
-                    "BEAT advance check failed campaign=%s", self.campaign_id,
-                )
-                candidate = None
-            if isinstance(candidate, StoryBeat):
-                new_beat = candidate
-        if new_beat is not None and self.db_factory is not None:
-            assert self.session is not None  # new_beat is set only when session is not None
+        # Persist the arc if it advanced.
+        if beat_completed and self.db_factory is not None and self.session is not None:
             session_arc = self.session.story_arc
             try:
                 await asyncio.to_thread(
-                    _persist_story_arc,
-                    self.db_factory,
-                    session_arc,
-                )
-                logger.info(
-                    "BEAT advanced campaign=%s to=%d title=%r",
-                    self.campaign_id,
-                    session_arc.current_beat_index if session_arc is not None else -1,
-                    new_beat.title,
+                    _persist_story_arc, self.db_factory, session_arc,
                 )
             except Exception:
-                logger.exception(
-                    "BEAT persist failed campaign=%s", self.campaign_id,
-                )
-
-        # ----- Shadow mode: run new engine without applying its decision -----
-        if self.session is not None and shadow_arc_snapshot is not None:
-            try:
-                from engine.beat_progression import (
-                    BeatHistory,
-                    BeatProgressionEngine,
-                    log_shadow_decision,
-                )
-
-                arc = shadow_arc_snapshot  # use pre-mutation snapshot
-
-                # Determine what the legacy code did this turn.
-                legacy_decision = "ADVANCE" if beat_completed or new_beat is not None else "STAY"
-
-                shadow_engine = BeatProgressionEngine()
-                inventory_items: set[str] = set()
-                if self.inventory is not None:
-                    inventory_items = {it.name for it in self.inventory.items}
-                world_flags: dict[str, Any] = {}
-                if self.location is not None:
-                    world_flags = dict(self.location.state_flags)
-
-                shadow_result = shadow_engine.evaluate(
-                    arc=arc,
-                    interpreted=interpreted,
-                    outcome=outcome,
-                    location=self.location,
-                    history=BeatHistory(),
-                    world_flags=world_flags,
-                    inventory=inventory_items,
-                )
-                current_beat = arc.beats[arc.current_beat_index] \
-                    if arc.current_beat_index < len(arc.beats) \
-                    else arc.beats[-1]
-                log_shadow_decision(
-                    campaign_id=self.campaign_id,
-                    beat_number=current_beat.beat_number,
-                    legacy_decision=legacy_decision,
-                    shadow_result=shadow_result,
-                )
-            except Exception:
-                logger.exception("SHADOW eval failed campaign=%s", self.campaign_id)
-        # ----- end shadow mode -----
+                logger.exception("BEAT persist failed campaign=%s", self.campaign_id)
+        # ----- end beat progression -----
 
         # Auto-checkpoint: persist full session state after every resolved action (B1).
         if self.db_factory is not None and self.session is not None:
@@ -750,91 +681,6 @@ class PipelineRunner:
         )
         return result
 
-    # ------------------------------------------------------------------
-    # Beat completion (deterministic triggers)
-    # ------------------------------------------------------------------
-
-    def _check_beat_completion(
-        self,
-        action: InterpretedAction,
-        outcome: MechanicsOutcome | None = None,
-    ) -> bool:
-        """Check if the action satisfies the current beat's completion trigger.
-
-        For most trigger types (interact, defeat, arrive, pickup, search)
-        the action itself is atomic: doing it at all means the objective
-        is met. **TALK is different** — addressing the right NPC does not
-        automatically mean the conversation was productive. If the NPC
-        refused to share anything or pushed back, the beat must NOT
-        advance. That gate is applied here via ``outcome`` when provided.
-        """
-        if self.session is None or getattr(self.session, "story_arc", None) is None:
-            return False
-        arc = self.session.story_arc
-        assert arc is not None  # guaranteed by getattr guard above
-        if arc.current_beat_index >= len(arc.beats):
-            return False
-        beat = arc.beats[arc.current_beat_index]
-        trigger = beat.completion_trigger
-        if trigger is None:
-            return False
-
-        type_map: dict[str, set[str]] = {
-            "interact": {ActionType.INTERACT},
-            "defeat": {ActionType.ATTACK},
-            "talk": {ActionType.TALK},
-            "arrive": {ActionType.MOVE},
-            "search": {ActionType.SEARCH},
-            "pickup": {ActionType.PICKUP},
-        }
-        allowed = type_map.get(trigger.type, set())
-        if action.action_type not in allowed:
-            return False
-
-        target_matches = False
-        if trigger.target and action.target_name:
-            from bot.game_session import _normalize_location
-            norm_target = _normalize_location(action.target_name)
-            norm_trigger = _normalize_location(trigger.target)
-            # Substring inclusion — robust to short-vs-long mismatches
-            # (e.g. action target "Kaelen" vs trigger target "Kaelen, le
-            # Gardien Blessé"). Without this, difflib.ratio() rejects the
-            # pair and the LLM fallback starts guessing.
-            if norm_target and norm_trigger:
-                if norm_target in norm_trigger or norm_trigger in norm_target:
-                    target_matches = True
-            if not target_matches:
-                ratio = difflib.SequenceMatcher(
-                    None, norm_target, norm_trigger,
-                ).ratio()
-                target_matches = ratio >= 0.6
-        if not target_matches:
-            return False
-
-        # Quality gate for TALK triggers — the conversation must have
-        # actually produced something. A dialogue that revealed nothing
-        # (NPC stonewalled the player) or made the NPC more hostile
-        # (disposition_change < 0) does NOT complete the beat, even when
-        # the player addressed the right character. Observed 2026-04-11:
-        # the player talked to the guard, the NPC agent returned
-        # disposition_change=-1 with a cold reveal, and the beat
-        # advanced anyway — leaving the player confused.
-        if trigger.type == "talk" and outcome is not None:
-            if outcome.talk_reveals_count <= 0:
-                logger.info(
-                    "BEAT talk-gate blocked campaign=%s reason=no-reveals",
-                    self.campaign_id,
-                )
-                return False
-            if outcome.talk_disposition_change < 0:
-                logger.info(
-                    "BEAT talk-gate blocked campaign=%s reason=disposition-regressed delta=%d",
-                    self.campaign_id, outcome.talk_disposition_change,
-                )
-                return False
-
-        return True
-
     def _apply_beat_effects(self, effects: BeatEffects) -> str:
         """Apply beat completion effects to the current location.
 
@@ -872,52 +718,6 @@ class PipelineRunner:
         loc.state_flags.update(effects.state_flags)
 
         return effects.narrative_hint
-
-    async def _llm_beat_fallback(
-        self,
-        action: InterpretedAction,
-        beat: "StoryBeat",
-        outcome: MechanicsOutcome,
-    ) -> dict:
-        """Ask the 4b model if the player's creative action completes the beat.
-
-        Returns {"completed": bool, "confidence": float}.
-        Falls back to {"completed": False, "confidence": 0.0} on any error.
-        """
-        if self.interpreter is None:
-            return {"completed": False, "confidence": 0.0}
-        trigger_desc = ""
-        if beat.completion_trigger:
-            trigger_desc = f"{beat.completion_trigger.type} on \"{beat.completion_trigger.target}\""
-        prompt = (
-            f"Beat objective: \"{beat.description}\"\n"
-            f"Expected trigger: {trigger_desc}\n"
-            f"Player action: {action.action_type.value} on \"{action.target_name or 'nothing'}\"\n"
-            f"Action summary: \"{outcome.summary}\"\n\n"
-            f"Has the player achieved the beat objective through a creative approach?\n"
-            f"Return JSON: {{\"completed\": true/false, \"confidence\": 0.0-1.0}}"
-        )
-        try:
-            client = self.interpreter._client
-            result = client.chat_json(
-                "qwen3.5:4b",
-                [
-                    {"role": "system", "content": "You judge whether a player's action has completed a story beat objective. Respond with JSON only: {\"completed\": bool, \"confidence\": float}"},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                think=False,
-            )
-            return {
-                "completed": bool(result.get("completed", False)),
-                "confidence": float(result.get("confidence", 0.0)),
-            }
-        except Exception:
-            logger.warning(
-                "BEAT LLM fallback failed campaign=%s", self.campaign_id,
-                exc_info=True,
-            )
-            return {"completed": False, "confidence": 0.0}
 
     def _schedule_story_director(self, *, context_prompt: str) -> None:
         """Fire-and-forget Story Director run. Result lands in semantic memory.
