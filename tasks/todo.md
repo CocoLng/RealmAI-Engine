@@ -95,3 +95,56 @@ Follow-ups (not blocking, can land later):
 - [ ] POSSESS matcher — fuzzy match for item-name variants ("old silver key" should match "silver key")
 - [ ] Last_attempt_action_id and completed_at_turn fields on ObjectiveState are never populated (engine is per-turn stateless); decide if they should be removed or wired
 - [ ] Consider extracting `engine/beat_progression.py` shadow logger into `bot/pipeline/` since it's an orchestration concern
+
+## Character Creation Redesign (2026-04-26 — completed)
+
+Spec: `docs/superpowers/specs/2026-04-26-character-creation-redesign-design.md`
+Plan: `docs/superpowers/plans/2026-04-26-character-creation-redesign.md`
+
+The character creation redesign is complete on `main`. `/start_campaign` now
+posts a persistent **lobby** (Rejoindre / Quitter / Démarrer) instead of pre-listing
+players via mentions. Each player who clicks **Rejoindre** is taken through a
+single auto-modifying setup view (6 steps: identity → race/class → stats → skills
+→ kit/motivation → review). The `Alignment` enum has been dropped from the
+engine, the ageing `CampaignLauncher` and its 9 view modules have been removed.
+
+- [x] Wave A — engine cleanup (alignment removed, presets/random_stats added)
+- [x] Wave B — new UI components (LobbyState, LobbyView, CharacterSetupFlow,
+      lobby_embed, character_setup_v2 recap)
+- [x] Wave C1 — `bot.lobbies` dict on `RealmBot`
+- [x] Wave C2 — `/start_campaign` rewritten to post the lobby
+- [x] Wave C3 — `on_launch` callback; lobby → GameSession via
+      `_launch_campaign_from_lobby` (story arc, location, opening crawl, scene,
+      countdown, party cards, Arc Tracker pin)
+- [x] Wave C4 — `/create_character` slash deleted; onboarding goes through the
+      lobby
+- [x] Wave C5 — obsolete views removed (`character_create_view`,
+      `stat_assignment_view`, `skill_selection_view`, `motivation_view`,
+      `starter_gear_view`, `start_onboarding_view`, `character_edit_view`,
+      `character_edit_flow`, `force_launch_view`) plus `campaign_launcher.py`
+      itself, and their dedicated tests
+- [x] Wave C6 — `bot/cogs/test_bridge.py` simplified to quick-create only;
+      `tests/bot/test_test_bridge_views.py`, `test_views.py`, and the legacy
+      pieces of `test_cog_session.py` and `test_cog_character.py` deleted /
+      updated
+- [x] Wave C7 — scenario test
+      `tests/scenarios/test_character_creation_lobby.py` (3 cases: 2-player
+      launch, no-ready-player gate, mid-flow cancel)
+- [ ] Wave C8 — live Discord smoke test (skipped: bot offline in CI; orchestrator
+      to run manually with the running bot)
+- [x] Wave D — verification gate
+
+Verification:
+- `uv run pytest tests/ -q` → **2164 passed, 1 skipped**
+- `uv run ruff check .` → clean
+- `uv run mypy engine/ bot/ ai/` → 63 pre-existing errors (3 in
+  `bot/cogs/session.py:721,797` for `end_campaign` channel union types — both
+  predate this redesign; the rest in `bot/utils/arc_tracker.py`,
+  `bot/views/character_setup_flow.py`, `bot/cogs/test_bridge.py` and also
+  predate Wave C). My session.py edits introduced **0 new errors**.
+- Audit grep `alignment|Alignment` in `*.py` → 0 hits (only the false positive
+  in `ai/prompts/system_npc_agent.txt` line 32 — English word, not the engine
+  concept)
+- Audit grep `CampaignLauncher|campaign_launcher` in `*.py` → 2 docstring
+  references in `bot/lobby_state.py` (pre-existing from Wave B; instructions
+  forbade touching that file)
