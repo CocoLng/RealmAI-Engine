@@ -1,7 +1,7 @@
 """LobbyState lifecycle: add, remove, status, ready predicate."""
 
 import pytest
-from bot.lobby_state import LobbyPlayer, LobbyPlayerStatus, LobbyState
+from bot.lobby_state import LobbyPlayerStatus, LobbyState
 
 
 def test_lobby_state_starts_empty():

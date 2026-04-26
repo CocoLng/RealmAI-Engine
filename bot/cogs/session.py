@@ -299,8 +299,12 @@ class SessionCog(commands.Cog):
             on_join_clicked=on_join,
             on_launch_clicked=on_launch,
         )
-        host_member = guild.get_member(creator_id)
-        host_name = host_member.display_name if host_member else interaction.user.display_name
+        host_member_for_label = guild.get_member(creator_id)
+        host_name = (
+            host_member_for_label.display_name
+            if host_member_for_label is not None
+            else interaction.user.display_name
+        )
         embed = build_lobby_embed(
             campaign_name=campaign_name,
             theme=theme,
@@ -409,8 +413,12 @@ class SessionCog(commands.Cog):
             ]
             loc_start = time.monotonic()
             current_location = await asyncio.to_thread(
-                world_gen.generate,
-                arc_context, "starting_area", language, arc_location_hints,
+                lambda: world_gen.generate(
+                    campaign_context=arc_context,
+                    location_type="starting_area",
+                    language=language,
+                    location_hints=arc_location_hints,
+                ),
             )
             logger.info(
                 "GENERATION loc_done campaign=%s elapsed=%.1fs location=%r",
