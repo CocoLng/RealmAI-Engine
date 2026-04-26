@@ -45,7 +45,7 @@ def bot(db_session: Session) -> MagicMock:
     """Mock RealmBot that returns a real DB session."""
     mock_bot = MagicMock()
     mock_bot.sessions = {}
-    mock_bot.launchers = {}
+    mock_bot.lobbies = {}
     mock_bot.get_session = lambda cid: mock_bot.sessions.get(cid)
     mock_bot.db_factory = MagicMock(return_value=db_session)
     return mock_bot
@@ -107,124 +107,9 @@ def persisted_channel(db_session: Session, persisted_campaign: Campaign) -> int:
 
 
 # ---------------------------------------------------------------------------
-# _parse_mentions
+# /start_campaign — covered by tests/scenarios/test_character_creation_lobby.py
+# (the lobby flow is end-to-end and not unit-testable in isolation here).
 # ---------------------------------------------------------------------------
-
-
-class TestParseMentions:
-    """Static helper for extracting user IDs from Discord mention syntax."""
-
-    def test_standard_mentions(self) -> None:
-        result = SessionCog._parse_mentions("<@123> <@456>")
-        assert result == [123, 456]
-
-    def test_nickname_mentions(self) -> None:
-        result = SessionCog._parse_mentions("<@!789>")
-        assert result == [789]
-
-    def test_no_mentions(self) -> None:
-        assert SessionCog._parse_mentions("hello world") == []
-
-    def test_mixed_text(self) -> None:
-        result = SessionCog._parse_mentions("invite <@100> and <@!200> please")
-        assert result == [100, 200]
-
-
-# ---------------------------------------------------------------------------
-# /start_campaign
-# ---------------------------------------------------------------------------
-
-
-class TestStartCampaign:
-    """Tests for the /start_campaign command."""
-
-    @pytest.mark.asyncio
-    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
-    @patch("bot.cogs.session.create_session_channel")
-    async def test_creates_campaign_and_channel(
-        self,
-        mock_create_channel: AsyncMock,
-        mock_bg_tasks: MagicMock,
-        cog: SessionCog,
-        interaction: AsyncMock,
-        db_session: Session,
-    ) -> None:
-        # Simulate channel creation returning a mock channel
-        mock_msg = AsyncMock()
-        mock_msg.id = 555666777  # integer so Arc Tracker DB write succeeds
-        mock_msg.pin = AsyncMock()
-        mock_channel = AsyncMock()
-        mock_channel.id = 999000
-        mock_channel.mention = "#campagne-foret-sombre"
-        mock_channel.send = AsyncMock(return_value=mock_msg)
-        mock_create_channel.return_value = mock_channel
-
-        await cog.start_campaign.callback(cog, interaction, "Foret sombre", f"<@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
-
-        # Deferred response
-        interaction.response.defer.assert_called_once()
-        # Channel was created
-        mock_create_channel.assert_called_once()
-        # At least one message sent in new channel (welcome + arc tracker)
-        assert mock_channel.send.call_count >= 1
-        # Launcher stored in bot (session is created later, after onboarding)
-        assert 999000 in cog.bot.launchers
-        launcher = cog.bot.launchers[999000]
-        assert launcher.campaign.name == "Foret sombre"
-        # Invoker added to player list
-        assert str(USER_ID) in launcher.campaign.player_names
-        # Campaign persisted
-        camp = CampaignRepository(db_session).get_by_id(launcher.campaign.id)
-        assert camp is not None
-        assert camp.name == "Foret sombre"
-        # Channel mapping persisted
-        mapping = CampaignChannelRepository(db_session).get_by_channel(999000)
-        assert mapping is not None
-
-    @pytest.mark.asyncio
-    async def test_no_players_mentioned(
-        self, cog: SessionCog, interaction: AsyncMock,
-    ) -> None:
-        await cog.start_campaign.callback(cog, interaction, "Theme", "no mentions here")  # type: ignore[call-arg, arg-type]
-        interaction.followup.send.assert_called_once()
-        msg = interaction.followup.send.call_args
-        assert msg[1].get("ephemeral") is True
-
-    @pytest.mark.asyncio
-    async def test_no_guild(
-        self, cog: SessionCog, interaction: AsyncMock,
-    ) -> None:
-        interaction.guild = None
-        await cog.start_campaign.callback(cog, interaction, "Theme", f"<@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
-        # Second followup call is the guild error
-        calls = interaction.followup.send.call_args_list
-        assert any(c[1].get("ephemeral") is True for c in calls)
-
-    @pytest.mark.asyncio
-    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
-    @patch("bot.cogs.session.create_session_channel")
-    async def test_invoker_not_duplicated(
-        self,
-        mock_create_channel: AsyncMock,
-        mock_bg_tasks: MagicMock,
-        cog: SessionCog,
-        interaction: AsyncMock,
-    ) -> None:
-        """If invoker already in the mention list, don't add twice."""
-        mock_msg2 = AsyncMock()
-        mock_msg2.id = 100200300
-        mock_msg2.pin = AsyncMock()
-        mock_channel = AsyncMock()
-        mock_channel.id = 999001
-        mock_channel.send = AsyncMock(return_value=mock_msg2)
-        mock_channel.mention = "#test"
-        mock_create_channel.return_value = mock_channel
-
-        # Invoker mentions themselves
-        await cog.start_campaign.callback(cog, interaction, "Theme", f"<@{USER_ID}> <@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
-        launcher = cog.bot.launchers[999001]
-        # USER_ID should appear only once
-        assert launcher.campaign.player_names.count(str(USER_ID)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -751,66 +636,10 @@ class TestCampaignChannelArcStore:
         store.set_message_id(88888, 99999)
 
 
-class TestStartCampaignArcTracker:
-    """Verify /start_campaign creates the pinned Arc Tracker message."""
-
-    @pytest.mark.asyncio
-    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
-    @patch("bot.cogs.session.create_session_channel")
-    async def test_start_campaign_creates_pin(
-        self,
-        mock_create_channel: AsyncMock,
-        mock_bg_tasks: MagicMock,
-        cog: SessionCog,
-        interaction: AsyncMock,
-    ) -> None:
-        """ensure_pinned is called: channel.send is awaited with an embed."""
-        mock_msg = AsyncMock()
-        mock_msg.id = 111222333444
-        mock_msg.pin = AsyncMock()
-
-        mock_channel = AsyncMock()
-        mock_channel.id = 998877
-        mock_channel.mention = "#test-pin"
-        # First call is launcher.start() welcome embed; second is Arc Tracker embed
-        mock_channel.send = AsyncMock(return_value=mock_msg)
-        mock_create_channel.return_value = mock_channel
-
-        await cog.start_campaign.callback(cog, interaction, "Foret sombre", f"<@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
-
-        # channel.send called at least twice: welcome + arc tracker
-        assert mock_channel.send.call_count >= 2
-        # pin() was called on the Arc Tracker message
-        mock_msg.pin.assert_called()
-
-    @pytest.mark.asyncio
-    @patch("bot.campaign_launcher.CampaignLauncher.start_background_tasks")
-    @patch("bot.cogs.session.create_session_channel")
-    async def test_start_campaign_pin_failure_does_not_break(
-        self,
-        mock_create_channel: AsyncMock,
-        mock_bg_tasks: MagicMock,
-        cog: SessionCog,
-        interaction: AsyncMock,
-    ) -> None:
-        """If pinning raises, /start_campaign still succeeds."""
-        mock_msg = AsyncMock()
-        mock_msg.id = 999000111
-        mock_msg.pin = AsyncMock(side_effect=Exception("pin failed"))
-
-        mock_channel = AsyncMock()
-        mock_channel.id = 998876
-        mock_channel.mention = "#test-pin-fail"
-        mock_channel.send = AsyncMock(return_value=mock_msg)
-        mock_create_channel.return_value = mock_channel
-
-        # Should not raise even if pin fails
-        await cog.start_campaign.callback(cog, interaction, "Donjon", f"<@{PLAYER_ID}>")  # type: ignore[call-arg, arg-type]
-
-        # Followup still sent (campaign created successfully)
-        interaction.followup.send.assert_called()
-        last_call = interaction.followup.send.call_args_list[-1]
-        assert "Campagne" in last_call[0][0]
+# NOTE: TestStartCampaignArcTracker (legacy /start_campaign players-string flow)
+# was removed when /start_campaign became lobby-driven. The Arc Tracker pin now
+# fires inside _launch_campaign_from_lobby; coverage for it lives in the lobby
+# scenario test (tests/scenarios/test_character_creation_lobby.py).
 
 
 class TestEndCampaignArcTracker:

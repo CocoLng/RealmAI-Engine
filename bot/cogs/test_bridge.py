@@ -480,45 +480,18 @@ class TestBridge(commands.Cog):
     async def _handle_create_character(
         self, inter: ChannelTestInteraction, args: dict[str, str],
     ) -> None:
-        """Create a character.
+        """Create a character via the test bridge.
 
-        Two modes:
-        - ``quick=1`` (or any legacy ``name``/``race``/``class_`` arg): skips the
-          multi-step view and creates the character directly with rolled stats.
-          Fast setup for tests that care about later behaviour.
-        - default (no args): sends the real ``CharacterCreateView``; the tester
-          then drives it with ``click_button`` / ``select_option`` / ``submit_modal``.
+        Always uses the quick path now: the lobby-driven setup flow is too
+        elaborate for the bridge to drive component-by-component. Tests that
+        need character setup go through the lobby helpers (``lobby_join`` etc).
         """
         session = self.bot.get_session(inter.channel_id)
         if session is None:
             await inter.channel.send("Aucune session active.")
             return
 
-        legacy_shortcut = any(k in args for k in ("name", "race", "class_"))
-        use_quick = args.get("quick", "").lower() in {"1", "true", "yes"} or legacy_shortcut
-
-        if use_quick:
-            await self._handle_create_character_quick(inter, args)
-            return
-
-        user_id = inter.user.id
-        if user_id in session.characters:
-            await inter.channel.send("Tu as deja un personnage dans cette campagne.")
-            return
-
-        from bot.views.character_create_view import CharacterCreateView
-
-        view = CharacterCreateView(on_complete=self._on_character_create_complete)
-        # Stash the player_idx on the view so the on_complete callback knows
-        # which virtual player owns this character. The view has no such field
-        # natively; we smuggle it via a dunder attr.
-        view._test_player_idx = inter.user.id  # type: ignore[attr-defined]
-        msg = await inter.channel.send(
-            content="Creation de personnage -- Choisis ta race :",
-            view=view,
-        )
-        if msg is not None:
-            self.active_views[msg.id] = view
+        await self._handle_create_character_quick(inter, args)
 
     async def _handle_create_character_quick(
         self, inter: ChannelTestInteraction, args: dict[str, str],
@@ -557,76 +530,10 @@ class TestBridge(commands.Cog):
         embed = build_character_embed(character)
         await inter.channel.send(content=f"**{name}** cree (quick) !", embed=embed)
 
-    async def _on_character_create_complete(
-        self,
-        interaction: discord.Interaction,
-        view: Any,  # CharacterCreateView, but avoid circular import
-    ) -> None:
-        """Finalize character creation once the full view flow has run.
-
-        Mirrors the save logic in CharacterCog.create_character_cmd.
-        """
-        from engine.character import assign_standard_array
-
-        # All selections are guaranteed non-None when on_complete fires.
-        assert view.race is not None
-        assert view.char_class is not None
-        assert view.alignment is not None
-        assert view.character_name is not None
-        assert view.ability_assignments is not None
-        assert view.skill_proficiencies is not None
-
-        # The interaction passed here is the Modal submit interaction; it
-        # carries our ChannelTestInteraction when driven via TestBridge.
-        channel_id = getattr(interaction, "channel_id", None)
-        if channel_id is None:
-            logger.error("on_character_create_complete: interaction has no channel_id")
-            return
-        session = self.bot.get_session(channel_id)
-        if session is None:
-            logger.error("on_character_create_complete: no active session on channel %s", channel_id)
-            return
-
-        user_id = getattr(view, "_test_player_idx", None) or interaction.user.id
-
-        scores = assign_standard_array(view.ability_assignments, view.race)
-        character = create_character(
-            name=view.character_name,
-            race=view.race,
-            char_class=view.char_class,
-            ability_scores=scores,
-            alignment=view.alignment,
-            skill_proficiencies=view.skill_proficiencies,
-        )
-        inventory = create_inventory()
-        spellcaster = create_spellcaster_state(view.char_class, 1)
-
-        session.characters[user_id] = character
-        session.inventories[user_id] = inventory
-        session.spellcasters[user_id] = spellcaster
-
-        db_session = self.bot.db_factory()
-        try:
-            from db.repositories import PlayerCharacterRepository
-
-            pc_repo = PlayerCharacterRepository(db_session)
-            pc_repo.save(user_id, session.campaign.id, character, inventory, spellcaster)
-            db_session.commit()
-        finally:
-            db_session.close()
-
-        from bot.embeds.character_embed import build_character_embed
-
-        embed = build_character_embed(character)
-        # Prefer followup on the driving interaction so the tester can
-        # correlate the finalization to the submit_modal command.
-        followup = getattr(interaction, "followup", None)
-        if followup is not None:
-            await followup.send(content=f"**{character.name}** a ete cree !", embed=embed)
-        else:
-            channel = getattr(interaction, "channel", None)
-            if channel is not None:
-                await channel.send(content=f"**{character.name}** a ete cree !", embed=embed)
+    # NOTE: _on_character_create_complete (legacy multi-step flow callback) was
+    # removed with the deletion of CharacterCreateView. Tests that need a
+    # character go through ``_handle_create_character_quick`` or the lobby
+    # helpers (lobby_join / lobby_set_ready).
 
     # ------------------------------------------------------------------
     # Component-driving handlers
