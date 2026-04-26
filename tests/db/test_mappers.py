@@ -347,7 +347,6 @@ _LEGACY_CHARACTER_JSON = json.dumps({
     "char_class": "Fighter",
     "level": 1,
     "xp": 0,
-    "alignment": "True Neutral",
     "ability_scores": {"STR": 16, "DEX": 12, "CON": 14, "INT": 10, "WIS": 13, "CHA": 8},
     "hp": 11,
     "max_hp": 11,
