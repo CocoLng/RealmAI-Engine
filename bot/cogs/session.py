@@ -277,7 +277,21 @@ class SessionCog(commands.Cog):
         async def on_launch(
             inter: discord.Interaction, lobby_view: LobbyView,
         ) -> None:
-            """Transition the lobby into a GameSession and post the opening."""
+            """Transition the lobby into a GameSession and post the opening.
+
+            Host-only is enforced upstream by ``LobbyView.launch`` — defensive
+            check kept here so direct callers (test bridge, etc.) can't bypass.
+            """
+            from bot.lobby_state import GenerationPhase
+
+            if inter.user.id != creator_id:
+                # Defensive — should already be blocked by LobbyView.launch
+                if not inter.response.is_done():
+                    await inter.response.send_message(
+                        "Seul le host peut démarrer la campagne.", ephemeral=True,
+                    )
+                return
+
             try:
                 await inter.response.defer()
             except discord.NotFound:
@@ -295,6 +309,43 @@ class SessionCog(commands.Cog):
                 return
 
             assert channel is not None
+
+            # Lock the lobby so nothing else mutates while we launch
+            lobby_view.join.disabled = True
+            lobby_view.leave.disabled = True
+            lobby_view.launch.disabled = True
+            await refresh_lobby_message(lobby_view)
+
+            # If pregen is still running, post a public status message and
+            # wait for it. The launch then auto-continues.
+            status_msg: discord.Message | None = None
+            if (
+                lobby.pregen_task is not None
+                and not lobby.pregen_task.done()
+            ):
+                phase_label = {
+                    GenerationPhase.PENDING:  "initialisation",
+                    GenerationPhase.ARC:      "écriture de l'arc narratif",
+                    GenerationPhase.LOCATION: "création du lieu de départ",
+                }.get(lobby.pregen_phase, lobby.pregen_phase.name.lower())
+                status_msg = await channel.send(
+                    f"🪄 **Préparation de l'aventure en cours...**\n"
+                    f"_Phase : {phase_label}_\n"
+                    f"_Le récit démarre automatiquement dès que c'est prêt._",
+                )
+                try:
+                    await lobby.pregen_task
+                except Exception:  # pragma: no cover — already trapped inside pregen
+                    logger.exception("on_launch: pregen task raised")
+
+            if status_msg is not None:
+                try:
+                    await status_msg.edit(
+                        content="✨ **Aventure prête !** Le récit commence...",
+                    )
+                except discord.HTTPException:
+                    pass
+
             await self._launch_campaign_from_lobby(
                 channel=channel,
                 campaign=campaign,
