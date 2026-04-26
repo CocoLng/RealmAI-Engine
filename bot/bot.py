@@ -26,6 +26,7 @@ EXTENSIONS: list[str] = [
     "bot.cogs.inventory",
     "bot.cogs.combat",
     "bot.cogs.action_handler",
+    "bot.cogs.hint",
 ]
 
 

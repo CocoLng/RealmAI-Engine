@@ -566,6 +566,20 @@ class PipelineRunner:
                 from world.story_arc import advance_beat
                 advanced_arc = advance_beat(arc)
                 self.session.story_arc = advanced_arc
+                # Reset /hint usage for the now-completed beat.
+                if self.db_factory is not None:
+                    try:
+                        from db.repositories.hint_usage_repo import HintUsageRepository
+                        _hint_db = self.db_factory()
+                        try:
+                            HintUsageRepository(_hint_db).clear_for_beat(
+                                campaign_id=self.campaign_id,
+                                beat_number=old_beat.beat_number,
+                            )
+                        finally:
+                            _hint_db.close()
+                    except Exception:
+                        logger.exception("HINT cleanup failed campaign=%s", self.campaign_id)
                 if advanced_arc.current_beat_index < len(advanced_arc.beats):
                     new_beat = advanced_arc.beats[advanced_arc.current_beat_index]
                 else:

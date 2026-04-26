@@ -188,3 +188,25 @@ class StoryArcRow(Base):
     )
     arc_json: Mapped[str] = mapped_column(Text, nullable=False)
     current_beat_index: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class HintUsageRow(Base):
+    """Per-campaign per-beat /hint usage tracking.
+
+    Resets (row deleted) when the beat advances. Persisted across bot
+    restarts so cooldowns survive reconnects.
+    """
+
+    __tablename__ = "hint_usage"
+
+    campaign_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    beat_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    level1_uses: Mapped[int] = mapped_column(Integer, default=0)
+    level2_used: Mapped[bool] = mapped_column(default=False)
+    level3_last_used_turn: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None,
+    )
