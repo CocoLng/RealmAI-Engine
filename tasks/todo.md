@@ -71,3 +71,27 @@ Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.
 - [ ] Point Buy et 4d6-drop-lowest comme méthodes alternatives de stats
 - [ ] Boutique / système achat-vente
 - [ ] Catalogue de sorts étendu (>20 sorts actuels)
+
+## Beat Progression Engine (2026-04-26 — completed)
+
+The Beat Progression refactor (spec: docs/superpowers/specs/2026-04-25-beat-progression-engine-design.md, plan: docs/superpowers/plans/2026-04-25-beat-progression-engine.md) is complete on branch `feature/beat-progression-engine`.
+
+- [x] Phase A — data model augmented (`world/story_arc.py` + auto-migration)
+- [x] Phase B — `BeatProgressionEngine` (pure Python, 100% coverage)
+- [x] Pre-C fix — extend ObjectiveKind for interact/search/pickup
+- [x] Phase C — `BeatJudge` LLM 4b (structured fallback)
+- [x] Phase D — bascule + legacy code removed (orchestrator, DriftTracker, DirectorNote)
+- [x] Phase E — `/hint` cog (3 levels with DB-backed cooldown)
+- [x] Phase F — Arc Tracker enriched (progress bar + checklist)
+- [x] Phase G — telemetry + review script + scenarios + lessons
+
+Total: ~21 commits, ~2240 tests pass (engine 100% coverage, matchers ~95%).
+
+Follow-ups (not blocking, can land later):
+- [ ] Run live Discord e2e scenario manually with DISCORD_TEST_BOT_TOKEN to validate /hint UX
+- [ ] Tune BeatJudge confidence threshold per-beat after first prod week (currently fixed 0.7)
+- [ ] Audit existing arcs in DB — those generated under the legacy schema may need a one-time backfill or arc regeneration to use proper objectives
+- [ ] Consider re-evaluating engine after BeatJudge passes (currently we trust the judge directly; a second engine.evaluate() call after marking objectives satisfied would be more correct)
+- [ ] POSSESS matcher — fuzzy match for item-name variants ("old silver key" should match "silver key")
+- [ ] Last_attempt_action_id and completed_at_turn fields on ObjectiveState are never populated (engine is per-turn stateless); decide if they should be removed or wired
+- [ ] Consider extracting `engine/beat_progression.py` shadow logger into `bot/pipeline/` since it's an orchestration concern

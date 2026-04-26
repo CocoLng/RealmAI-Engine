@@ -555,6 +555,29 @@ class PipelineRunner:
                             self.campaign_id, judge_resp.passed, judge_resp.confidence, judge_resp.reasoning,
                         )
 
+            # Production telemetry — one JSON line per evaluate() call.
+            try:
+                from engine.beat_progression import log_decision
+                _beat_num = (
+                    arc.beats[arc.current_beat_index].beat_number
+                    if arc.current_beat_index < len(arc.beats)
+                    else arc.beats[-1].beat_number
+                )
+                _judge_passed: bool | None = None
+                _judge_confidence: float | None = None
+                if beat_eval.decision == "NEEDS_JUDGE" and "judge_resp" in locals():
+                    _judge_passed = judge_resp.passed  # type: ignore[name-defined]
+                    _judge_confidence = judge_resp.confidence  # type: ignore[name-defined]
+                log_decision(
+                    campaign_id=self.campaign_id,
+                    beat_number=_beat_num,
+                    result=beat_eval,
+                    judge_passed=_judge_passed,
+                    judge_confidence=_judge_confidence,
+                )
+            except Exception:
+                logger.debug("log_decision failed campaign=%s", self.campaign_id, exc_info=True)
+
             if should_advance:
                 beat_completed = True
                 old_beat = arc.beats[arc.current_beat_index]

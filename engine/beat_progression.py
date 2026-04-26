@@ -41,6 +41,7 @@ __all__ = [
     "BeatProgressionResult",
     "BeatProgressionEngine",
     "log_shadow_decision",
+    "log_decision",
 ]
 
 
@@ -335,3 +336,42 @@ def log_shadow_decision(
             f.write(json.dumps(record) + "\n")
     except Exception:
         _logger.exception("shadow log failed for campaign=%s", campaign_id)
+
+
+_PROD_LOG_PATH = Path("logs/beat_progression.jsonl")
+
+
+def log_decision(
+    *,
+    campaign_id: str,
+    beat_number: int,
+    result: BeatProgressionResult,
+    judge_passed: bool | None = None,
+    judge_confidence: float | None = None,
+    latency_ms: int | None = None,
+) -> None:
+    """Append one JSON line to the production engine log.
+
+    Failures are swallowed.
+    """
+    try:
+        _PROD_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(UTC).isoformat(),
+            "campaign_id": campaign_id,
+            "beat_number": beat_number,
+            "decision": result.decision,
+            "progress_score": result.progress.progress_score,
+            "judge_passed": judge_passed,
+            "judge_confidence": judge_confidence,
+            "objectives_updated": [
+                oid for oid, st in result.progress.objective_states.items()
+                if st.status == "completed"
+            ],
+            "reasons": result.reasons,
+            "latency_ms": latency_ms,
+        }
+        with _PROD_LOG_PATH.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        _logger.exception("prod log failed for campaign=%s", campaign_id)
