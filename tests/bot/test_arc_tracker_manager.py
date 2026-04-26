@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from bot.utils.arc_tracker import ArcTrackerManager, ArcTrackerData
+from bot.utils.arc_tracker import ArcTrackerData, ArcTrackerManager
 
 
 class TestArcTrackerManager:
@@ -107,3 +107,105 @@ class TestArcTrackerManager:
         await manager.remove(channel=channel, channel_id=999)
         existing_msg.unpin.assert_awaited_once()
         store.set_message_id.assert_called_once_with(999, None)
+
+
+class TestArcTrackerDataProgressFields:
+    def test_arc_tracker_data_with_progress(self) -> None:
+        data = ArcTrackerData(
+            chapter_title="Acte 2",
+            current_objective="Trouver le témoin",
+            progress_score=60,
+            objective_status_lines=["✅ Examiner la cape", "◯ Parler à Kaelen"],
+            relevant_locations=["Forge"],
+            relevant_npcs=["Kaelen"],
+        )
+        assert data.progress_score == 60
+        assert len(data.objective_status_lines) == 2
+
+    def test_build_arc_tracker_data_from_progress(self) -> None:
+        from bot.utils.arc_tracker import build_arc_tracker_data_from_progress
+        from engine.beat_progression import BeatProgress, ObjectiveState
+        from world.story_arc import (
+            BeatObjective,
+            ObjectiveKind,
+            StoryArc,
+            StoryBeat,
+        )
+
+        obj = BeatObjective(
+            id="talk_kaelen",
+            kind=ObjectiveKind.TALK,
+            target="Kaelen",
+            description="Speak with Kaelen",
+        )
+        beat = StoryBeat(
+            beat_number=1,
+            title="Find Kaelen",
+            description="The forge calls.",
+            location_hint="Forge",
+            encounter_type="social",
+            objectives=[obj],
+        )
+        arc = StoryArc(
+            campaign_id="c",
+            theme="t",
+            premise="A long enough premise here.",
+            beats=[beat]
+            + [
+                StoryBeat(
+                    beat_number=i + 2,
+                    title=f"B{i + 2}",
+                    description="...",
+                    location_hint="...",
+                    encounter_type="exploration",
+                )
+                for i in range(7)
+            ],
+            villain_name="X",
+            villain_motivation="Y",
+        )
+        progress = BeatProgress(
+            beat=beat,
+            objective_states={"talk_kaelen": ObjectiveState(status="completed")},
+            progress_score=100,
+            last_action_advanced=True,
+        )
+        data = build_arc_tracker_data_from_progress(arc=arc, progress=progress)
+        assert data.chapter_title == "Find Kaelen"
+        assert data.progress_score == 100
+        assert data.objective_status_lines[0].startswith("✅")
+        assert "Kaelen" in data.relevant_npcs
+
+    def test_build_arc_tracker_data_no_progress_returns_minimal(self) -> None:
+        from bot.utils.arc_tracker import build_arc_tracker_data_from_progress
+        from world.story_arc import StoryArc, StoryBeat
+
+        beat = StoryBeat(
+            beat_number=1,
+            title="Beat 1",
+            description="Hello.",
+            location_hint="Here",
+            encounter_type="exploration",
+        )
+        arc = StoryArc(
+            campaign_id="c",
+            theme="t",
+            premise="A long enough premise here.",
+            beats=[beat]
+            + [
+                StoryBeat(
+                    beat_number=i + 2,
+                    title=f"B{i + 2}",
+                    description="...",
+                    location_hint="...",
+                    encounter_type="exploration",
+                )
+                for i in range(7)
+            ],
+            villain_name="X",
+            villain_motivation="Y",
+        )
+        data = build_arc_tracker_data_from_progress(arc=arc, progress=None)
+        assert data.chapter_title == "Beat 1"
+        assert data.progress_score == 0
+        assert data.objective_status_lines == []

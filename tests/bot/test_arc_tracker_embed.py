@@ -45,7 +45,7 @@ class TestBuildArcTrackerEmbed:
         assert "A" not in beat_field.value
         assert "B" not in beat_field.value
 
-    def test_active_quests_field_includes_top_five(self) -> None:
+    def test_active_quests_field_includes_last_five(self) -> None:
         embed = build_arc_tracker_embed(
             chapter_title="X",
             current_objective="Y",
@@ -58,10 +58,11 @@ class TestBuildArcTrackerEmbed:
             None,
         )
         assert quest_field is not None
-        assert "Quest 0" in quest_field.value
-        assert "Quest 4" in quest_field.value
-        assert "Quest 5" not in quest_field.value
-        assert "Quest 6" not in quest_field.value
+        # New embed renders the LAST 5 quests (most recent)
+        assert "Quest 2" in quest_field.value
+        assert "Quest 6" in quest_field.value
+        assert "Quest 0" not in quest_field.value
+        assert "Quest 1" not in quest_field.value
 
     def test_empty_objective_uses_fallback(self) -> None:
         embed = build_arc_tracker_embed(
@@ -92,3 +93,48 @@ class TestBuildArcTrackerEmbed:
             )
             assert updated_field is not None
             assert "il y a 4 actions" in updated_field.value
+
+    def test_embed_includes_progress_bar(self) -> None:
+        embed = build_arc_tracker_embed(
+            chapter_title="Acte 2",
+            current_objective="Trouver le témoin",
+            recent_beats=[],
+            active_quests=[],
+            last_updated_relative="à l'instant",
+            progress_score=60,
+            objective_status_lines=["✅ Done", "◐ Partial", "◯ Pending"],
+            relevant_locations=["Forge", "Marketplace"],
+            relevant_npcs=["Kaelen"],
+        )
+        desc = embed.description or ""
+        title = embed.title or ""
+        field_values = "\n".join((f.value or "") for f in embed.fields)
+        # Title or description should contain a progress indicator (60% or bar).
+        assert "60" in desc or "60" in title or "60" in field_values
+
+    def test_embed_includes_objective_checklist(self) -> None:
+        embed = build_arc_tracker_embed(
+            chapter_title="Acte 2",
+            current_objective="Trouver le témoin",
+            recent_beats=[],
+            active_quests=[],
+            last_updated_relative="à l'instant",
+            progress_score=33,
+            objective_status_lines=["✅ Examiner la cape", "◯ Parler à Kaelen"],
+            relevant_locations=[],
+            relevant_npcs=[],
+        )
+        field_values = "\n".join((f.value or "") for f in embed.fields)
+        assert "Examiner" in field_values
+        assert "Kaelen" in field_values
+
+    def test_embed_backward_compat_no_progress_kwargs(self) -> None:
+        """Old callers without the new kwargs should still work."""
+        embed = build_arc_tracker_embed(
+            chapter_title="X",
+            current_objective="Y",
+            recent_beats=[],
+            active_quests=[],
+            last_updated_relative="now",
+        )
+        assert embed.title is not None
