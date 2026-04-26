@@ -92,6 +92,8 @@ class CharacterSetupFlow(LoggedView):
         self.skill_proficiencies: list[Skill] | None = None
         self.kit_name: str | None = None
         self.motivation_key: str | None = None
+        # Built only at REVIEW step (preview, awaiting Confirm)
+        self._preview_character: Character | None = None  # type: ignore[assignment]
 
     async def transition_to(
         self, interaction: discord.Interaction, next_step: SetupStep,
@@ -129,7 +131,36 @@ class CharacterSetupFlow(LoggedView):
                 view=self,
             )
         elif next_step == SetupStep.REVIEW:
-            raise NotImplementedError("REVIEW step lands in Task B8")
+            # Build the Character object NOW (preview, not yet committed)
+            from engine.character import apply_racial_bonuses, create_character
+            assert self.race is not None
+            assert self.char_class is not None
+            assert self.ability_scores is not None
+            raw = self.ability_scores
+            boosted = apply_racial_bonuses(raw, self.race)
+            char = create_character(
+                name=self.name or "Anonyme",
+                race=self.race,
+                char_class=self.char_class,
+                ability_scores=boosted,
+                skill_proficiencies=self.skill_proficiencies or [],
+                concept=self.concept or "",
+            )
+            self._preview_character = char  # cached for confirm
+
+            self._build_review_components()
+            from bot.embeds.character_setup_v2 import build_setup_recap_embed
+            embed = build_setup_recap_embed(
+                char,
+                self.kit_name or "",
+                self.motivation_key or "",
+                self.concept or "",
+            )
+            await interaction.response.edit_message(
+                content="**Étape 6/6** — Vérifie ta fiche avant de la valider.",
+                embed=embed,
+                view=self,
+            )
         else:
             raise ValueError(f"Cannot transition to {next_step} from external call")
 
@@ -445,3 +476,54 @@ class CharacterSetupFlow(LoggedView):
         self.motivation_key = values[0]
         self._build_kit_motiv_components()
         await interaction.response.edit_message(view=self)
+
+    def _build_review_components(self) -> None:
+        self.clear_items()
+        confirm_btn = ui.Button(
+            label="Confirmer", emoji="✅",
+            style=discord.ButtonStyle.success, custom_id="setup_confirm",
+        )
+        confirm_btn.callback = lambda i: self._on_confirm(i)
+        self.add_item(confirm_btn)
+
+        edit_btn = ui.Button(
+            label="Recommencer", emoji="✏️",
+            style=discord.ButtonStyle.secondary, custom_id="setup_restart",
+        )
+        edit_btn.callback = lambda i: self._on_restart(i)
+        self.add_item(edit_btn)
+
+        cancel_btn = ui.Button(
+            label="Annuler", emoji="❌",
+            style=discord.ButtonStyle.danger, custom_id="setup_cancel",
+        )
+        cancel_btn.callback = lambda i: self._on_cancel(i)
+        self.add_item(cancel_btn)
+
+    async def _on_confirm(self, interaction: discord.Interaction) -> None:
+        """Persist the previewed character via on_complete callback."""
+        char = self._preview_character
+        await self._on_complete(char, self.kit_name or "", self.motivation_key or "")
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"✅ **{char.name}** a rejoint la campagne ! Voir le lobby.",
+            embed=None, view=None,
+        )
+
+    async def _on_restart(self, interaction: discord.Interaction) -> None:
+        """Reset accumulators and go back to RACE_CLASS (keep name+concept)."""
+        self.race = None
+        self.char_class = None
+        self.ability_scores = None
+        self.skill_proficiencies = None
+        self.kit_name = None
+        self.motivation_key = None
+        await self.transition_to(interaction, SetupStep.RACE_CLASS)
+
+    async def _on_cancel(self, interaction: discord.Interaction) -> None:
+        """Abort the flow. on_complete is NOT called."""
+        self.stop()
+        await interaction.response.edit_message(
+            content="❌ Création annulée. Tu peux relancer via le bouton _Rejoindre_ du lobby.",
+            embed=None, view=None,
+        )

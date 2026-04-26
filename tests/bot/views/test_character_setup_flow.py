@@ -155,3 +155,29 @@ async def test_kit_motiv_step_records_kit_and_motivation():
     await view._on_motivation_selected(interaction, ["Contract"])
     assert view.kit_name == "Iron Vow"
     assert view.motivation_key == "Contract"
+
+
+@pytest.mark.asyncio
+async def test_review_confirm_calls_on_complete():
+    from engine.character import AbilityScores, CharacterClass, Race, Skill
+    on_complete = AsyncMock()
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=on_complete)
+    view.name = "Thorin"
+    view.concept = ""
+    view.race = Race.DWARF
+    view.char_class = CharacterClass.FIGHTER
+    view.ability_scores = AbilityScores(STR=15, DEX=14, CON=13, INT=12, WIS=10, CHA=8)
+    view.skill_proficiencies = [Skill.ATHLETICS]
+    view.kit_name = "Iron Vow"
+    view.motivation_key = "Contract"
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view.transition_to(interaction, SetupStep.REVIEW)
+    await view._on_confirm(interaction)
+    on_complete.assert_called_once()
+    args = on_complete.call_args.args
+    assert args[0].name == "Thorin"
+    assert args[1] == "Iron Vow"
+    assert args[2] == "Contract"
