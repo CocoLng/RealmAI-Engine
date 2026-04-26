@@ -15,11 +15,13 @@ def create_character(
     ability_scores: AbilityScores,
     alignment: Alignment = Alignment.TRUE_NEUTRAL,
     skill_proficiencies: list[Skill] | None = None,
+    concept: str = "",
 ) -> Character:
     """Create a new level-1 character with derived stats, features, and skills.
 
     - ability_scores: already with racial bonuses applied
     - skill_proficiencies: if None, empty list (Discord wizard will provide)
+    - concept: optional RP flavor text (max 200 chars), passed to narrator prompts
     - Features: automatically populated from RACIAL_FEATURES and CLASS_FEATURES
     """
     con_mod = compute_modifier(ability_scores.get(Ability.CON))
@@ -32,6 +34,7 @@ def create_character(
 
     return Character(
         name=name,
+        concept=concept,
         race=race,
         char_class=char_class,
         level=1,

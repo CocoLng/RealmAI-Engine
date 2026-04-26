@@ -25,6 +25,7 @@ class Character(BaseModel):
     """A player or NPC character with SRD 5e stats."""
 
     name: str = Field(min_length=1, max_length=64)
+    concept: str = Field(default="", max_length=200)
     race: Race
     char_class: CharacterClass
     level: int = Field(default=1, ge=1, le=20)
