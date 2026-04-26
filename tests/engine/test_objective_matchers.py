@@ -261,3 +261,95 @@ def test_gate_flag_set():
         gate, _outcome(),
         world_flags={"oath_sworn": False}, inventory=set(),
     ) is False
+
+
+def test_interact_match_positive():
+    obj = BeatObjective(
+        id="interact_lever",
+        kind=ObjectiveKind.INTERACT,
+        target="lever",
+        description="Pull the lever",
+    )
+    interp = _interp(ActionType.INTERACT, target="lever")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_interact_wrong_action_returns_zero():
+    obj = BeatObjective(
+        id="interact_x", kind=ObjectiveKind.INTERACT, target="lever",
+        description="...",
+    )
+    interp = _interp(ActionType.MOVE, target="lever")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score == 0.0
+
+
+def test_search_match_positive():
+    obj = BeatObjective(
+        id="search_chest", kind=ObjectiveKind.SEARCH, target="chest",
+        description="...",
+    )
+    interp = _interp(ActionType.SEARCH, target="chest")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_search_wrong_action_returns_zero():
+    obj = BeatObjective(
+        id="search_x", kind=ObjectiveKind.SEARCH, target="chest",
+        description="...",
+    )
+    interp = _interp(ActionType.LOOK, target="chest")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score == 0.0
+
+
+def test_pickup_match_positive_via_target():
+    obj = BeatObjective(
+        id="pickup_key", kind=ObjectiveKind.PICKUP, target="silver key",
+        description="...",
+    )
+    interp = _interp(ActionType.PICKUP, target="silver key")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_pickup_match_positive_via_item_name():
+    obj = BeatObjective(
+        id="pickup_key", kind=ObjectiveKind.PICKUP, target="silver key",
+        description="...",
+    )
+    # Some interpreted actions put the item in item_name field, not target_name
+    interp = InterpretedAction(
+        action_type=ActionType.PICKUP,
+        actor_name="hero",
+        item_name="silver key",
+        raw_input="ramasse la clé",
+    )
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score >= 0.7
+
+
+def test_pickup_wrong_action_returns_zero():
+    obj = BeatObjective(
+        id="pickup_x", kind=ObjectiveKind.PICKUP, target="key",
+        description="...",
+    )
+    interp = _interp(ActionType.MOVE, target="key")
+    score = compute_match_score(
+        obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
+    )
+    assert score == 0.0

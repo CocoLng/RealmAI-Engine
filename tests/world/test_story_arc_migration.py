@@ -1,5 +1,7 @@
 """Tests for new objective primitives and legacy migration."""
 
+import pytest
+
 from world.story_arc import (
     AdvanceRule,
     BeatObjective,
@@ -171,23 +173,25 @@ def test_legacy_migration_skipped_when_objectives_present():
     assert arc.beats[0].objectives[0].id == "custom"
 
 
-def test_unknown_legacy_trigger_type_skipped():
-    """Legacy trigger types not in ObjectiveKind (e.g. 'interact', 'search', 'pickup')
-    should be silently skipped — they have no equivalent objective kind yet."""
+@pytest.mark.parametrize("legacy_type", ["interact", "defeat", "talk", "arrive", "search", "pickup"])
+def test_all_legacy_trigger_types_migrate(legacy_type: str) -> None:
+    """All 6 CompletionTrigger.type values should map to ObjectiveKind."""
     beat = StoryBeat(
         beat_number=1,
-        title="Beat 1",
+        title="X",
         description="...",
         location_hint="...",
         encounter_type="exploration",
-        completion_trigger=CompletionTrigger(type="search", target="something"),
+        completion_trigger=CompletionTrigger(type=legacy_type, target="something"),
     )
     arc = StoryArc(
         campaign_id="abc",
-        theme="mystery",
+        theme="t",
         premise="A long enough premise here.",
         beats=[beat] + _make_filler_beats(2, 7),
         villain_name="X",
         villain_motivation="Y",
     )
-    assert arc.beats[0].objectives == []
+    assert len(arc.beats[0].objectives) == 1
+    assert arc.beats[0].objectives[0].kind.value == legacy_type
+    assert arc.beats[0].objectives[0].target == "something"

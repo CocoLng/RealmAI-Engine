@@ -120,6 +120,30 @@ def compute_match_score(
         # FLAG is binary: world_flags[target] is truthy.
         return 1.0 if world_flags.get(obj.target) else 0.0
 
+    if obj.kind == ObjectiveKind.INTERACT:
+        if interpreted.action_type != ActionType.INTERACT:
+            return 0.0
+        if not interpreted.target_name:
+            return 0.0
+        return _fuzzy(interpreted.target_name, obj.target)
+
+    if obj.kind == ObjectiveKind.SEARCH:
+        if interpreted.action_type != ActionType.SEARCH:
+            return 0.0
+        if not interpreted.target_name:
+            return 0.0
+        return _fuzzy(interpreted.target_name, obj.target)
+
+    if obj.kind == ObjectiveKind.PICKUP:
+        if interpreted.action_type != ActionType.PICKUP:
+            return 0.0
+        # PICKUP target may be in the InterpretedAction's item_name (player
+        # said "ramasse la clé" → item_name="clé") OR target_name. Try both.
+        candidate = interpreted.item_name or interpreted.target_name
+        if not candidate:
+            return 0.0
+        return _fuzzy(candidate, obj.target)
+
     return 0.0
 
 

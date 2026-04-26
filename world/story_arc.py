@@ -28,6 +28,10 @@ class ObjectiveKind(str, Enum):
     EXAMINE = "examine"
     POSSESS = "possess"
     FLAG = "flag"
+    # New values to cover all legacy CompletionTrigger.type literals
+    INTERACT = "interact"
+    SEARCH = "search"
+    PICKUP = "pickup"
 
 
 class GateKind(str, Enum):
