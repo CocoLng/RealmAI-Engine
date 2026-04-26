@@ -49,8 +49,24 @@ def normalize(text: str) -> str:
 
 
 def _fuzzy(a: str, b: str) -> float:
-    """SequenceMatcher ratio after normalization."""
-    return difflib.SequenceMatcher(None, normalize(a), normalize(b)).ratio()
+    """SequenceMatcher ratio after normalization, with word-boundary substring bonus.
+
+    When the shorter string is a complete word-boundary substring of the
+    longer string (e.g. action target "Kaelen" inside objective target
+    "Kaelen, le Gardien Blessé"), the ratio can fall below the acceptance
+    threshold even though the match is clearly correct. In that case we
+    return 1.0 to ensure the engine recognises the full containment.
+
+    The check uses word boundaries so that a partial token like "Kael"
+    inside "Kaelen" does NOT trigger the bonus.
+    """
+    na, nb = normalize(a), normalize(b)
+    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
+    # Substring pass: word-boundary containment only.
+    # Use a regex word-boundary anchor so "kael" ⊄ "kaelen" but "kaelen" ⊂ "kaelen gardien blesse".
+    if shorter and re.search(r"(?<![^\s]){}(?![^\s])".format(re.escape(shorter)), longer):
+        return 1.0
+    return difflib.SequenceMatcher(None, na, nb).ratio()
 
 
 def compute_match_score(

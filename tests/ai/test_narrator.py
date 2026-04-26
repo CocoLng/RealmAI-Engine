@@ -336,7 +336,7 @@ class TestNarratorDirectionInjection:
             suggested_hooks=[],
             priority="low",
             current_objective="Find the map.",
-            next_beat_hint="Spy at the well.",
+            current_beat_atmosphere="Tension and unease fill the air.",
             required_mentions=["Aldric"],
             forbidden_topics=["map_in_cellar"],
         )
@@ -350,7 +350,7 @@ class TestNarratorDirectionInjection:
         user_content = captured[0]["content"]
         assert "[STORY DIRECTION]" in user_content
         assert "Find the map." in user_content
-        assert "Spy at the well." in user_content
+        assert "Tension and unease fill the air." in user_content
         assert "Aldric" in user_content
         assert "map_in_cellar" in user_content
 

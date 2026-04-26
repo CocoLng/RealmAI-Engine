@@ -51,15 +51,18 @@ class DirectorNote(BaseModel):
     The legacy fields (``coherence_issues``, ``suggested_hooks``, ``priority``) feed
     the semantic memory layer. The newer "direction" fields feed the Narrator's
     prompt as an explicit ``[STORY DIRECTION]`` block on the next turn — they
-    tell the narrator what to set up, what to avoid re-revealing, and which
+    tell the narrator what mood to evoke, what to avoid re-revealing, and which
     NPCs to weave back in.
+
+    Note: ``current_beat_atmosphere`` is descriptive (mood/tone), not prescriptive
+    (plot moves). The Beat Progression Engine decides when to advance beats.
     """
 
     coherence_issues: list[str]
     suggested_hooks: list[str]
     priority: Literal["low", "medium", "high"]
     current_objective: str = ""
-    next_beat_hint: str = ""
+    current_beat_atmosphere: str = ""
     forbidden_topics: list[str] = Field(default_factory=list)
     required_mentions: list[str] = Field(default_factory=list)
     stale_quest_ids: list[str] = Field(default_factory=list)

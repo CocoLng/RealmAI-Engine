@@ -10,7 +10,7 @@ Return JSON only:
   "suggested_hooks": ["<hook 1>", "<hook 2>"],
   "priority": "<low|medium|high>",
   "current_objective": "Short sentence describing what the players are pursuing right now",
-  "next_beat_hint": "What the next narration should set up (a clue, an NPC, a complication)",
+  "current_beat_atmosphere": "Mood/feeling the next narration should evoke for the current beat (tension, relief, dread). Descriptive, not prescriptive — DO NOT tell the narrator what to make happen. The Beat Progression Engine controls plot moves.",
   "forbidden_topics": ["List of facts the narrator must NOT re-reveal (already known)"],
   "required_mentions": ["NPCs or items the next narration should weave back in"],
   "stale_quest_ids": ["IDs of quests that have been ignored too long"]
@@ -24,7 +24,7 @@ Return JSON only:
 Direction fields (fed back into the next Narrator prompt):
 
 - "current_objective": "Short sentence describing what the players are pursuing right now"
-- "next_beat_hint": "What the next narration should set up (a clue, an NPC, a complication)"
+- "current_beat_atmosphere": "Mood/feeling the next narration should evoke for the current beat (tension, relief, dread). Descriptive, not prescriptive — DO NOT suggest plot moves. The Beat Progression Engine decides when beats advance."
 - "forbidden_topics": ["List of facts the narrator must NOT re-reveal (already known)"]
 - "required_mentions": ["NPCs or items the next narration should weave back in"]
 - "stale_quest_ids": ["IDs of quests that have been ignored too long"]

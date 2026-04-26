@@ -109,7 +109,7 @@ class Narrator:
         sections: list[str] = []
         if director_note is not None and (
             director_note.current_objective
-            or director_note.next_beat_hint
+            or director_note.current_beat_atmosphere
             or director_note.required_mentions
             or director_note.forbidden_topics
         ):
@@ -153,8 +153,8 @@ class Narrator:
         lines = ["[STORY DIRECTION]"]
         if note.current_objective:
             lines.append(f"Current objective: {note.current_objective}")
-        if note.next_beat_hint:
-            lines.append(f"Next beat hint: {note.next_beat_hint}")
+        if note.current_beat_atmosphere:
+            lines.append(f"Beat atmosphere: {note.current_beat_atmosphere}")
         if note.required_mentions:
             lines.append("Re-mention if natural: " + ", ".join(note.required_mentions))
         if note.forbidden_topics:

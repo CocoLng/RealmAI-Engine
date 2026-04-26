@@ -51,7 +51,7 @@ from engine.validators import (
 from world.location import Location
 from world.npc import NPC
 from world.story_arc import BeatEffects, StoryBeat
-from bot.pipeline.drift_tracker import DriftTracker
+from bot.pipeline.drift_tracker import Decision as DriftDecision, DriftTracker
 
 if TYPE_CHECKING:
     from bot.game_session import GameSession
@@ -503,6 +503,8 @@ class PipelineRunner:
         # ----- Beat progression — single decision point -----
         new_beat: StoryBeat | None = None
         beat_completed = False
+        engine_decision: DriftDecision = "STAY"
+        beat_progress_snapshot: Any = None  # BeatProgress | None
         if self.session is not None and getattr(self.session, "story_arc", None) is not None:
             from typing import Any as _Any
             from engine.beat_progression import (
@@ -531,6 +533,8 @@ class PipelineRunner:
                 inventory=inventory_items,
             )
 
+            engine_decision = beat_eval.decision
+            beat_progress_snapshot = beat_eval.progress
             should_advance = beat_eval.decision == "ADVANCE"
 
             # If the engine asks for a judge, fire BeatJudge and re-decide.
@@ -611,7 +615,7 @@ class PipelineRunner:
 
         # --- Drift tracking + Story Director scheduling ---
         tracker = get_drift_tracker()
-        tracker.record(self.campaign_id, beat_advanced=narration.beat_advanced)
+        tracker.record(self.campaign_id, decision=engine_decision)
 
         combat_active_now = (
             self.combat_state is not None and self.combat_state.is_active
@@ -628,7 +632,10 @@ class PipelineRunner:
             force=self.force_director_run,
         ):
             self.force_director_run = False  # consume the flag
-            self._schedule_story_director(context_prompt=context_prompt)
+            self._schedule_story_director(
+                context_prompt=context_prompt,
+                beat_progress=beat_progress_snapshot,
+            )
 
         # Persist the arc if it advanced.
         if beat_completed and self.db_factory is not None and self.session is not None:
@@ -719,12 +726,23 @@ class PipelineRunner:
 
         return effects.narrative_hint
 
-    def _schedule_story_director(self, *, context_prompt: str) -> None:
+    def _schedule_story_director(
+        self,
+        *,
+        context_prompt: str,
+        beat_progress: Any = None,  # BeatProgress | None — forward ref, avoid import cycle
+    ) -> None:
         """Fire-and-forget Story Director run. Result lands in semantic memory.
 
         Uses ``self.narrator._client`` (existing pattern in this codebase) for
         the OllamaClient. The Story Director is sync; we run it via
         ``asyncio.to_thread`` to avoid blocking the event loop.
+
+        Args:
+            context_prompt: Assembled scene context for the director.
+            beat_progress: Optional BeatProgress snapshot from the engine.
+                Forwarded to check_coherence so the director sees authoritative
+                beat state rather than inferring it from narrative text.
         """
         from ai.story_director import StoryDirector
         from memory.semantic import SemanticMemory
@@ -734,7 +752,10 @@ class PipelineRunner:
                 semantic = SemanticMemory()
                 director = StoryDirector(self.narrator._client, semantic)
                 await asyncio.to_thread(
-                    director.check_coherence, self.campaign_id, context_prompt,
+                    director.check_coherence,
+                    self.campaign_id,
+                    context_prompt,
+                    beat_progress,
                 )
             except Exception:
                 logger.warning(

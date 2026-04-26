@@ -48,7 +48,6 @@ async def test_talk_invokes_npc_agent_and_threads_dialogue_to_outcome() -> None:
     session.current_location = location
     session.npcs = {"Elie": npc}
     session.story_arc = None
-    session.advance_beat_if_ready = lambda: None
     session.campaign.id = "test"
     session.npc_agent = MagicMock()
     session.npc_agent.respond.return_value = NPCResponse(

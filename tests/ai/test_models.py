@@ -177,7 +177,7 @@ class TestDirectorNoteDirection:
             priority="medium",
         )
         assert note.current_objective == ""
-        assert note.next_beat_hint == ""
+        assert note.current_beat_atmosphere == ""
         assert note.forbidden_topics == []
         assert note.required_mentions == []
         assert note.stale_quest_ids == []
@@ -188,12 +188,13 @@ class TestDirectorNoteDirection:
             suggested_hooks=[],
             priority="low",
             current_objective="Retrieve the dungeon map before Vlaxos uses it.",
-            next_beat_hint="Encounter the spy who knows the cellar entrance.",
+            current_beat_atmosphere="Tension creeps in as shadows lengthen.",
             forbidden_topics=["map_hidden_in_cellar"],
             required_mentions=["Aldric", "Elena"],
             stale_quest_ids=["quest_42"],
         )
         assert note.current_objective.startswith("Retrieve")
+        assert note.current_beat_atmosphere.startswith("Tension")
         assert note.required_mentions == ["Aldric", "Elena"]
 
     def test_direction_fields_serialize_round_trip(self) -> None:

@@ -1,71 +1,66 @@
-"""Unit tests for DriftTracker."""
-
-import pytest
+"""Tests for the decision-based DriftTracker."""
 
 from bot.pipeline.drift_tracker import DriftTracker
 
 
-@pytest.fixture
-def tracker() -> DriftTracker:
-    return DriftTracker()
-
-
-def test_initial_state_no_drift(tracker: DriftTracker) -> None:
-    assert tracker.is_drifting("cmp_1") is False
-
-
-def test_single_stale_record_no_drift(tracker: DriftTracker) -> None:
-    tracker.record("cmp_1", beat_advanced=False)
-    assert tracker.is_drifting("cmp_1") is False
-
-
-def test_three_stale_in_three_drifts(tracker: DriftTracker) -> None:
-    """3 of last 3 are stale → drift."""
-    for _ in range(3):
-        tracker.record("cmp_1", beat_advanced=False)
-    assert tracker.is_drifting("cmp_1") is True
-
-
-def test_three_stale_in_five_drifts(tracker: DriftTracker) -> None:
-    """3 of last 5 are stale → drift."""
-    tracker.record("cmp_1", beat_advanced=True)
-    tracker.record("cmp_1", beat_advanced=False)
-    tracker.record("cmp_1", beat_advanced=False)
-    tracker.record("cmp_1", beat_advanced=True)
-    tracker.record("cmp_1", beat_advanced=False)
-    assert tracker.is_drifting("cmp_1") is True
-
-
-def test_two_stale_in_five_no_drift(tracker: DriftTracker) -> None:
-    """Only 2 of last 5 are stale → no drift."""
-    tracker.record("cmp_1", beat_advanced=True)
-    tracker.record("cmp_1", beat_advanced=False)
-    tracker.record("cmp_1", beat_advanced=True)
-    tracker.record("cmp_1", beat_advanced=False)
-    tracker.record("cmp_1", beat_advanced=True)
-    assert tracker.is_drifting("cmp_1") is False
-
-
-def test_window_only_keeps_last_five(tracker: DriftTracker) -> None:
-    """Old stale records age out of the window."""
+def test_drift_after_5_consecutive_stay() -> None:
+    t = DriftTracker()
     for _ in range(5):
-        tracker.record("cmp_1", beat_advanced=False)
-    assert tracker.is_drifting("cmp_1") is True
+        t.record("c1", decision="STAY")
+    assert t.is_drifting("c1") is True
+
+
+def test_no_drift_with_advance_in_window() -> None:
+    t = DriftTracker()
+    t.record("c1", decision="STAY")
+    t.record("c1", decision="STAY")
+    t.record("c1", decision="ADVANCE")
+    t.record("c1", decision="STAY")
+    t.record("c1", decision="STAY")
+    assert t.is_drifting("c1") is False  # ADVANCE breaks the streak
+
+
+def test_drift_resets_on_advance() -> None:
+    t = DriftTracker()
     for _ in range(5):
-        tracker.record("cmp_1", beat_advanced=True)
-    assert tracker.is_drifting("cmp_1") is False
+        t.record("c1", decision="STAY")
+    assert t.is_drifting("c1") is True
+    t.record("c1", decision="ADVANCE")
+    assert t.is_drifting("c1") is False
 
 
-def test_campaigns_isolated(tracker: DriftTracker) -> None:
+def test_drift_per_campaign() -> None:
+    t = DriftTracker()
+    for _ in range(5):
+        t.record("c1", decision="STAY")
+        t.record("c2", decision="ADVANCE")
+    assert t.is_drifting("c1") is True
+    assert t.is_drifting("c2") is False
+
+
+def test_no_drift_with_fewer_than_window_size() -> None:
+    t = DriftTracker()
     for _ in range(3):
-        tracker.record("cmp_1", beat_advanced=False)
-    assert tracker.is_drifting("cmp_1") is True
-    assert tracker.is_drifting("cmp_2") is False
+        t.record("c1", decision="STAY")
+    assert t.is_drifting("c1") is False  # window not yet full
 
 
-def test_reset_clears_history(tracker: DriftTracker) -> None:
-    for _ in range(3):
-        tracker.record("cmp_1", beat_advanced=False)
-    assert tracker.is_drifting("cmp_1") is True
-    tracker.reset("cmp_1")
-    assert tracker.is_drifting("cmp_1") is False
+def test_initial_state_no_drift() -> None:
+    t = DriftTracker()
+    assert t.is_drifting("c1") is False
+
+
+def test_needs_judge_does_not_count_as_stay() -> None:
+    t = DriftTracker()
+    for _ in range(5):
+        t.record("c1", decision="NEEDS_JUDGE")
+    assert t.is_drifting("c1") is False  # only STAY triggers drift
+
+
+def test_reset_clears_history() -> None:
+    t = DriftTracker()
+    for _ in range(5):
+        t.record("c1", decision="STAY")
+    assert t.is_drifting("c1") is True
+    t.reset("c1")
+    assert t.is_drifting("c1") is False

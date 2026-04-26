@@ -55,7 +55,6 @@ async def test_search_passes_player_framing_and_canon_to_narrator() -> None:
     session.current_location = location
     session.npcs = {"Élie l'Ermite": npc}
     session.story_arc = None
-    session.advance_beat_if_ready = lambda: None
 
     interpreted = InterpretedAction(
         action_type=ActionType.SEARCH,

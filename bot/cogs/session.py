@@ -532,10 +532,10 @@ class SessionCog(commands.Cog):
                 value="\n".join(f"• {h}" for h in note.suggested_hooks[:3]),
                 inline=False,
             )
-        if note.next_beat_hint:
+        if note.current_beat_atmosphere:
             embed.add_field(
-                name="Prochaine direction",
-                value=note.next_beat_hint,
+                name="Atmosphère actuelle",
+                value=note.current_beat_atmosphere,
                 inline=False,
             )
 

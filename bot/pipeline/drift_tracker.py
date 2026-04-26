@@ -1,52 +1,50 @@
-"""DriftTracker — per-campaign rolling window of narrator beat-advancement flags.
+"""DriftTracker — decision-based stagnation detector.
 
-A narration is "stale" when ``NarrativeResult.beat_advanced`` is False (the
-scene did not move forward). When ``DRIFT_THRESHOLD`` of the last
-``WINDOW_SIZE`` narrations are stale, the campaign is "drifting" and the
-Story Director should run on the next turn to reorient the narrator.
+A campaign is "drifting" when ``DRIFT_THRESHOLD`` of the last
+``WINDOW_SIZE`` engine decisions are STAY (the beat hasn't moved). When
+drift is detected, the Story Director runs on the next turn to reorient
+the narrator.
 
-Implementation note: in-process state, keyed by campaign_id. A campaign's
-history persists for the bot process lifetime — fine for the MVP. For
-multi-process deployments later, swap the dict for Redis or similar.
+Replaces the legacy narrator-flag-based tracker — that signal was a LLM
+opinion, not ground truth. Engine decisions are deterministic.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Literal
 
 WINDOW_SIZE = 5
-"""Number of recent narrations the tracker considers."""
+"""Number of recent decisions the tracker considers."""
 
-DRIFT_THRESHOLD = 3
-"""Number of stale narrations within the window that trigger a drift signal."""
+DRIFT_THRESHOLD = 5
+"""Number of STAY decisions in the window that trigger a drift signal.
+
+Set to 5 (== WINDOW_SIZE) so drift fires only on a clean run of stagnation.
+"""
+
+Decision = Literal["ADVANCE", "STAY", "NEEDS_JUDGE"]
 
 
 @dataclass
 class DriftTracker:
-    """Tracks the last ``WINDOW_SIZE`` ``beat_advanced`` flags per campaign.
+    """Tracks the last ``WINDOW_SIZE`` engine decisions per campaign."""
 
-    Drift fires when at least ``DRIFT_THRESHOLD`` of the recorded flags are
-    False (i.e. the scene has not advanced).
-    """
+    _windows: dict[str, deque[Decision]] = field(default_factory=dict)
 
-    _windows: dict[str, deque[bool]] = field(default_factory=dict)
-
-    def record(self, campaign_id: str, *, beat_advanced: bool) -> None:
-        """Record one narration's beat-advanced flag for ``campaign_id``."""
-        window = self._windows.setdefault(
-            campaign_id, deque(maxlen=WINDOW_SIZE)
-        )
-        window.append(beat_advanced)
+    def record(self, campaign_id: str, *, decision: Decision) -> None:
+        """Record one engine decision for ``campaign_id``."""
+        window = self._windows.setdefault(campaign_id, deque(maxlen=WINDOW_SIZE))
+        window.append(decision)
 
     def is_drifting(self, campaign_id: str) -> bool:
-        """Return True when at least DRIFT_THRESHOLD of the last WINDOW_SIZE
-        narrations have ``beat_advanced=False``."""
+        """Return True when the last WINDOW_SIZE decisions are all STAY."""
         window = self._windows.get(campaign_id)
-        if window is None:
+        if window is None or len(window) < DRIFT_THRESHOLD:
             return False
-        stale = sum(1 for advanced in window if not advanced)
-        return stale >= DRIFT_THRESHOLD
+        stay_streak = sum(1 for d in window if d == "STAY")
+        return stay_streak >= DRIFT_THRESHOLD
 
     def reset(self, campaign_id: str) -> None:
         """Clear the rolling window for ``campaign_id``."""

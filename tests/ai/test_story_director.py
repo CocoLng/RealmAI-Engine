@@ -156,7 +156,7 @@ class TestStoryDirectorDirection:
             "suggested_hooks": ["Bring back Elena."],
             "priority": "medium",
             "current_objective": "Retrieve the dungeon map.",
-            "next_beat_hint": "Encounter the spy at the well.",
+            "current_beat_atmosphere": "Dread hangs in the air as the spy draws near.",
             "forbidden_topics": ["map_in_cellar"],
             "required_mentions": ["Elena"],
             "stale_quest_ids": [],
@@ -171,7 +171,7 @@ class TestStoryDirectorDirection:
 
         assert isinstance(note, DirectorNote)
         assert note.current_objective == "Retrieve the dungeon map."
-        assert note.next_beat_hint == "Encounter the spy at the well."
+        assert note.current_beat_atmosphere == "Dread hangs in the air as the spy draws near."
         assert note.forbidden_topics == ["map_in_cellar"]
         assert note.required_mentions == ["Elena"]
         assert note.stale_quest_ids == []
@@ -197,7 +197,7 @@ class TestStoryDirectorDirection:
         )
 
         assert note.current_objective == ""
-        assert note.next_beat_hint == ""
+        assert note.current_beat_atmosphere == ""
         assert note.forbidden_topics == []
         assert note.required_mentions == []
         assert note.stale_quest_ids == []

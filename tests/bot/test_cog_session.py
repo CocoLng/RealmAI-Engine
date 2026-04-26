@@ -657,7 +657,7 @@ class TestStoryCatchUpCommand:
             suggested_hooks=["Visit the elder", "Search the wagon", "Follow the stranger"],
             priority="low",
             current_objective="Find the ancient map",
-            next_beat_hint="Head north",
+            current_beat_atmosphere="A sense of urgency fills the air.",
         )
 
         mock_director = MagicMock(spec=StoryDirector)

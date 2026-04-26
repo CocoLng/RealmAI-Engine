@@ -34,7 +34,16 @@ from engine.inventory import (
 from engine.validators import ActionType
 from world.location import Location
 from world.npc import NPC, NPCDisposition
-from world.story_arc import StoryArc, StoryBeat, CompletionTrigger, BeatEffects
+from world.story_arc import (
+    BeatEffects,
+    BeatObjective,
+    CompletionTrigger,
+    GateKind,
+    ObjectiveGate,
+    ObjectiveKind,
+    StoryArc,
+    StoryBeat,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +653,7 @@ def _make_session_with_arc(location, story_arc):
     session.language = "fr"
     session.combat_state = None
     session.inventory = None
+    session.interaction_count = 0
     # Disable agents/generators that would otherwise be MagicMocks and
     # short-circuit the _resolve_talk path down the cheap no-agent branch.
     session.npc_agent = None
@@ -670,7 +680,15 @@ class StubNPCAgent:
 
 
 def _kaelen_arc():
-    """Shared arc fixture for the Kaelen interrogation beat."""
+    """Shared arc fixture for the Kaelen interrogation beat.
+
+    Uses explicit BeatObjectives with quality gates so the engine can enforce:
+    - MIN_REVEALS >= 1: NPC must share at least one piece of information
+    - MIN_DISPOSITION >= 0: NPC must not become more hostile
+    Both objectives are required (ALL_REQUIRED). A productive conversation
+    (reveals > 0, stable disposition) satisfies both; stonewalling or
+    hostility blocks advancement.
+    """
     loc = Location(
         name="Poste de garde",
         description="Un poste ruiné.",
@@ -688,10 +706,24 @@ def _kaelen_arc():
                 description="Questionner Kaelen.",
                 location_hint="Poste de garde",
                 encounter_type="social",
-                completion_trigger=CompletionTrigger(
-                    type="talk",
-                    target="Kaelen, le Gardien Blessé",
-                ),
+                objectives=[
+                    BeatObjective(
+                        id="talk_kaelen_reveals",
+                        kind=ObjectiveKind.TALK,
+                        target="Kaelen, le Gardien Blessé",
+                        description="Speak with Kaelen and get information",
+                        required=True,
+                        gate=ObjectiveGate(kind=GateKind.MIN_REVEALS, value=1),
+                    ),
+                    BeatObjective(
+                        id="talk_kaelen_disposition",
+                        kind=ObjectiveKind.TALK,
+                        target="Kaelen, le Gardien Blessé",
+                        description="Speak with Kaelen without making him hostile",
+                        required=True,
+                        gate=ObjectiveGate(kind=GateKind.MIN_DISPOSITION, value=0),
+                    ),
+                ],
             ),
             *[
                 StoryBeat(

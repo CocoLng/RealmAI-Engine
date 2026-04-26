@@ -1,13 +1,18 @@
 """Story Director — periodic narrative coherence checker."""
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ai.client import LLMParseError, OllamaClient
 from ai.models import DirectorNote
 from memory.models import SemanticDocument, SemanticDocumentType
 from memory.semantic import SemanticMemory
+
+if TYPE_CHECKING:
+    from engine.beat_progression import BeatProgress
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,7 @@ class StoryDirector:
         self,
         campaign_id: str,
         context_prompt: str,
+        beat_progress: "BeatProgress | None" = None,
     ) -> DirectorNote:
         """Analyze campaign context for coherence issues and story hooks.
 
@@ -66,10 +72,16 @@ class StoryDirector:
         Args:
             campaign_id: The campaign to analyze.
             context_prompt: Assembled context from ContextAssembler.
+            beat_progress: Optional engine snapshot of current beat progression.
+                When provided, appended to context_prompt as authoritative truth.
 
         Returns:
             DirectorNote with coherence issues, hooks, and priority.
         """
+        if beat_progress is not None:
+            progress_block = self._format_beat_progress(beat_progress)
+            context_prompt = f"{context_prompt}\n\n{progress_block}"
+
         # --- Call 1: Brainstorm (think=True, lower budget) ---
         brainstorm_context = self._brainstorm(context_prompt)
 
@@ -102,7 +114,7 @@ class StoryDirector:
             suggested_hooks=unique_hooks,
             priority=data.get("priority", "low"),
             current_objective=str(data.get("current_objective", "")),
-            next_beat_hint=str(data.get("next_beat_hint", "")),
+            current_beat_atmosphere=str(data.get("current_beat_atmosphere", "")),
             forbidden_topics=list(data.get("forbidden_topics") or []),
             required_mentions=list(data.get("required_mentions") or []),
             stale_quest_ids=list(data.get("stale_quest_ids") or []),
@@ -164,3 +176,17 @@ class StoryDirector:
             metadata={"source": "story_director", "priority": note.priority},
         )
         self._semantic.add_documents([doc])
+
+    @staticmethod
+    def _format_beat_progress(progress: "BeatProgress") -> str:
+        """Format a BeatProgress snapshot for the director's context prompt."""
+        lines = [
+            "## Current beat progress (engine truth)",
+            f"- Beat: {progress.beat.title}",
+            f"- Progress score: {progress.progress_score}/100",
+            f"- Last action advanced: {progress.last_action_advanced}",
+            "- Objective states:",
+        ]
+        for obj_id, state in progress.objective_states.items():
+            lines.append(f"  * {obj_id}: {state.status}")
+        return "\n".join(lines)

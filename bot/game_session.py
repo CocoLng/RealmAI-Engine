@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import difflib
 import logging
-import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -17,7 +15,7 @@ from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC
 from world.quest import Quest
-from world.story_arc import StoryArc, StoryBeat, advance_beat
+from world.story_arc import StoryArc
 
 from ai.client import OllamaClient, OllamaUnavailableError
 from ai.interpreter import Interpreter
@@ -33,9 +31,6 @@ if TYPE_CHECKING:
     from bot.combat_turn_manager import TurnManager
 
 logger = logging.getLogger(__name__)
-
-_BEAT_MATCH_THRESHOLD = 0.7
-"""Minimum difflib ratio to consider a location name matching a beat hint."""
 
 
 @dataclass
@@ -98,66 +93,6 @@ class GameSession:
     """When True, the next ActionPipeline built for this session runs the
     Story Director unconditionally. Set by /story_catch_up and consumed
     exactly once by the next action handler call."""
-
-    # ------------------------------------------------------------------
-    # Lot D — story beat progression
-    # ------------------------------------------------------------------
-
-    def advance_beat_if_ready(self) -> StoryBeat | None:
-        """Advance ``story_arc`` if the current location matches the next beat.
-
-        Uses fuzzy matching (lowercase + accent-strip + difflib ratio) on
-        ``next_beat.location_hint`` vs ``current_location.name``. Threshold
-        is ``_BEAT_MATCH_THRESHOLD`` (location_hint is freeform LLM output,
-        looser than the entity-resolver's 0.75).
-
-        Returns the new :class:`StoryBeat` if advanced, ``None`` otherwise.
-        """
-        if self.story_arc is None or self.current_location is None:
-            return None
-        arc = self.story_arc
-        next_idx = arc.current_beat_index + 1
-        if next_idx >= len(arc.beats):
-            return None
-        next_beat = arc.beats[next_idx]
-        ratio = difflib.SequenceMatcher(
-            None,
-            _normalize_location(next_beat.location_hint),
-            _normalize_location(self.current_location.name),
-        ).ratio()
-        if ratio < _BEAT_MATCH_THRESHOLD:
-            return None
-        self.story_arc = advance_beat(arc)
-        new_beat = self.story_arc.beats[self.story_arc.current_beat_index]
-        logger.info(
-            "BEAT advance ratio=%.2f hint=%r location=%r → beat %d/%d %r",
-            ratio,
-            next_beat.location_hint,
-            self.current_location.name,
-            self.story_arc.current_beat_index + 1,
-            len(self.story_arc.beats),
-            new_beat.title,
-        )
-        return new_beat
-
-
-_ARTICLES = frozenset({
-    "the", "a", "an",
-    "le", "la", "les", "l", "un", "une", "des", "du", "de",
-})
-
-
-def _normalize_location(text: str) -> str:
-    """Lowercase + strip accents + remove articles/punctuation for fuzzy comparison."""
-    import re
-    nfkd = unicodedata.normalize("NFKD", text)
-    ascii_lower = nfkd.encode("ascii", "ignore").decode("ascii").lower()
-    # Remove punctuation (hyphens, apostrophes, etc.)
-    cleaned = re.sub(r"[^\w\s]", " ", ascii_lower)
-    # Remove common articles
-    words = [w for w in cleaned.split() if w not in _ARTICLES]
-    # Collapse whitespace
-    return " ".join(words)
 
 
 def create_ai_services(session: GameSession) -> None:
