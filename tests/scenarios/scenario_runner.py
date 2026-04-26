@@ -268,6 +268,7 @@ class ScenarioRunner:
         # Bot mock
         self.bot = MagicMock()
         self.bot.sessions = {}
+        self.bot.lobbies = {}
         self.bot.get_session = lambda cid: self.bot.sessions.get(cid)
         self.bot.db_factory = db_factory
 
