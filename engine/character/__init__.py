@@ -32,6 +32,7 @@ from .features import (
     has_feature,
 )
 from .models import AbilityScores, Character
+from .presets import CLASS_STAT_PRESETS, get_class_preset
 from .progression import (
     PROFICIENCY_BONUS_BY_LEVEL,
     XP_THRESHOLDS,
@@ -42,6 +43,11 @@ from .progression import (
     level_up,
 )
 from .races import RACIAL_ABILITY_BONUSES, RACIAL_FEATURES, RACIAL_SIZE, RACIAL_SPEED
+from .random_stats import (
+    CLASS_STAT_PRIORITY,
+    auto_assign_random,
+    roll_4d6_drop_lowest,
+)
 
 __all__ = [
     # Enums
@@ -91,4 +97,10 @@ __all__ = [
     "get_feature_effects",
     "has_darkvision",
     "get_damage_resistances",
+    # Stat presets and random gen
+    "CLASS_STAT_PRESETS",
+    "get_class_preset",
+    "CLASS_STAT_PRIORITY",
+    "auto_assign_random",
+    "roll_4d6_drop_lowest",
 ]
