@@ -492,6 +492,15 @@ class PipelineRunner:
             if event_text:
                 record_combat_event(self.combat_state, event_text)
 
+        # Shadow mode: snapshot the arc BEFORE legacy code can mutate it.
+        # The shadow engine evaluates the same state the legacy code starts from,
+        # so divergences accurately reflect "what would the shadow have done given
+        # the same input as the legacy code". Without this snapshot, the shadow
+        # reads the post-legacy-mutation arc and reports apparent divergences
+        # that are actually just shadow seeing the next beat.
+        _snap_arc = getattr(self.session, "story_arc", None) if self.session is not None else None
+        shadow_arc_snapshot = _snap_arc.model_copy(deep=True) if _snap_arc is not None else None
+
         # Beat completion check — deterministic trigger.
         beat_completed = False
         if (
@@ -658,7 +667,7 @@ class PipelineRunner:
                 )
 
         # ----- Shadow mode: run new engine without applying its decision -----
-        if self.session is not None and getattr(self.session, "story_arc", None) is not None:
+        if self.session is not None and shadow_arc_snapshot is not None:
             try:
                 from engine.beat_progression import (
                     BeatHistory,
@@ -666,8 +675,7 @@ class PipelineRunner:
                     log_shadow_decision,
                 )
 
-                arc = self.session.story_arc
-                assert arc is not None  # guaranteed by outer getattr guard
+                arc = shadow_arc_snapshot  # use pre-mutation snapshot
 
                 # Determine what the legacy code did this turn.
                 legacy_decision = "ADVANCE" if beat_completed or new_beat is not None else "STAY"
