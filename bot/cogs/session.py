@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable
@@ -14,9 +14,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.config import GuildConfig
+from bot.embeds.lobby_embed import build_lobby_embed
 from bot.game_session import GameSession, create_ai_services
+from bot.lobby_state import LobbyPlayerStatus, LobbyState
 from bot.persistence import persist_session
 from bot.utils.channel_manager import archive_channel, create_session_channel
+from bot.views.character_setup_flow import CharacterSetupFlow, IdentityModal
+from bot.views.lobby_view import LobbyView
 from db.repositories import (
     CampaignChannelRepository,
     CampaignRepository,
@@ -27,6 +31,9 @@ from db.repositories import (
     QuestRepository,
     StoryArcRepository,
 )
+from engine.inventory import create_inventory
+from engine.spells import create_spellcaster_state
+from engine.starter_gear import apply_starter_kit, get_starter_kits
 from world.campaign import Campaign
 
 if TYPE_CHECKING:
@@ -72,19 +79,14 @@ class SessionCog(commands.Cog):
     def __init__(self, bot: RealmBot) -> None:
         self.bot = bot
 
-    @staticmethod
-    def _parse_mentions(players_str: str) -> list[int]:
-        """Extract user IDs from a mention string like '<@123> <@456>'."""
-        return [int(uid) for uid in re.findall(r"<@!?(\d+)>", players_str)]
-
     # ------------------------------------------------------------------
     # /start_campaign
     # ------------------------------------------------------------------
 
     @app_commands.command(name="start_campaign", description="Lance une nouvelle campagne")
     @app_commands.describe(
-        theme="Theme de la campagne (ex: 'Foret sombre', 'Donjon ancien')",
-        name="Nom optionnel de la campagne",
+        theme="Thème de la campagne (ex: Dark Fantasy, Cyberpunk noir)",
+        name="Nom optionnel — par défaut le thème est utilisé",
     )
     async def start_campaign(
         self,
@@ -93,8 +95,500 @@ class SessionCog(commands.Cog):
         name: str | None = None,
     ) -> None:
         """Create a new campaign lobby — players join via the lobby view."""
-        # NOTE: rewritten in Wave C2 to post a lobby instead of pre-defined players.
-        raise NotImplementedError("start_campaign rewrite pending (Wave C2)")
+        try:
+            await interaction.response.defer()
+        except discord.NotFound:
+            logger.warning("start_campaign: interaction expired before defer()")
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send(
+                "Cette commande doit être utilisée dans un serveur.", ephemeral=True,
+            )
+            return
+
+        campaign_name = name or theme
+        creator_id = interaction.user.id
+
+        # Build campaign model — player_names will be filled at launch time
+        # from the lobby roster (READY players only).
+        campaign = Campaign(
+            id=str(uuid.uuid4()),
+            name=campaign_name,
+            created_at=datetime.now(timezone.utc),
+            player_names=[],
+        )
+
+        # Atomic: persist campaign + create channel + persist mapping
+        db_session = self.bot.db_factory()
+        channel: discord.TextChannel | None = None
+        try:
+            guild_config_repo = GuildConfigRepository(db_session)
+            config = guild_config_repo.get(guild.id)
+            category_name = config.category_name if config else "RealmAI Sessions"
+            language = config.language if config else "fr"
+
+            campaign_repo = CampaignRepository(db_session)
+            campaign_repo.save(campaign)
+            db_session.flush()  # allocate DB resources, don't commit yet
+
+            # Channel is created with the host as initial member; other
+            # players gain access when they click Rejoindre (handled at
+            # launch via permission overwrites if needed).
+            host_member = guild.get_member(creator_id) or interaction.user
+            initial_members: list[discord.Member] = []
+            if isinstance(host_member, discord.Member):
+                initial_members.append(host_member)
+            channel = await create_session_channel(
+                guild, campaign_name, initial_members, guild.me, category_name,
+            )
+
+            channel_repo = CampaignChannelRepository(db_session)
+            channel_repo.save(channel.id, campaign.id, guild.id)
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            if channel is not None:
+                try:
+                    await channel.delete(reason="Rollback: start_campaign failed")
+                except Exception:
+                    logger.error("Failed to cleanup orphan channel %s", channel.id)
+            raise
+        finally:
+            db_session.close()
+
+        # Build lobby state
+        lobby = LobbyState(creator_id=creator_id, language=language)
+
+        # ------------------------------------------------------------
+        # Lobby callbacks
+        # ------------------------------------------------------------
+
+        async def refresh_lobby_message(
+            lobby_view: LobbyView,
+            *,
+            via_interaction: discord.Interaction | None = None,
+        ) -> None:
+            """Re-render the lobby embed in place (host post or fresh edit)."""
+            roster = []
+            for p in lobby.players.values():
+                member = guild.get_member(p.user_id)
+                disp = member.display_name if member else f"User {p.user_id}"
+                roster.append((p, disp))
+            host_member = guild.get_member(creator_id)
+            host_name = host_member.display_name if host_member else f"User {creator_id}"
+            new_embed = build_lobby_embed(
+                campaign_name=campaign_name,
+                theme=theme,
+                host_name=host_name,
+                roster=roster,
+                language=language,
+            )
+            if via_interaction is not None and not via_interaction.response.is_done():
+                await via_interaction.response.edit_message(embed=new_embed, view=lobby_view)
+            else:
+                # Edit the original lobby message via stored reference
+                msg = getattr(lobby_view, "_lobby_message", None)
+                if msg is not None:
+                    try:
+                        await msg.edit(embed=new_embed, view=lobby_view)
+                    except discord.HTTPException:
+                        logger.warning("refresh_lobby_message: edit failed")
+
+        async def on_join(
+            inter: discord.Interaction, lobby_view: LobbyView,
+        ) -> None:
+            user_id = inter.user.id
+            try:
+                lobby.add_player(user_id)
+            except ValueError:
+                await inter.response.send_message(
+                    "Le lobby est plein.", ephemeral=True,
+                )
+                return
+
+            # Send the IdentityModal first — it fires the rest of the flow.
+            async def on_setup_complete(
+                character: Any, kit_name: str, motivation_key: str,
+            ) -> None:
+                """Called by CharacterSetupFlow when the player confirms."""
+                # Build inventory + apply starter kit
+                inventory = create_inventory()
+                kits = get_starter_kits(character.char_class)
+                kit = next((k for k in kits if k.name == kit_name), None)
+                if kit is not None:
+                    inventory = apply_starter_kit(kit, inventory)
+                spellcaster = create_spellcaster_state(character.char_class, level=1)
+
+                # Persist character to DB right now so it survives a bot restart
+                db_sess = self.bot.db_factory()
+                try:
+                    pc_repo = PlayerCharacterRepository(db_sess)
+                    pc_repo.save(
+                        user_id, campaign.id, character, inventory, spellcaster,
+                    )
+                    db_sess.commit()
+                finally:
+                    db_sess.close()
+
+                # Update lobby player record
+                player = lobby.players.get(user_id)
+                if player is not None:
+                    player.character = character
+                    player.inventory = inventory
+                    player.spellcaster = spellcaster
+                    player.kit_name = kit_name
+                    player.motivation_key = motivation_key
+                    player.status = LobbyPlayerStatus.READY
+
+                logger.info(
+                    "LOBBY ready user=%s name=%s class=%s campaign=%s",
+                    user_id, character.name, character.char_class.value, campaign.id,
+                )
+                # Refresh the public lobby embed
+                await refresh_lobby_message(lobby_view)
+
+            # Mark CREATING and refresh roster
+            lobby.set_status(user_id, LobbyPlayerStatus.CREATING)
+            await refresh_lobby_message(lobby_view)
+
+            flow = CharacterSetupFlow(
+                user_id=user_id,
+                language=language,
+                on_complete=on_setup_complete,
+            )
+            modal = IdentityModal(parent_view=flow)
+            await inter.response.send_modal(modal)
+
+        async def on_launch(
+            inter: discord.Interaction, lobby_view: LobbyView,
+        ) -> None:
+            """Transition the lobby into a GameSession and post the opening."""
+            try:
+                await inter.response.defer()
+            except discord.NotFound:
+                logger.warning("on_launch: interaction expired before defer()")
+
+            ready = [
+                p for p in lobby.players.values()
+                if p.status == LobbyPlayerStatus.READY
+                and p.character is not None
+                and p.inventory is not None
+            ]
+            if not ready:
+                # Should be blocked by has_any_ready, but be defensive
+                logger.warning("on_launch called with no ready players")
+                return
+
+            assert channel is not None
+            await self._launch_campaign_from_lobby(
+                channel=channel,
+                campaign=campaign,
+                lobby=lobby,
+                ready_players=ready,
+                language=language,
+                lobby_view=lobby_view,
+            )
+
+        # Build view + post lobby
+        lobby_view = LobbyView(
+            lobby_state=lobby,
+            host_id=creator_id,
+            language=language,
+            on_join_clicked=on_join,
+            on_launch_clicked=on_launch,
+        )
+        host_member = guild.get_member(creator_id)
+        host_name = host_member.display_name if host_member else interaction.user.display_name
+        embed = build_lobby_embed(
+            campaign_name=campaign_name,
+            theme=theme,
+            host_name=host_name,
+            roster=[],
+            language=language,
+        )
+        lobby_msg = await channel.send(embed=embed, view=lobby_view)
+        # Stash the message so callbacks can re-edit when no interaction is in scope
+        lobby_view._lobby_message = lobby_msg  # type: ignore[attr-defined]
+
+        self.bot.lobbies[channel.id] = lobby
+
+        logger.info(
+            "SESSION lobby_open campaign=%s theme=%r host=%s guild=%s channel=%s",
+            campaign.id, theme, creator_id, guild.name, channel.name,
+        )
+
+        await interaction.followup.send(
+            f"Lobby ouvert dans {channel.mention} — les joueurs peuvent rejoindre.",
+        )
+
+    # ------------------------------------------------------------------
+    # Lobby → GameSession transition (C3)
+    # ------------------------------------------------------------------
+
+    async def _launch_campaign_from_lobby(
+        self,
+        *,
+        channel: discord.TextChannel,
+        campaign: Campaign,
+        lobby: LobbyState,
+        ready_players: list,
+        language: str,
+        lobby_view: LobbyView,
+    ) -> None:
+        """Generate arc/location, build GameSession, post opening narrative."""
+        from ai.client import OllamaClient, OllamaUnavailableError
+        from bot.embeds.character_embed import build_party_card_embed
+        from bot.embeds.narrative_embed import (
+            build_countdown_embed, build_opening_crawl_embed,
+        )
+        from bot.embeds.scene_embed import build_scene_embed
+
+        # Generation phase — let the player know we're cooking the story
+        try:
+            client = OllamaClient()
+        except (OllamaUnavailableError, Exception):
+            await channel.send(
+                "Ollama est indisponible — impossible de générer la campagne. "
+                "Vérifie que le serveur tourne, puis relance `/start_campaign`.",
+            )
+            self.bot.lobbies.pop(channel.id, None)
+            lobby_view.stop()
+            return
+
+        # Build characters/inventories/spellcasters dicts
+        characters = {p.user_id: p.character for p in ready_players}
+        inventories = {p.user_id: p.inventory for p in ready_players}
+        spellcasters: dict[int, Any] = {}
+        for p in ready_players:
+            if p.spellcaster is not None:
+                spellcasters[p.user_id] = p.spellcaster
+        kits = {p.user_id: p.kit_name or "" for p in ready_players}
+        motivations = {p.user_id: p.motivation_key or "" for p in ready_players}
+
+        # Update Campaign player_names
+        campaign.player_names = [str(p.user_id) for p in ready_players]
+
+        # ---- Generate arc + starting location ----
+        story_arc = None
+        current_location = None
+        try:
+            from ai.arc_generator import ArcGenerator
+            from ai.world_generator import WorldGenerator
+            from engine.arc_recipes import generate_recipe
+
+            arc_gen = ArcGenerator(client)
+            world_gen = WorldGenerator(client)
+
+            recipe = generate_recipe(theme=campaign.name)
+            logger.info(
+                "GENERATION recipe campaign=%s archetype=%s tone=%s beats=%d",
+                campaign.id, recipe.archetype, recipe.tone, recipe.num_beats,
+            )
+
+            arc_start = time.monotonic()
+            arc = await asyncio.to_thread(
+                arc_gen.generate,
+                campaign.name, len(ready_players), language, recipe,
+            )
+            story_arc = arc.model_copy(update={"campaign_id": campaign.id})
+            logger.info(
+                "GENERATION arc_done campaign=%s elapsed=%.1fs beats=%d",
+                campaign.id, time.monotonic() - arc_start, len(story_arc.beats),
+            )
+
+            arc_context = (
+                f"Campaign: {campaign.name}. "
+                f"Villain: {story_arc.villain_name}. "
+                f"First beat: "
+                f"{story_arc.beats[0].description if story_arc.beats else 'unknown'}."
+            )
+            arc_location_hints = [
+                beat.location_hint for beat in story_arc.beats if beat.location_hint
+            ]
+            loc_start = time.monotonic()
+            current_location = await asyncio.to_thread(
+                world_gen.generate,
+                arc_context, "starting_area", language, arc_location_hints,
+            )
+            logger.info(
+                "GENERATION loc_done campaign=%s elapsed=%.1fs location=%r",
+                campaign.id, time.monotonic() - loc_start, current_location.name,
+            )
+            campaign.current_location = current_location.name
+        except OllamaUnavailableError:
+            await channel.send(
+                "Ollama est devenu indisponible pendant la génération. "
+                "Relance `/start_campaign` quand le serveur sera de retour.",
+            )
+            self.bot.lobbies.pop(channel.id, None)
+            lobby_view.stop()
+            return
+        except Exception:
+            logger.exception(
+                "GENERATION failed campaign=%s — launching with fallback",
+                campaign.id,
+            )
+
+        # ---- Build GameSession ----
+        session = GameSession(
+            campaign=campaign,
+            characters=characters,
+            inventories=inventories,
+            spellcasters=spellcasters,
+            current_location=current_location,
+            story_arc=story_arc,
+            character_kits=dict(kits),
+            character_motivations=dict(motivations),
+            language=language,
+        )
+        create_ai_services(session)
+
+        # Persist arc + location
+        db_session = self.bot.db_factory()
+        try:
+            if story_arc is not None:
+                arc_repo = StoryArcRepository(db_session)
+                arc_repo.save(story_arc)
+            if current_location is not None:
+                loc_repo = LocationRepository(db_session)
+                loc_repo.save(current_location, campaign.id)
+                from bot.world_navigation import create_exit_stubs
+
+                create_exit_stubs(
+                    loc_repo,
+                    current_location.connections,
+                    parent_name=current_location.name,
+                    campaign_id=campaign.id,
+                )
+                CampaignRepository(db_session).update(campaign)
+            db_session.commit()
+        finally:
+            db_session.close()
+
+        # Story bible header
+        if session.story_bible is not None:
+            try:
+                session.story_bible.write_header(
+                    campaign=campaign,
+                    story_arc=story_arc,
+                    location=current_location,
+                    characters=characters,
+                    character_kits=kits,
+                    character_motivations=motivations,
+                )
+            except Exception:
+                logger.warning(
+                    "story_bible write_header failed for campaign=%s",
+                    campaign.id, exc_info=True,
+                )
+
+        # Move the lobby state to active sessions
+        self.bot.sessions[channel.id] = session
+        self.bot.lobbies.pop(channel.id, None)
+        lobby_view.stop()
+
+        # Purge onboarding noise so the campaign opens on a clean canvas
+        try:
+            await channel.purge(limit=200)
+        except (discord.Forbidden, discord.HTTPException):
+            logger.warning("LAUNCH purge failed campaign=%s", campaign.id, exc_info=True)
+
+        # Surface AI init warnings
+        for warning in session.ai_warnings:
+            try:
+                await channel.send(warning)
+            except Exception:
+                logger.warning("Failed to send AI warning campaign=%s", campaign.id)
+
+        # Animated countdown
+        try:
+            countdown_msg = await channel.send(
+                embed=build_countdown_embed(3, campaign.name, language),
+            )
+            for step in (2, 1):
+                await asyncio.sleep(1.5)
+                await countdown_msg.edit(
+                    embed=build_countdown_embed(step, campaign.name, language),
+                )
+            await asyncio.sleep(1.5)
+            await countdown_msg.delete()
+        except Exception:
+            logger.warning(
+                "LAUNCH countdown failed campaign=%s", campaign.id, exc_info=True,
+            )
+
+        # Party cards
+        try:
+            for user_id, character in characters.items():
+                member = channel.guild.get_member(user_id)
+                member_name = member.display_name if member else "???"
+                card_embed = build_party_card_embed(character, member_name, language)
+                await channel.send(embed=card_embed)
+                await asyncio.sleep(0.3)
+        except Exception:
+            logger.warning(
+                "LAUNCH party cards failed campaign=%s", campaign.id, exc_info=True,
+            )
+
+        # Separator
+        try:
+            await channel.send("━━━━━━━━━━ ✦ ━━━━━━━━━━")
+        except Exception:
+            logger.warning("LAUNCH separator failed campaign=%s", campaign.id, exc_info=True)
+
+        # Opening crawl
+        crawl_embed = build_opening_crawl_embed(
+            campaign_name=campaign.name,
+            story_arc=story_arc,
+            location=current_location,
+            language=language,
+        )
+        await channel.send(embed=crawl_embed)
+
+        # Scene hydration + scene embed
+        if current_location is not None:
+            from bot.scene_hydration import hydrate_scene
+            hydrate_scene(session, db_factory=self.bot.db_factory)
+            scene_embed = build_scene_embed(
+                location=current_location,
+                language=language,
+                arrival_hook=current_location.arrival_hook,
+            )
+            await channel.send(embed=scene_embed)
+            logger.info(
+                "SCENE posted campaign=%s location=%s npcs=%d",
+                campaign.id, current_location.name,
+                len(current_location.npcs_present),
+            )
+
+        logger.info(
+            "LAUNCH campaign=%s players=%d arc_beats=%d location=%s",
+            campaign.id, len(characters),
+            len(story_arc.beats) if story_arc else 0,
+            current_location.name if current_location else "none",
+        )
+
+        # Arc Tracker pin — best effort
+        try:
+            from bot.utils.arc_tracker import ArcTrackerData, ArcTrackerManager
+            store = _CampaignChannelArcStore(self.bot.db_factory)
+            manager = ArcTrackerManager(store=store)
+            await manager.ensure_pinned(
+                channel=channel,
+                campaign_id=campaign.id,
+                channel_id=channel.id,
+                data=ArcTrackerData(
+                    chapter_title="Chapitre 1 — Début de la campagne",
+                    current_objective="Découvrez le monde et le pourquoi de votre quête.",
+                    recent_beats=[],
+                    active_quests=[],
+                    last_updated_relative="à l'instant",
+                ),
+            )
+        except Exception:
+            logger.warning("Failed to pin Arc Tracker on launch", exc_info=True)
 
     # ------------------------------------------------------------------
     # /resume
