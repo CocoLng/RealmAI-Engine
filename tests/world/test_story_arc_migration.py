@@ -141,6 +141,84 @@ def test_legacy_completion_trigger_auto_migrated():
     assert obj.required is True
     # Original trigger is preserved for read-back compat:
     assert migrated.completion_trigger is not None
+    # TALK gets an automatic MIN_REVEALS=2 gate so a single "hello" doesn't
+    # advance the beat — the conversation must actually reveal something.
+    from world.story_arc import GateKind
+    assert obj.gate is not None
+    assert obj.gate.kind == GateKind.MIN_REVEALS
+    assert obj.gate.value == 2
+
+
+def test_legacy_non_talk_kinds_have_no_default_gate() -> None:
+    """defeat/arrive/pickup/etc. are self-validating — no gate by default."""
+    beat = StoryBeat(
+        beat_number=1, title="Defeat the wolf", description="...",
+        location_hint="forest", encounter_type="combat",
+        completion_trigger=CompletionTrigger(type="defeat", target="wolf"),
+    )
+    arc = StoryArc(
+        campaign_id="abc", theme="t",
+        premise="A long enough premise here.",
+        beats=[beat] + _make_filler_beats(2, 7),
+        villain_name="X", villain_motivation="Y",
+    )
+    obj = arc.beats[0].objectives[0]
+    assert obj.kind == ObjectiveKind.DEFEAT
+    assert obj.gate is None  # killing is self-validating
+
+
+def test_legacy_talk_with_min_reveals_gate_blocks_until_substance() -> None:
+    """REGRESSION (live log 2026-04-27): player said hello to the right NPC
+    and the beat advanced after a single revealed_info. The new default gate
+    requires at least 2 reveals so a substantive conversation is necessary."""
+    from ai.models import InterpretedAction, MechanicsOutcome
+    from engine.beat_progression import BeatHistory, BeatProgressionEngine
+    from engine.validators import ActionType
+
+    beat = StoryBeat(
+        beat_number=1,
+        title="Greet the Ambassador",
+        description="...",
+        location_hint="court",
+        encounter_type="social",
+        completion_trigger=CompletionTrigger(type="talk", target="Ambassadeur Vaelen"),
+    )
+    arc = StoryArc(
+        campaign_id="abc", theme="t",
+        premise="A long enough premise here.",
+        beats=[beat] + _make_filler_beats(2, 7),
+        villain_name="X", villain_motivation="Y",
+    )
+
+    engine = BeatProgressionEngine()
+
+    # Single reveal from the NPC — must NOT advance (gate fails).
+    one_reveal = engine.evaluate(
+        arc=arc,
+        interpreted=InterpretedAction(
+            action_type=ActionType.TALK, actor_name="hero",
+            target_name="Ambassadeur Vaelen",
+            raw_input="je m'approche de l'ambassadeur",
+        ),
+        outcome=MechanicsOutcome(summary="Vaelen nods.", talk_reveals_count=1),
+        location=None, history=BeatHistory(),
+        world_flags={}, inventory=set(),
+    )
+    assert one_reveal.decision == "NEEDS_JUDGE"  # partial match, gate failed
+
+    # Two reveals — gate passes, beat advances.
+    two_reveals = engine.evaluate(
+        arc=arc,
+        interpreted=InterpretedAction(
+            action_type=ActionType.TALK, actor_name="hero",
+            target_name="Ambassadeur Vaelen",
+            raw_input="je discute longuement avec l'ambassadeur",
+        ),
+        outcome=MechanicsOutcome(summary="Vaelen reveals two things.", talk_reveals_count=2),
+        location=None, history=BeatHistory(),
+        world_flags={}, inventory=set(),
+    )
+    assert two_reveals.decision == "ADVANCE"
 
 
 def test_legacy_migration_skipped_when_objectives_present():

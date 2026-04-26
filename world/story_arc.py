@@ -143,6 +143,12 @@ class StoryArc(BaseModel):
         Triggered automatically on every StoryArc construction (load from DB or
         in-memory). Only runs on beats whose `objectives` list is empty.
         Trigger types not mappable to ObjectiveKind are silently skipped.
+
+        TALK triggers get an automatic ``MIN_REVEALS >= 2`` gate so a beat
+        doesn't advance the moment the player says hello to the right NPC —
+        the conversation must reveal at least two pieces of substance. Other
+        kinds (defeat/arrive/pickup/interact/search/examine/possess/flag) are
+        self-validating: the action either happened or it didn't.
         """
         valid_kinds = {k.value for k in ObjectiveKind}
         for beat in self.beats:
@@ -151,13 +157,20 @@ class StoryArc(BaseModel):
             ct = beat.completion_trigger
             if ct is None or ct.type not in valid_kinds:
                 continue
+            kind = ObjectiveKind(ct.type)
+            # Default gate by kind — protects against trivial-validation bugs
+            # where saying "hi" to the right NPC instantly advances the beat.
+            default_gate: ObjectiveGate | None = None
+            if kind == ObjectiveKind.TALK:
+                default_gate = ObjectiveGate(kind=GateKind.MIN_REVEALS, value=2)
             beat.objectives = [
                 BeatObjective(
                     id=f"legacy_{ct.type}_{ct.target}",
-                    kind=ObjectiveKind(ct.type),
+                    kind=kind,
                     target=ct.target,
                     description=f"{ct.type} {ct.target}",
                     required=True,
+                    gate=default_gate,
                 ),
             ]
         return self
