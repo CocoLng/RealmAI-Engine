@@ -77,7 +77,12 @@ def test_judge_request_includes_partial_objectives():
         beat_judge_rubric=None,
         objectives=[pm],
         player_action_text="I wave at Kaelen",
-        interpreted_action={},
+        interpreted_action=InterpretedAction(
+            action_type=ActionType.TALK,
+            actor_name="hero",
+            target_name="Kaelen",
+            raw_input="I wave at Kaelen",
+        ),
         outcome_summary="...",
         location_name="Forge",
         npcs_present=["Kaelen"],

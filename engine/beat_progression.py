@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from ai.models import InterpretedAction
 from world.story_arc import (
     GateKind,
     ObjectiveKind,
@@ -27,7 +28,7 @@ from world.story_arc import (
 )
 
 if TYPE_CHECKING:
-    from ai.models import InterpretedAction, MechanicsOutcome
+    from ai.models import MechanicsOutcome
     from world.location import Location
     from world.story_arc import StoryArc
 
@@ -90,7 +91,7 @@ class JudgeRequest(BaseModel):
     beat_judge_rubric: str | None
     objectives: list[ObjectivePartialMatch]
     player_action_text: str
-    interpreted_action: dict  # type: ignore[type-arg]
+    interpreted_action: InterpretedAction
     outcome_summary: str
     location_name: str | None
     npcs_present: list[str]
@@ -286,7 +287,7 @@ class BeatProgressionEngine:
                     beat_judge_rubric=current_beat.judge_rubric,
                     objectives=partial_matches,
                     player_action_text=interpreted.raw_input,
-                    interpreted_action=interpreted.model_dump(),
+                    interpreted_action=interpreted,
                     outcome_summary=outcome.summary,
                     location_name=location.name if location else None,
                     npcs_present=[],  # caller fills in if needed
