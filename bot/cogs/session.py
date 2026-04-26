@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -87,14 +88,23 @@ class SessionCog(commands.Cog):
     @app_commands.describe(
         theme="Thème de la campagne (ex: Dark Fantasy, Cyberpunk noir)",
         name="Nom optionnel — par défaut le thème est utilisé",
+        players="Joueurs invités (mentions @user1 @user2). Optionnel — sinon lobby ouvert.",
     )
     async def start_campaign(
         self,
         interaction: discord.Interaction,
         theme: str,
         name: str | None = None,
+        players: str | None = None,
     ) -> None:
-        """Create a new campaign lobby — players join via the lobby view."""
+        """Create a new campaign lobby — players join via the lobby view.
+
+        ``players`` is an optional space-separated list of user mentions.
+        When provided, the channel is created **private**: only the host,
+        the tagged players, and the bot can see it. Tagged players still
+        click the Rejoindre button inside the lobby to actually create
+        their character — the parameter only gates channel visibility.
+        """
         try:
             await interaction.response.defer()
         except discord.NotFound:
@@ -110,6 +120,22 @@ class SessionCog(commands.Cog):
 
         campaign_name = name or theme
         creator_id = interaction.user.id
+
+        # Resolve invited players from mention string. We accept both
+        # `<@123>` and `<@!123>` formats (Discord renders the latter for
+        # users with a guild nickname).
+        invited_members: list[discord.Member] = []
+        if players:
+            mention_re = re.compile(r"<@!?(\d+)>")
+            seen_ids: set[int] = set()
+            for match in mention_re.finditer(players):
+                uid = int(match.group(1))
+                if uid in seen_ids or uid == creator_id:
+                    continue
+                seen_ids.add(uid)
+                member = guild.get_member(uid)
+                if member is not None and not member.bot:
+                    invited_members.append(member)
 
         # Build campaign model — player_names will be filled at launch time
         # from the lobby roster (READY players only).
@@ -133,13 +159,12 @@ class SessionCog(commands.Cog):
             campaign_repo.save(campaign)
             db_session.flush()  # allocate DB resources, don't commit yet
 
-            # Channel is created with the host as initial member; other
-            # players gain access when they click Rejoindre (handled at
-            # launch via permission overwrites if needed).
+            # Channel privacy: host + invited players + bot only.
+            # @everyone is denied (set inside create_session_channel).
             host_member = guild.get_member(creator_id) or interaction.user
-            initial_members: list[discord.Member] = []
+            initial_members: list[discord.Member] = list(invited_members)
             if isinstance(host_member, discord.Member):
-                initial_members.append(host_member)
+                initial_members.insert(0, host_member)
             channel = await create_session_channel(
                 guild, campaign_name, initial_members, guild.me, category_name,
             )
@@ -377,7 +402,20 @@ class SessionCog(commands.Cog):
             roster=[],
             language=language,
         )
-        lobby_msg = await channel.send(embed=embed, view=lobby_view)
+        # Ping invited players in the lobby message so they get a notification.
+        # AllowedMentions whitelists the invited users specifically — no
+        # accidental @everyone / @role pings.
+        if invited_members:
+            lobby_content = " ".join(m.mention for m in invited_members)
+            allowed = discord.AllowedMentions(
+                everyone=False, roles=False, users=invited_members,
+            )
+            lobby_msg = await channel.send(
+                content=lobby_content, embed=embed, view=lobby_view,
+                allowed_mentions=allowed,
+            )
+        else:
+            lobby_msg = await channel.send(embed=embed, view=lobby_view)
         # Stash the message so callbacks can re-edit when no interaction is in scope
         lobby_view._lobby_message = lobby_msg  # type: ignore[attr-defined]
 
@@ -393,13 +431,20 @@ class SessionCog(commands.Cog):
         )
 
         logger.info(
-            "SESSION lobby_open campaign=%s theme=%r host=%s guild=%s channel=%s pregen=started",
+            "SESSION lobby_open campaign=%s theme=%r host=%s guild=%s channel=%s invited=%d pregen=started",
             campaign.id, theme, creator_id, guild.name, channel.name,
+            len(invited_members),
         )
 
-        await interaction.followup.send(
-            f"Lobby ouvert dans {channel.mention} — les joueurs peuvent rejoindre.",
-        )
+        if invited_members:
+            invited_list = ", ".join(m.display_name for m in invited_members)
+            await interaction.followup.send(
+                f"Salon privé créé dans {channel.mention} avec **{invited_list}**.",
+            )
+        else:
+            await interaction.followup.send(
+                f"Lobby ouvert dans {channel.mention} — les joueurs peuvent rejoindre.",
+            )
 
     # ------------------------------------------------------------------
     # Background pre-generation (arc + starting location)
