@@ -13,7 +13,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot.campaign_launcher import CampaignLauncher
 from bot.config import GuildConfig
 from bot.game_session import GameSession, create_ai_services
 from bot.persistence import persist_session
@@ -85,131 +84,17 @@ class SessionCog(commands.Cog):
     @app_commands.command(name="start_campaign", description="Lance une nouvelle campagne")
     @app_commands.describe(
         theme="Theme de la campagne (ex: 'Foret sombre', 'Donjon ancien')",
-        players="Joueurs a inviter (mentionnez-les: @Alice @Bob)",
+        name="Nom optionnel de la campagne",
     )
     async def start_campaign(
         self,
         interaction: discord.Interaction,
         theme: str,
-        players: str,
+        name: str | None = None,
     ) -> None:
-        """Create a new campaign with a dedicated channel."""
-        try:
-            await interaction.response.defer()
-        except discord.NotFound:
-            logger.warning("start_campaign: interaction expired before defer()")
-            return
-
-        # Parse mentioned players
-        player_ids = self._parse_mentions(players)
-        if not player_ids:
-            await interaction.followup.send(
-                "Mentionne au moins un joueur (@pseudo).", ephemeral=True,
-            )
-            return
-
-        # Include invoker if not already mentioned
-        if interaction.user.id not in player_ids:
-            player_ids.insert(0, interaction.user.id)
-
-        guild = interaction.guild
-        if guild is None:
-            await interaction.followup.send(
-                "Cette commande doit etre utilisee dans un serveur.", ephemeral=True,
-            )
-            return
-
-        # Build campaign model
-        campaign = Campaign(
-            id=str(uuid.uuid4()),
-            name=theme,
-            created_at=datetime.now(timezone.utc),
-            player_names=[str(uid) for uid in player_ids],
-        )
-
-        # Resolve Member objects for channel permissions
-        player_members: list[discord.Member] = []
-        for uid in player_ids:
-            member = guild.get_member(uid)
-            if member:
-                player_members.append(member)
-
-        # Atomic: persist campaign + create channel + persist mapping
-        db_session = self.bot.db_factory()
-        channel: discord.TextChannel | None = None
-        try:
-            guild_config_repo = GuildConfigRepository(db_session)
-            config = guild_config_repo.get(guild.id)
-            category_name = config.category_name if config else "RealmAI Sessions"
-            language = config.language if config else "fr"
-
-            campaign_repo = CampaignRepository(db_session)
-            campaign_repo.save(campaign)
-            db_session.flush()  # allocate DB resources, don't commit yet
-
-            channel = await create_session_channel(
-                guild, theme, player_members, guild.me, category_name,
-            )
-
-            channel_repo = CampaignChannelRepository(db_session)
-            channel_repo.save(channel.id, campaign.id, guild.id)
-            db_session.commit()
-        except Exception:
-            db_session.rollback()
-            if channel is not None:
-                try:
-                    await channel.delete(reason="Rollback: start_campaign failed")
-                except Exception:
-                    logger.error("Failed to cleanup orphan channel %s", channel.id)
-            raise
-        finally:
-            db_session.close()
-
-        # Create launcher (orchestrates onboarding before gameplay)
-        launcher = CampaignLauncher(
-            bot=self.bot,
-            campaign=campaign,
-            channel=channel,
-            player_ids=player_ids,
-            language=language,
-            creator_id=interaction.user.id,
-        )
-        self.bot.launchers[channel.id] = launcher
-
-        # Start background AI tasks (arc + location generation)
-        launcher.start_background_tasks()
-
-        player_mentions = ", ".join(str(uid) for uid in player_ids)
-        logger.info(
-            "SESSION start campaign=%s theme=%r players=[%s] guild=%s channel=%s",
-            campaign.id, theme, player_mentions,
-            guild.name, channel.name,
-        )
-
-        # Send welcome embed + onboarding view in the new channel
-        await launcher.start()
-
-        # Arc Tracker pin — best effort, never blocks campaign creation
-        try:
-            from bot.utils.arc_tracker import ArcTrackerData, ArcTrackerManager
-            store = _CampaignChannelArcStore(self.bot.db_factory)
-            manager = ArcTrackerManager(store=store)
-            await manager.ensure_pinned(
-                channel=channel,
-                campaign_id=campaign.id,
-                channel_id=channel.id,
-                data=ArcTrackerData(
-                    chapter_title="Chapitre 1 — Début de la campagne",
-                    current_objective="Découvrez le monde et le pourquoi de votre quête.",
-                    recent_beats=[],
-                    active_quests=[],
-                    last_updated_relative="à l'instant",
-                ),
-            )
-        except Exception:
-            logger.warning("Failed to pin Arc Tracker on /start_campaign", exc_info=True)
-
-        await interaction.followup.send(f"Campagne lancee dans {channel.mention} !")
+        """Create a new campaign lobby — players join via the lobby view."""
+        # NOTE: rewritten in Wave C2 to post a lobby instead of pre-defined players.
+        raise NotImplementedError("start_campaign rewrite pending (Wave C2)")
 
     # ------------------------------------------------------------------
     # /resume
