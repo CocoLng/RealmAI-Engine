@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from engine.character import Alignment, CharacterClass, Race
+from engine.character import CharacterClass, Race
 from engine.starter_gear import STARTER_KITS
 
 
@@ -36,14 +36,6 @@ class TestClassLabels:
         fr = CLASS_LABELS["fr"]
         for cls in CharacterClass:
             assert cls.value in fr, f"Missing FR translation for CharacterClass.{cls.name}"
-
-
-class TestAlignmentLabels:
-    def test_all_alignments_translated(self) -> None:
-        from bot.i18n import ALIGNMENT_LABELS
-        fr = ALIGNMENT_LABELS["fr"]
-        for alignment in Alignment:
-            assert alignment.value in fr, f"Missing FR translation for Alignment.{alignment.name}"
 
 
 class TestKitLabels:

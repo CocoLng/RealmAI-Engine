@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from .enums import Ability, Alignment, CharacterClass, Race, Size, Skill
+from .enums import Ability, CharacterClass, Race, Size, Skill
 from .features import Feature
 
 
@@ -25,11 +25,11 @@ class Character(BaseModel):
     """A player or NPC character with SRD 5e stats."""
 
     name: str = Field(min_length=1, max_length=64)
+    concept: str = Field(default="", max_length=200)
     race: Race
     char_class: CharacterClass
     level: int = Field(default=1, ge=1, le=20)
     xp: int = Field(default=0, ge=0)
-    alignment: Alignment = Alignment.TRUE_NEUTRAL
 
     ability_scores: AbilityScores
     hp: int = Field(ge=0)

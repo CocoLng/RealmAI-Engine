@@ -2,7 +2,7 @@
 
 from .abilities import compute_modifier
 from .classes import CLASS_FEATURES, CLASS_HIT_DIE, CLASS_SAVING_THROWS
-from .enums import Ability, Alignment, CharacterClass, Race, Skill
+from .enums import Ability, CharacterClass, Race, Skill
 from .models import AbilityScores, Character
 from .progression import compute_max_hp, compute_proficiency_bonus
 from .races import RACIAL_FEATURES, RACIAL_SIZE, RACIAL_SPEED
@@ -13,13 +13,14 @@ def create_character(
     race: Race,
     char_class: CharacterClass,
     ability_scores: AbilityScores,
-    alignment: Alignment = Alignment.TRUE_NEUTRAL,
     skill_proficiencies: list[Skill] | None = None,
+    concept: str = "",
 ) -> Character:
     """Create a new level-1 character with derived stats, features, and skills.
 
     - ability_scores: already with racial bonuses applied
     - skill_proficiencies: if None, empty list (Discord wizard will provide)
+    - concept: optional RP flavor text (max 200 chars), passed to narrator prompts
     - Features: automatically populated from RACIAL_FEATURES and CLASS_FEATURES
     """
     con_mod = compute_modifier(ability_scores.get(Ability.CON))
@@ -32,11 +33,11 @@ def create_character(
 
     return Character(
         name=name,
+        concept=concept,
         race=race,
         char_class=char_class,
         level=1,
         xp=0,
-        alignment=alignment,
         ability_scores=ability_scores,
         hp=max_hp,
         max_hp=max_hp,

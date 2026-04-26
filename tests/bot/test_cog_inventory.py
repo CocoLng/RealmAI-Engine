@@ -11,7 +11,6 @@ from bot.cogs.inventory import InventoryCog
 from bot.game_session import GameSession
 from engine.character import (
     AbilityScores,
-    Alignment,
     Character,
     CharacterClass,
     Race,
@@ -44,7 +43,6 @@ def _make_character(name: str = "Thorin", **kwargs: object) -> Character:
         "race": Race.DWARF,
         "char_class": CharacterClass.FIGHTER,
         "ability_scores": _DEFAULT_SCORES,
-        "alignment": Alignment.LAWFUL_GOOD,
     }
     defaults.update(kwargs)
     return create_character(name=name, **defaults)  # type: ignore[arg-type]

@@ -40,24 +40,6 @@ CLASS_LABELS: dict[str, dict[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Alignment labels
-# ---------------------------------------------------------------------------
-
-ALIGNMENT_LABELS: dict[str, dict[str, str]] = {
-    "fr": {
-        "Lawful Good": "Loyal Bon",
-        "Neutral Good": "Neutre Bon",
-        "Chaotic Good": "Chaotique Bon",
-        "Lawful Neutral": "Loyal Neutre",
-        "True Neutral": "Neutre Vrai",
-        "Chaotic Neutral": "Chaotique Neutre",
-        "Lawful Evil": "Loyal Mauvais",
-        "Neutral Evil": "Neutre Mauvais",
-        "Chaotic Evil": "Chaotique Mauvais",
-    },
-}
-
-# ---------------------------------------------------------------------------
 # Editable field labels (character edit menu)
 # ---------------------------------------------------------------------------
 
@@ -65,7 +47,6 @@ EDIT_FIELD_LABELS: dict[str, dict[str, str]] = {
     "fr": {
         "race": "Race",
         "class": "Classe",
-        "alignment": "Alignement",
         "stats": "Statistiques",
         "skills": "Competences",
         "name": "Nom",

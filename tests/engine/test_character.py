@@ -5,7 +5,6 @@ import pytest
 from engine.character import (
     Ability,
     AbilityScores,
-    Alignment,
     Character,
     CharacterClass,
     Race,
@@ -87,13 +86,6 @@ class TestCharacterClass:
             "FIGHTER", "WIZARD", "ROGUE", "CLERIC", "RANGER", "BARBARIAN",
         ):
             assert name in CharacterClass.__members__
-
-
-class TestAlignment:
-    """Alignment enum has all nine alignments."""
-
-    def test_all_nine_alignments_exist(self) -> None:
-        assert len(Alignment) == 9
 
 
 class TestSize:
@@ -354,17 +346,6 @@ class TestCreateCharacter:
     def test_ac_computed_from_dex(self, sample_fighter: Character) -> None:
         dex_mod = compute_modifier(sample_fighter.ability_scores.get(Ability.DEX))
         assert sample_fighter.ac == 10 + dex_mod
-
-    def test_default_alignment(self, sample_fighter: Character) -> None:
-        assert sample_fighter.alignment == Alignment.TRUE_NEUTRAL
-
-    def test_custom_alignment(self, sample_scores: AbilityScores) -> None:
-        scores = apply_racial_bonuses(sample_scores, Race.HUMAN)
-        char = create_character(
-            "Test", Race.HUMAN, CharacterClass.FIGHTER, scores,
-            alignment=Alignment.CHAOTIC_GOOD,
-        )
-        assert char.alignment == Alignment.CHAOTIC_GOOD
 
     @pytest.mark.parametrize("char_class", list(CharacterClass))
     def test_correct_saving_throws_by_class(
