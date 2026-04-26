@@ -1,4 +1,7 @@
-"""Character cog — character creation, viewing, and leveling."""
+"""Character cog — character viewing and leveling.
+
+Character creation happens via the lobby flow in /start_campaign.
+"""
 
 from __future__ import annotations
 
@@ -10,16 +13,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot.embeds.character_embed import build_character_embed
-from bot.views.character_create_view import CharacterCreateView
 from db.repositories import PlayerCharacterRepository
-from engine.character import (
-    assign_standard_array,
-    check_level_up,
-    create_character,
-    level_up,
-)
-from engine.inventory import create_inventory
-from engine.spells import create_spellcaster_state
+from engine.character import check_level_up, level_up
 
 if TYPE_CHECKING:
     from bot.bot import RealmBot
@@ -28,90 +23,10 @@ logger = logging.getLogger(__name__)
 
 
 class CharacterCog(commands.Cog):
-    """Character management: create, view, level up."""
+    """Character management: view sheet, level up."""
 
     def __init__(self, bot: RealmBot) -> None:
         self.bot = bot
-
-    @app_commands.command(name="create_character", description="Cree un nouveau personnage")
-    async def create_character_cmd(self, interaction: discord.Interaction) -> None:
-        """Start the character creation flow for the calling user."""
-        session = self.bot.get_session(interaction.channel_id)
-        if session is None:
-            await interaction.response.send_message(
-                "Aucune session active. Utilise `/start_campaign` ou `/resume`.",
-                ephemeral=True,
-            )
-            return
-
-        user_id = interaction.user.id
-        if user_id in session.characters:
-            await interaction.response.send_message(
-                "Tu as deja un personnage dans cette campagne.",
-                ephemeral=True,
-            )
-            return
-
-        # Send character create view
-        view = CharacterCreateView()
-        await interaction.response.send_message(
-            "Creation de personnage -- Choisis ta race :",
-            view=view,
-            ephemeral=True,
-        )
-
-        # Wait for the view to complete (user fills all selects + modal)
-        timed_out = await view.wait()
-        if timed_out or not view.completed:
-            return
-
-        # All selections made — these are guaranteed non-None after completed=True
-        assert view.race is not None
-        assert view.char_class is not None
-        assert view.alignment is not None
-        assert view.character_name is not None
-        assert view.ability_assignments is not None
-        assert view.skill_proficiencies is not None
-
-        scores = assign_standard_array(view.ability_assignments, view.race)
-        character = create_character(
-            name=view.character_name,
-            race=view.race,
-            char_class=view.char_class,
-            ability_scores=scores,
-            alignment=view.alignment,
-            skill_proficiencies=view.skill_proficiencies,
-        )
-        inventory = create_inventory()
-        spellcaster = create_spellcaster_state(view.char_class, 1)
-
-        # Save to session
-        session.characters[user_id] = character
-        session.inventories[user_id] = inventory
-        session.spellcasters[user_id] = spellcaster
-
-        # Save to DB
-        db_session = self.bot.db_factory()
-        try:
-            pc_repo = PlayerCharacterRepository(db_session)
-            pc_repo.save(user_id, session.campaign.id, character, inventory, spellcaster)
-            db_session.commit()
-        finally:
-            db_session.close()
-
-        logger.info(
-            "CHAR created name=%s race=%s class=%s user=%s campaign=%s",
-            character.name, view.race.value, view.char_class.value,
-            interaction.user, session.campaign.id,
-        )
-
-        embed = build_character_embed(character)
-        # Use followup since the original interaction was already responded to
-        await interaction.followup.send(
-            content=f"**{character.name}** a ete cree !",
-            embed=embed,
-            ephemeral=True,
-        )
 
     @app_commands.command(name="character", description="Affiche ta fiche de personnage")
     @app_commands.describe(public="Afficher publiquement (visible par tous)")
@@ -130,7 +45,7 @@ class CharacterCog(commands.Cog):
         char = session.characters.get(user_id)
         if char is None:
             await interaction.response.send_message(
-                "Tu n'as pas de personnage. Utilise `/create_character`.",
+                "Tu n'as pas de personnage. La creation se fait au lancement de la campagne.",
                 ephemeral=True,
             )
             return
