@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from .enums import Ability, Alignment, CharacterClass, Race, Size, Skill
+from .enums import Ability, CharacterClass, Race, Size, Skill
 from .features import Feature
 
 
@@ -30,7 +30,6 @@ class Character(BaseModel):
     char_class: CharacterClass
     level: int = Field(default=1, ge=1, le=20)
     xp: int = Field(default=0, ge=0)
-    alignment: Alignment = Alignment.TRUE_NEUTRAL
 
     ability_scores: AbilityScores
     hp: int = Field(ge=0)

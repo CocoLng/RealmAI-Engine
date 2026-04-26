@@ -3,7 +3,6 @@
 from engine.character import (
     Ability,
     AbilityScores,
-    Alignment,
     CharacterClass,
     Race,
     Skill,
@@ -136,18 +135,6 @@ class TestCreateCharacterDerivedStats:
         assert char.xp == 0
         assert char.proficiency_bonus == 2
 
-    def test_alignment_default_true_neutral(self) -> None:
-        char = create_character("X", Race.HUMAN, CharacterClass.WIZARD, _base_scores())
-        assert char.alignment == Alignment.TRUE_NEUTRAL
-
-    def test_alignment_custom(self) -> None:
-        char = create_character(
-            "Y", Race.TIEFLING, CharacterClass.ROGUE, _base_scores(),
-            alignment=Alignment.CHAOTIC_NEUTRAL,
-        )
-        assert char.alignment == Alignment.CHAOTIC_NEUTRAL
-
-
 class TestBackwardCompatibility:
     def test_old_signature_still_works(self) -> None:
         """create_character() with 4 positional args (no skill_proficiencies) still works."""
@@ -156,11 +143,3 @@ class TestBackwardCompatibility:
         assert char.name == "Legacy"
         assert char.skill_proficiencies == []
         assert len(char.features) > 0  # now populated automatically
-
-    def test_alignment_kwarg_still_works(self) -> None:
-        scores = _base_scores()
-        char = create_character(
-            "LegacyAlign", Race.HUMAN, CharacterClass.CLERIC, scores,
-            alignment=Alignment.LAWFUL_GOOD,
-        )
-        assert char.alignment == Alignment.LAWFUL_GOOD

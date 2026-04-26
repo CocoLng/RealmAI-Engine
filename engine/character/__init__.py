@@ -21,7 +21,7 @@ from .classes import (
     ClassSkillConfig,
 )
 from .creation import create_character
-from .enums import Ability, Alignment, CharacterClass, Race, Size, Skill, SKILL_ABILITY
+from .enums import Ability, CharacterClass, Race, Size, Skill, SKILL_ABILITY
 from .features import (
     Feature,
     FeatureSource,
@@ -46,7 +46,6 @@ from .races import RACIAL_ABILITY_BONUSES, RACIAL_FEATURES, RACIAL_SIZE, RACIAL_
 __all__ = [
     # Enums
     "Ability",
-    "Alignment",
     "CharacterClass",
     "Race",
     "Size",

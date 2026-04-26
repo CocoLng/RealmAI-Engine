@@ -2,7 +2,7 @@
 
 from .abilities import compute_modifier
 from .classes import CLASS_FEATURES, CLASS_HIT_DIE, CLASS_SAVING_THROWS
-from .enums import Ability, Alignment, CharacterClass, Race, Skill
+from .enums import Ability, CharacterClass, Race, Skill
 from .models import AbilityScores, Character
 from .progression import compute_max_hp, compute_proficiency_bonus
 from .races import RACIAL_FEATURES, RACIAL_SIZE, RACIAL_SPEED
@@ -13,7 +13,6 @@ def create_character(
     race: Race,
     char_class: CharacterClass,
     ability_scores: AbilityScores,
-    alignment: Alignment = Alignment.TRUE_NEUTRAL,
     skill_proficiencies: list[Skill] | None = None,
     concept: str = "",
 ) -> Character:
@@ -39,7 +38,6 @@ def create_character(
         char_class=char_class,
         level=1,
         xp=0,
-        alignment=alignment,
         ability_scores=ability_scores,
         hp=max_hp,
         max_hp=max_hp,
