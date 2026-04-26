@@ -96,7 +96,125 @@ class CharacterSetupFlow(LoggedView):
     async def transition_to(
         self, interaction: discord.Interaction, next_step: SetupStep,
     ) -> None:
-        """Rebuild components for next_step and edit_message. Stub."""
+        """Rebuild components for next_step and edit the message."""
         self.state = next_step
-        # Implementations land in B4-B10
-        raise NotImplementedError(f"Step {next_step} not yet implemented")
+        if next_step == SetupStep.RACE_CLASS:
+            self._build_race_class_components()
+            await interaction.response.edit_message(
+                content="**Étape 2/6** — Choisis ta race et ta classe.",
+                view=self,
+            )
+        elif next_step == SetupStep.STATS:
+            # Implemented in B5
+            raise NotImplementedError("STATS step lands in Task B5")
+        elif next_step == SetupStep.SKILLS:
+            raise NotImplementedError("SKILLS step lands in Task B6")
+        elif next_step == SetupStep.KIT_MOTIV:
+            raise NotImplementedError("KIT_MOTIV step lands in Task B7")
+        elif next_step == SetupStep.REVIEW:
+            raise NotImplementedError("REVIEW step lands in Task B8")
+        else:
+            raise ValueError(f"Cannot transition to {next_step} from external call")
+
+    def _build_race_class_components(self) -> None:
+        """Clear children and add race+class selects + Continuer button."""
+        from engine.character import CharacterClass, Race
+
+        from bot.i18n import CLASS_LABELS, RACE_LABELS, get_label
+
+        self.clear_items()
+
+        # Race select with descriptions (1-line trait per race)
+        race_descriptions = {
+            Race.HUMAN:    "Polyvalent, +1 à toutes les caractéristiques",
+            Race.ELF:      "Agile, vision sombre, immunité au sommeil charme",
+            Race.DWARF:    "Robuste, résistance aux poisons, +CON",
+            Race.HALFLING: "Chanceux, petit, agile",
+            Race.HALF_ORC: "Endurant, +STR / +CON, fureur du sang",
+            Race.GNOME:    "Curieux, malin, résistance magique mentale",
+            Race.TIEFLING: "Infernal, résistance au feu, +CHA",
+        }
+        race_options = [
+            discord.SelectOption(
+                label=get_label(RACE_LABELS, self.language, r.value),
+                value=r.value,
+                description=race_descriptions[r],
+                default=(self.race == r),
+            )
+            for r in Race
+        ]
+        race_select = ui.Select(
+            placeholder="Choisis ta race...",
+            options=race_options,
+            custom_id="setup_race",
+        )
+
+        async def race_callback(interaction: discord.Interaction) -> None:
+            await self._on_race_selected(interaction, race_select.values)
+        race_select.callback = race_callback
+        self.add_item(race_select)
+
+        # Class select with descriptions (role per class)
+        class_descriptions = {
+            CharacterClass.FIGHTER:   "Guerrier polyvalent, fort en combat rapproché",
+            CharacterClass.BARBARIAN: "Berserker, encaisse et frappe fort",
+            CharacterClass.WIZARD:    "Mage savant, sorts puissants",
+            CharacterClass.CLERIC:    "Soigneur divin, soutien et combat",
+            CharacterClass.ROGUE:     "Rusé, attaques sournoises, infiltration",
+            CharacterClass.RANGER:    "Pisteur, arc et nature",
+        }
+        class_options = [
+            discord.SelectOption(
+                label=get_label(CLASS_LABELS, self.language, c.value),
+                value=c.value,
+                description=class_descriptions[c],
+                default=(self.char_class == c),
+            )
+            for c in CharacterClass
+        ]
+        class_select = ui.Select(
+            placeholder="Choisis ta classe...",
+            options=class_options,
+            custom_id="setup_class",
+        )
+
+        async def class_callback(interaction: discord.Interaction) -> None:
+            await self._on_class_selected(interaction, class_select.values)
+        class_select.callback = class_callback
+        self.add_item(class_select)
+
+        # Continue button
+        continue_btn = ui.Button(
+            label="Continuer",
+            emoji="➡️",
+            style=discord.ButtonStyle.success,
+            disabled=not (self.race and self.char_class),
+            custom_id="setup_race_class_continue",
+        )
+
+        async def continue_callback(interaction: discord.Interaction) -> None:
+            await self.transition_to(interaction, SetupStep.STATS)
+        continue_btn.callback = continue_callback
+        self.add_item(continue_btn)
+
+    async def _on_race_selected(
+        self, interaction: discord.Interaction, values: list[str],
+    ) -> None:
+        from engine.character import Race
+        self.race = Race(values[0])
+        self._build_race_class_components()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_class_selected(
+        self, interaction: discord.Interaction, values: list[str],
+    ) -> None:
+        from engine.character import CharacterClass
+        self.char_class = CharacterClass(values[0])
+        self._build_race_class_components()
+        await interaction.response.edit_message(view=self)
+
+    def _refresh_continue_state(self) -> None:
+        """Sync the disabled state of the Continuer button to current selections."""
+        for child in self.children:
+            if isinstance(child, ui.Button) and child.label and "Continuer" in child.label:
+                child.disabled = not (self.race and self.char_class)
