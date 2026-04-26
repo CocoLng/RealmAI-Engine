@@ -284,24 +284,16 @@ class CharacterSetupFlow(LoggedView):
         priority = (
             CLASS_STAT_PRIORITY[self.char_class] if self.char_class else []
         )
-        priority_line = " > ".join(a.name for a in priority)
         primary = " · ".join(a.name for a in priority[:2])
-        dump_name = priority[-1].name if priority else ""
+        header = f"**Étape 3/6 — Stats {class_name}**  🔥 {primary}"
 
         if self.ability_scores is None:
-            return (
-                f"**Étape 3/6** — Stats pour ton **{class_name}**\n\n"
-                f"🔥 **Priorité de la classe** : {priority_line}\n"
-                f"_Les 2 premières (**{primary}**) sont les plus importantes — "
-                f"**{dump_name}** est secondaire._\n\n"
-                f"_Choisis une méthode :_"
-            )
+            return f"{header}\n_Choisis une méthode :_"
         s = self.ability_scores
         return (
-            f"**Étape 3/6** — Statistiques (**{class_name}**)\n"
+            f"{header}\n"
             f"```STR {s.STR:2d}  DEX {s.DEX:2d}  CON {s.CON:2d}\n"
-            f"INT {s.INT:2d}  WIS {s.WIS:2d}  CHA {s.CHA:2d}```\n"
-            f"🔥 **Stats clés** : {primary}   💤 **Dump** : {dump_name}\n"
+            f"INT {s.INT:2d}  WIS {s.WIS:2d}  CHA {s.CHA:2d}```"
             f"_Confirme ou change de méthode._"
         )
 
