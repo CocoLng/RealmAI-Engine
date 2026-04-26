@@ -332,14 +332,107 @@ class SessionCog(commands.Cog):
 
         self.bot.lobbies[channel.id] = lobby
 
+        # Kick off background arc + location generation so it's ready by the
+        # time the host clicks Démarrer. Player count uses 1 as a default;
+        # the arc generator only uses it as a difficulty hint in the prompt
+        # so a 1→6 mismatch costs nothing structural.
+        lobby.pregen_task = asyncio.create_task(
+            self._pregenerate_campaign_world(lobby, campaign, language),
+            name=f"pregen-{campaign.id}",
+        )
+
         logger.info(
-            "SESSION lobby_open campaign=%s theme=%r host=%s guild=%s channel=%s",
+            "SESSION lobby_open campaign=%s theme=%r host=%s guild=%s channel=%s pregen=started",
             campaign.id, theme, creator_id, guild.name, channel.name,
         )
 
         await interaction.followup.send(
             f"Lobby ouvert dans {channel.mention} — les joueurs peuvent rejoindre.",
         )
+
+    # ------------------------------------------------------------------
+    # Background pre-generation (arc + starting location)
+    # ------------------------------------------------------------------
+
+    async def _pregenerate_campaign_world(
+        self, lobby: LobbyState, campaign: Campaign, language: str,
+    ) -> None:
+        """Generate StoryArc + starting Location while players are creating chars.
+
+        Results land on ``lobby.story_arc`` / ``lobby.current_location``;
+        ``lobby.pregen_phase`` advances PENDING → ARC → LOCATION → READY.
+        On error, sets FAILED + ``pregen_error``; the launch path will
+        surface this to the host.
+        """
+        from ai.arc_generator import ArcGenerator
+        from ai.client import OllamaClient, OllamaUnavailableError
+        from ai.world_generator import WorldGenerator
+        from bot.lobby_state import GenerationPhase
+        from engine.arc_recipes import generate_recipe
+
+        try:
+            client = OllamaClient()
+        except (OllamaUnavailableError, Exception) as exc:
+            lobby.pregen_phase = GenerationPhase.FAILED
+            lobby.pregen_error = f"Ollama indisponible: {exc}"
+            logger.warning(
+                "PREGEN ollama_unavailable campaign=%s err=%s", campaign.id, exc,
+            )
+            return
+
+        try:
+            recipe = generate_recipe(theme=campaign.name)
+            arc_gen = ArcGenerator(client)
+            world_gen = WorldGenerator(client)
+
+            # ---- Arc ----
+            lobby.pregen_phase = GenerationPhase.ARC
+            arc_start = time.monotonic()
+            arc = await asyncio.to_thread(
+                arc_gen.generate, campaign.name, 1, language, recipe,
+            )
+            lobby.story_arc = arc.model_copy(update={"campaign_id": campaign.id})
+            logger.info(
+                "PREGEN arc_done campaign=%s elapsed=%.1fs beats=%d",
+                campaign.id, time.monotonic() - arc_start, len(lobby.story_arc.beats),
+            )
+
+            # ---- Location ----
+            lobby.pregen_phase = GenerationPhase.LOCATION
+            arc_context = (
+                f"Campaign: {campaign.name}. "
+                f"Villain: {lobby.story_arc.villain_name}. "
+                f"First beat: "
+                f"{lobby.story_arc.beats[0].description if lobby.story_arc.beats else 'unknown'}."
+            )
+            arc_location_hints = [
+                beat.location_hint for beat in lobby.story_arc.beats if beat.location_hint
+            ]
+            loc_start = time.monotonic()
+            lobby.current_location = await asyncio.to_thread(
+                lambda: world_gen.generate(
+                    campaign_context=arc_context,
+                    location_type="starting_area",
+                    language=language,
+                    location_hints=arc_location_hints,
+                ),
+            )
+            logger.info(
+                "PREGEN loc_done campaign=%s elapsed=%.1fs location=%r",
+                campaign.id, time.monotonic() - loc_start, lobby.current_location.name,
+            )
+
+            lobby.pregen_phase = GenerationPhase.READY
+        except OllamaUnavailableError as exc:
+            lobby.pregen_phase = GenerationPhase.FAILED
+            lobby.pregen_error = str(exc)
+            logger.warning(
+                "PREGEN ollama_lost campaign=%s err=%s", campaign.id, exc,
+            )
+        except Exception as exc:
+            lobby.pregen_phase = GenerationPhase.FAILED
+            lobby.pregen_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("PREGEN failed campaign=%s", campaign.id)
 
     # ------------------------------------------------------------------
     # Lobby → GameSession transition (C3)
@@ -355,25 +448,12 @@ class SessionCog(commands.Cog):
         language: str,
         lobby_view: LobbyView,
     ) -> None:
-        """Generate arc/location, build GameSession, post opening narrative."""
-        from ai.client import OllamaClient, OllamaUnavailableError
+        """Build GameSession from pre-generated arc/location, post opening narrative."""
         from bot.embeds.character_embed import build_party_card_embed
         from bot.embeds.narrative_embed import (
             build_countdown_embed, build_opening_crawl_embed,
         )
         from bot.embeds.scene_embed import build_scene_embed
-
-        # Generation phase — let the player know we're cooking the story
-        try:
-            client = OllamaClient()
-        except (OllamaUnavailableError, Exception):
-            await channel.send(
-                "Ollama est indisponible — impossible de générer la campagne. "
-                "Vérifie que le serveur tourne, puis relance `/start_campaign`.",
-            )
-            self.bot.lobbies.pop(channel.id, None)
-            lobby_view.stop()
-            return
 
         # Build characters/inventories/spellcasters dicts
         characters = {p.user_id: p.character for p in ready_players}
@@ -388,70 +468,41 @@ class SessionCog(commands.Cog):
         # Update Campaign player_names
         campaign.player_names = [str(p.user_id) for p in ready_players]
 
-        # ---- Generate arc + starting location ----
-        story_arc = None
-        current_location = None
-        try:
-            from ai.arc_generator import ArcGenerator
-            from ai.world_generator import WorldGenerator
-            from engine.arc_recipes import generate_recipe
+        # ---- Use pre-generated arc + starting location (background task) ----
+        # The pregen task started at /start_campaign. If still running, await
+        # it now — we've already saved minutes by overlapping with character
+        # creation. If it failed, surface the error and abort the launch.
+        from bot.lobby_state import GenerationPhase
 
-            arc_gen = ArcGenerator(client)
-            world_gen = WorldGenerator(client)
-
-            recipe = generate_recipe(theme=campaign.name)
+        if lobby.pregen_task is not None and not lobby.pregen_task.done():
             logger.info(
-                "GENERATION recipe campaign=%s archetype=%s tone=%s beats=%d",
-                campaign.id, recipe.archetype, recipe.tone, recipe.num_beats,
+                "LAUNCH waiting_pregen campaign=%s phase=%s",
+                campaign.id, lobby.pregen_phase.name,
             )
+            try:
+                await lobby.pregen_task
+            except Exception:  # pragma: no cover — already trapped inside pregen
+                logger.exception("LAUNCH pregen_task raised campaign=%s", campaign.id)
 
-            arc_start = time.monotonic()
-            arc = await asyncio.to_thread(
-                arc_gen.generate,
-                campaign.name, len(ready_players), language, recipe,
-            )
-            story_arc = arc.model_copy(update={"campaign_id": campaign.id})
-            logger.info(
-                "GENERATION arc_done campaign=%s elapsed=%.1fs beats=%d",
-                campaign.id, time.monotonic() - arc_start, len(story_arc.beats),
-            )
-
-            arc_context = (
-                f"Campaign: {campaign.name}. "
-                f"Villain: {story_arc.villain_name}. "
-                f"First beat: "
-                f"{story_arc.beats[0].description if story_arc.beats else 'unknown'}."
-            )
-            arc_location_hints = [
-                beat.location_hint for beat in story_arc.beats if beat.location_hint
-            ]
-            loc_start = time.monotonic()
-            current_location = await asyncio.to_thread(
-                lambda: world_gen.generate(
-                    campaign_context=arc_context,
-                    location_type="starting_area",
-                    language=language,
-                    location_hints=arc_location_hints,
-                ),
-            )
-            logger.info(
-                "GENERATION loc_done campaign=%s elapsed=%.1fs location=%r",
-                campaign.id, time.monotonic() - loc_start, current_location.name,
-            )
-            campaign.current_location = current_location.name
-        except OllamaUnavailableError:
+        if lobby.pregen_phase == GenerationPhase.FAILED:
             await channel.send(
-                "Ollama est devenu indisponible pendant la génération. "
-                "Relance `/start_campaign` quand le serveur sera de retour.",
+                f"❌ La génération de l'aventure a échoué : {lobby.pregen_error}\n"
+                "Relance `/start_campaign` une fois le souci résolu.",
             )
             self.bot.lobbies.pop(channel.id, None)
             lobby_view.stop()
             return
-        except Exception:
-            logger.exception(
-                "GENERATION failed campaign=%s — launching with fallback",
-                campaign.id,
-            )
+
+        story_arc = lobby.story_arc
+        current_location = lobby.current_location
+        if current_location is not None:
+            campaign.current_location = current_location.name
+        logger.info(
+            "LAUNCH using_pregen campaign=%s arc=%s location=%s",
+            campaign.id,
+            "ok" if story_arc is not None else "missing",
+            "ok" if current_location is not None else "missing",
+        )
 
         # ---- Build GameSession ----
         session = GameSession(

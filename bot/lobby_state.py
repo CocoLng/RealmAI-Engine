@@ -6,14 +6,17 @@ character setup status, and exposes the predicate used to gate launch.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from engine.character import Character
     from engine.inventory import Inventory
     from engine.spells import SpellcasterState
+    from world.location import Location
+    from world.story_arc import StoryArc
 
 
 MAX_PLAYERS_PER_LOBBY = 6
@@ -26,6 +29,16 @@ class LobbyPlayerStatus(StrEnum):
     CREATING = "creating"       # CharacterSetupFlow open, in progress
     READY = "ready"             # creation complete, character persisted
     CANCELLED = "cancelled"     # bailed out mid-creation
+
+
+class GenerationPhase(IntEnum):
+    """Background arc + location generation lifecycle."""
+
+    PENDING = 0   # task not yet started
+    ARC = 1       # generating story arc
+    LOCATION = 2  # generating starting location
+    READY = 3     # both done, cached on lobby
+    FAILED = 4    # gave up, on_launch will surface the error
 
 
 @dataclass
@@ -46,12 +59,20 @@ class LobbyState:
     """In-memory state for a campaign lobby in a given channel.
 
     Replaces ``CampaignLauncher`` with a flatter structure: one ``LobbyPlayer``
-    per joined user, no separate progress dicts.
+    per joined user, no separate progress dicts. Background arc + location
+    generation runs from /start_campaign so the launch is instant once the
+    host clicks Démarrer.
     """
 
     creator_id: int
     language: str = "fr"
     players: dict[int, LobbyPlayer] = field(default_factory=dict)
+    # Background generation results — populated by the pre-gen task.
+    pregen_phase: GenerationPhase = GenerationPhase.PENDING
+    pregen_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    story_arc: StoryArc | None = None
+    current_location: Location | None = None
+    pregen_error: str | None = None  # set on FAILED, surfaced at launch time
 
     def add_player(self, user_id: int) -> None:
         """Add a player to the lobby in JOINED state. Idempotent."""
