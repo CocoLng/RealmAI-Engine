@@ -268,17 +268,30 @@ class CharacterSetupFlow(LoggedView):
                 child.disabled = not (self.race and self.char_class)
 
     def _stats_status_text(self) -> str:
+        from engine.character.random_stats import CLASS_STAT_PRIORITY
+
+        class_name = self.char_class.value if self.char_class else ""
+        priority = (
+            CLASS_STAT_PRIORITY[self.char_class] if self.char_class else []
+        )
+        priority_line = " > ".join(a.name for a in priority)
+        primary = " · ".join(a.name for a in priority[:2])
+        dump_name = priority[-1].name if priority else ""
+
         if self.ability_scores is None:
             return (
-                f"**Étape 3/6** — Choisis tes statistiques pour ton "
-                f"{self.char_class.value if self.char_class else ''}.\n\n"
+                f"**Étape 3/6** — Stats pour ton **{class_name}**\n\n"
+                f"🔥 **Priorité de la classe** : {priority_line}\n"
+                f"_Les 2 premières (**{primary}**) sont les plus importantes — "
+                f"**{dump_name}** est secondaire._\n\n"
                 f"_Choisis une méthode :_"
             )
         s = self.ability_scores
         return (
-            f"**Étape 3/6** — Statistiques\n"
+            f"**Étape 3/6** — Statistiques (**{class_name}**)\n"
             f"```STR {s.STR:2d}  DEX {s.DEX:2d}  CON {s.CON:2d}\n"
             f"INT {s.INT:2d}  WIS {s.WIS:2d}  CHA {s.CHA:2d}```\n"
+            f"🔥 **Stats clés** : {primary}   💤 **Dump** : {dump_name}\n"
             f"_Confirme ou change de méthode._"
         )
 
