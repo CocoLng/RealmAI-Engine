@@ -111,7 +111,17 @@ class CharacterSetupFlow(LoggedView):
                 view=self,
             )
         elif next_step == SetupStep.SKILLS:
-            raise NotImplementedError("SKILLS step lands in Task B6")
+            self._build_skills_components()
+            from engine.character.classes import CLASS_SKILL_CHOICES
+            assert self.char_class is not None
+            config = CLASS_SKILL_CHOICES[self.char_class]
+            await interaction.response.edit_message(
+                content=(
+                    f"**Étape 4/6** — Choisis {config.choose} compétence"
+                    f"{'s' if config.choose > 1 else ''} pour ton {self.char_class.value}."
+                ),
+                view=self,
+            )
         elif next_step == SetupStep.KIT_MOTIV:
             raise NotImplementedError("KIT_MOTIV step lands in Task B7")
         elif next_step == SetupStep.REVIEW:
@@ -297,3 +307,72 @@ class CharacterSetupFlow(LoggedView):
         )
         self._build_stats_components()
         await interaction.response.edit_message(content=self._stats_status_text(), view=self)
+
+    def _build_skills_components(self) -> None:
+        from engine.character import SKILL_ABILITY
+        from engine.character.classes import CLASS_SKILL_CHOICES
+
+        skill_descriptions = {
+            # Compact 1-line per skill — domain knowledge
+            "Athletics":    "Force pour grimper, sauter, lutter",
+            "Acrobatics":   "Dextérité pour équilibre, esquive",
+            "Sleight of Hand": "Dextérité pour pickpocket, tour de main",
+            "Stealth":      "Dextérité pour se cacher",
+            "Arcana":       "Intelligence pour magie, créatures",
+            "History":      "Intelligence pour évènements, royaumes",
+            "Investigation": "Intelligence pour indices, déduction",
+            "Nature":       "Intelligence pour terrains, plantes, animaux",
+            "Religion":     "Intelligence pour dieux, rites",
+            "Insight":      "Sagesse pour lire les intentions",
+            "Medicine":     "Sagesse pour stabiliser, diagnostiquer",
+            "Perception":   "Sagesse pour repérer, écouter",
+            "Survival":     "Sagesse pour pister, s'orienter",
+            "Animal Handling": "Sagesse pour calmer, monter",
+            "Deception":    "Charisme pour mentir, déguiser",
+            "Intimidation": "Charisme pour menacer",
+            "Performance":  "Charisme pour divertir",
+            "Persuasion":   "Charisme pour convaincre",
+        }
+
+        self.clear_items()
+        assert self.char_class is not None
+        config = CLASS_SKILL_CHOICES[self.char_class]
+        options = [
+            discord.SelectOption(
+                label=f"{s.value} ({SKILL_ABILITY[s].name})",
+                value=s.value,
+                description=skill_descriptions.get(s.value, ""),
+                default=bool(self.skill_proficiencies and s in self.skill_proficiencies),
+            )
+            for s in config.options
+        ]
+        select = ui.Select(
+            placeholder=f"Choisis {config.choose} compétences...",
+            options=options,
+            min_values=config.choose,
+            max_values=config.choose,
+            custom_id="setup_skills",
+        )
+
+        async def cb(interaction: discord.Interaction) -> None:
+            await self._on_skills_selected(interaction, select.values)
+        select.callback = cb
+        self.add_item(select)
+
+        continue_btn = ui.Button(
+            label="Continuer",
+            emoji="➡️",
+            style=discord.ButtonStyle.success,
+            disabled=(not self.skill_proficiencies),
+            custom_id="setup_skills_continue",
+        )
+        continue_btn.callback = lambda i: self.transition_to(i, SetupStep.KIT_MOTIV)
+        self.add_item(continue_btn)
+
+    async def _on_skills_selected(
+        self, interaction: discord.Interaction, values: list[str],
+    ) -> None:
+        from engine.character import Skill
+        self.skill_proficiencies = [Skill(v) for v in values]
+        self._build_skills_components()
+        await interaction.response.edit_message(view=self)

@@ -110,3 +110,32 @@ async def test_stats_step_random_button_rolls_and_assigns():
     assert view.ability_scores is not None
     # All 6 abilities filled
     assert all(getattr(view.ability_scores, a.name) >= 3 for a in __import__("engine.character", fromlist=["Ability"]).Ability)
+
+
+@pytest.mark.asyncio
+async def test_skills_step_select_records_choices():
+    from engine.character import CharacterClass, Race, Skill
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.race = Race.HUMAN
+    view.char_class = CharacterClass.ROGUE
+    view.state = SetupStep.SKILLS
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view._on_skills_selected(interaction, [Skill.STEALTH.value, Skill.DECEPTION.value])
+    assert view.skill_proficiencies == [Skill.STEALTH, Skill.DECEPTION]
+
+
+@pytest.mark.asyncio
+async def test_skills_step_uses_class_skill_choices():
+    from engine.character import CharacterClass
+    from engine.character.classes import CLASS_SKILL_CHOICES
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.char_class = CharacterClass.WIZARD
+    view.state = SetupStep.SKILLS
+    view._build_skills_components()
+    select = next(c for c in view.children if isinstance(c, ui.Select))
+    config = CLASS_SKILL_CHOICES[CharacterClass.WIZARD]
+    assert len(select.options) == len(config.options)
+    assert select.max_values == config.choose
