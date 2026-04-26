@@ -14,16 +14,17 @@ from bot.lobby_state import LobbyState
 from bot.views.base import LoggedView
 
 JoinCallback = Callable[[discord.Interaction, "LobbyView"], Awaitable[None]]
+LeaveCallback = Callable[[discord.Interaction, "LobbyView"], Awaitable[None]]
 LaunchCallback = Callable[[discord.Interaction, "LobbyView"], Awaitable[None]]
 
 
 class LobbyView(LoggedView):
     """Campaign lobby with Join / Leave / Launch buttons.
 
-    The view does NOT mutate state directly for join — it delegates to
-    ``on_join_clicked`` so the cog can open the CharacterSetupFlow as an
-    ephemeral followup. Leave is handled inline (removes from state +
-    refreshes the lobby message).
+    All three buttons delegate to cog-supplied callbacks so the cog can
+    coordinate roster mutation, embed refresh, and (for launch) the
+    transition to a GameSession. The view itself never mutates the lobby
+    state — it just routes button clicks.
     """
 
     timeout = None  # persistent
@@ -35,6 +36,7 @@ class LobbyView(LoggedView):
         language: str,
         on_join_clicked: JoinCallback,
         on_launch_clicked: LaunchCallback,
+        on_leave_clicked: LeaveCallback | None = None,
     ) -> None:
         super().__init__(timeout=self.timeout)
         self.lobby_state = lobby_state
@@ -42,6 +44,7 @@ class LobbyView(LoggedView):
         self.language = language
         self._on_join = on_join_clicked
         self._on_launch = on_launch_clicked
+        self._on_leave = on_leave_clicked
 
     @ui.button(label="Rejoindre", emoji="🎭", style=ButtonStyle.primary, custom_id="lobby_join")
     async def join(
@@ -53,9 +56,12 @@ class LobbyView(LoggedView):
     async def leave(
         self, interaction: discord.Interaction, button: ui.Button[LobbyView],
     ) -> None:
+        if self._on_leave is not None:
+            await self._on_leave(interaction, self)
+            return
+        # Fallback for tests that don't provide an on_leave callback: just
+        # mutate state and acknowledge. Real cog wiring always supplies one.
         self.lobby_state.remove_player(interaction.user.id)
-        # The cog (in Wave C) will refresh the lobby embed after this. For now,
-        # acknowledge the interaction.
         if not interaction.response.is_done():
             await interaction.response.edit_message(view=self)
 

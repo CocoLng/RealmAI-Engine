@@ -29,7 +29,8 @@ async def test_join_button_calls_on_join_callback():
 
 
 @pytest.mark.asyncio
-async def test_leave_button_removes_player_and_refreshes():
+async def test_leave_button_fallback_removes_player_when_no_callback():
+    """Without on_leave_clicked, the view does an inline remove + ack."""
     view, state, _, _ = _make_view()
     state.add_player(100)
     interaction = MagicMock()
@@ -38,6 +39,25 @@ async def test_leave_button_removes_player_and_refreshes():
     interaction.response.is_done = MagicMock(return_value=False)
     await view.leave.callback(interaction)  # type: ignore[arg-type]
     assert 100 not in state.players
+
+
+@pytest.mark.asyncio
+async def test_leave_button_delegates_to_callback_when_provided():
+    """Cog-supplied on_leave_clicked owns state mutation + embed refresh."""
+    state = LobbyState(creator_id=42, language="fr")
+    state.add_player(100)
+    on_leave = AsyncMock()
+    view = LobbyView(
+        lobby_state=state, host_id=42, language="fr",
+        on_join_clicked=AsyncMock(), on_launch_clicked=AsyncMock(),
+        on_leave_clicked=on_leave,
+    )
+    interaction = MagicMock()
+    interaction.user.id = 100
+    await view.leave.callback(interaction)  # type: ignore[arg-type]
+    on_leave.assert_called_once_with(interaction, view)
+    # The view must NOT mutate state when a callback is wired — that's the cog's job.
+    assert 100 in state.players
 
 
 @pytest.mark.asyncio

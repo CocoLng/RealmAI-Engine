@@ -160,6 +160,9 @@ class SessionCog(commands.Cog):
 
         # Build lobby state
         lobby = LobbyState(creator_id=creator_id, language=language)
+        # Serialise concurrent edits of the public lobby message — multiple
+        # players may finish setup or leave at the same instant.
+        lobby_refresh_lock = asyncio.Lock()
 
         # ------------------------------------------------------------
         # Lobby callbacks
@@ -171,30 +174,40 @@ class SessionCog(commands.Cog):
             via_interaction: discord.Interaction | None = None,
         ) -> None:
             """Re-render the lobby embed in place (host post or fresh edit)."""
-            roster = []
-            for p in lobby.players.values():
-                member = guild.get_member(p.user_id)
-                disp = member.display_name if member else f"User {p.user_id}"
-                roster.append((p, disp))
-            host_member = guild.get_member(creator_id)
-            host_name = host_member.display_name if host_member else f"User {creator_id}"
-            new_embed = build_lobby_embed(
-                campaign_name=campaign_name,
-                theme=theme,
-                host_name=host_name,
-                roster=roster,
-                language=language,
-            )
-            if via_interaction is not None and not via_interaction.response.is_done():
-                await via_interaction.response.edit_message(embed=new_embed, view=lobby_view)
-            else:
-                # Edit the original lobby message via stored reference
-                msg = getattr(lobby_view, "_lobby_message", None)
-                if msg is not None:
-                    try:
-                        await msg.edit(embed=new_embed, view=lobby_view)
-                    except discord.HTTPException:
-                        logger.warning("refresh_lobby_message: edit failed")
+            async with lobby_refresh_lock:
+                roster = []
+                for p in lobby.players.values():
+                    member = guild.get_member(p.user_id)
+                    disp = member.display_name if member else f"User {p.user_id}"
+                    roster.append((p, disp))
+                host_member = guild.get_member(creator_id)
+                host_name = host_member.display_name if host_member else f"User {creator_id}"
+                new_embed = build_lobby_embed(
+                    campaign_name=campaign_name,
+                    theme=theme,
+                    host_name=host_name,
+                    roster=roster,
+                    language=language,
+                )
+                if via_interaction is not None and not via_interaction.response.is_done():
+                    await via_interaction.response.edit_message(embed=new_embed, view=lobby_view)
+                else:
+                    # Edit the original lobby message via stored reference
+                    msg = getattr(lobby_view, "_lobby_message", None)
+                    if msg is not None:
+                        try:
+                            await msg.edit(embed=new_embed, view=lobby_view)
+                        except discord.HTTPException:
+                            logger.warning("refresh_lobby_message: edit failed")
+
+        async def on_leave(
+            inter: discord.Interaction, lobby_view: LobbyView,
+        ) -> None:
+            """Remove the player from the lobby and refresh the public roster."""
+            lobby.remove_player(inter.user.id)
+            # The interaction is on the lobby message — use it to refresh
+            # the embed atomically (single API call, no race vs background edits).
+            await refresh_lobby_message(lobby_view, via_interaction=inter)
 
         async def on_join(
             inter: discord.Interaction, lobby_view: LobbyView,
@@ -298,6 +311,7 @@ class SessionCog(commands.Cog):
             language=language,
             on_join_clicked=on_join,
             on_launch_clicked=on_launch,
+            on_leave_clicked=on_leave,
         )
         host_member_for_label = guild.get_member(creator_id)
         host_name = (
