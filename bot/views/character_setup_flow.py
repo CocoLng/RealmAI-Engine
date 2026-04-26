@@ -64,7 +64,17 @@ class IdentityModal(ui.Modal, title="Ton aventurier"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         self.parent_view.name = str(self.name.value)
         self.parent_view.concept = str(self.concept.value or "")
-        await self.parent_view.transition_to(interaction, SetupStep.RACE_CLASS)
+        # Open the rest of the flow in a NEW ephemeral message owned by the
+        # player. We must not call transition_to here: a modal-submit
+        # interaction's `edit_message` would target the lobby message (the
+        # one whose button opened the modal), erasing the public lobby.
+        self.parent_view.state = SetupStep.RACE_CLASS
+        self.parent_view._build_race_class_components()
+        await interaction.response.send_message(
+            content="**Étape 2/6** — Choisis ta race et ta classe.",
+            view=self.parent_view,
+            ephemeral=True,
+        )
 
 
 class CharacterSetupFlow(LoggedView):
