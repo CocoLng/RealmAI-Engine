@@ -6,7 +6,7 @@ You will receive:
 - A narrative recipe with: archetype, beat sequence (encounter types + subtypes), tone, complications, twist position, and optional villain archetype
 
 ## Your job
-Fill each beat with vivid narrative content: titles, descriptions, NPC names, and location hints. Create a compelling villain and premise that tie the beats together.
+Fill each beat with vivid narrative content: titles, descriptions, NPC names, and location hints. Create a compelling villain and premise that tie the beats together. Each beat MUST also carry deterministic, machine-readable `objectives` that tell the engine when the beat is mechanically complete.
 
 ## Beat sequence rules
 You MUST follow the beat sequence ORDER as given in the recipe. Do NOT reorder, group, or cluster beats.
@@ -33,14 +33,9 @@ Each beat's encounter_type and encounter_subtype must match what the recipe spec
 - Do NOT mention dice rolls, HP, AC, damage numbers, or any game mechanics
 - Integrate the complications naturally into the narrative arc
 - NPC names should be memorable and culturally appropriate to the setting
-- Each beat MUST include a completion_trigger: what action type and target completes this beat
-- Each beat MUST include on_complete: what changes in the world when the beat is completed
-- completion_trigger.type must be one of: interact, defeat, talk, arrive, search, pickup
-- For puzzle beats: trigger is typically "interact" with the key puzzle object
-- For combat beats: trigger is "defeat" with the enemy name
-- For social beats: trigger is "talk" with the key NPC
-- For exploration beats: trigger is "arrive" (target = location name)
-- on_complete.unlock_exits should list the exit(s) connecting to the next beat's location
+- Each beat MUST include `objectives`, `advance_rule`, `judge_rubric`, and `player_visible_hint` (see "Native objectives" below)
+- Each beat MUST include `on_complete`: what changes in the world when the beat is completed
+- `on_complete.unlock_exits` should list the exit(s) connecting to the next beat's location
 - state_flags values are ALWAYS boolean true or false — NEVER strings like "place_centrale" or "compromised".
   * BAD:  "state_flags": {"location_explored": "place_centrale", "door_open": "yes"}
   * GOOD: "state_flags": {"location_explored": true, "door_open": true}
@@ -51,6 +46,189 @@ Each beat's encounter_type and encounter_subtype must match what the recipe spec
   "null" — the engine only accepts proper JSON null or a missing field.
   * BAD:  {"kind": "condition", "damage_type": "null", "save_ability": "null"}
   * GOOD: {"kind": "condition", "condition_name": "stunned"}
+
+## Native objectives — schema and per-(type, subtype) playbook
+
+Each beat MUST emit:
+
+```
+"objectives": [
+  {
+    "id": "<short snake_case id, unique within the beat>",
+    "kind": "<talk|defeat|arrive|examine|search|interact|pickup|possess|flag>",
+    "target": "<NPC name | enemy name | location | object | flag name>",
+    "description": "<1 sentence explaining what the player has to do>",
+    "required": true,
+    "fuzzy_threshold": 0.7,
+    "gate": null
+  }
+],
+"advance_rule": "all_required",
+"advance_threshold": null,
+"judge_rubric": "<1-2 sentences: when SHOULD the BeatJudge accept partial matches>",
+"player_visible_hint": "<1 sentence the player will see if they ask /hint>"
+```
+
+`gate` is OPTIONAL and adds a post-match constraint:
+- `{"kind": "min_reveals", "value": <int>}` — N substantive things the NPC must reveal during a TALK
+- `{"kind": "min_disposition", "value": <int>}` — disposition shift the player must achieve during a TALK
+- `{"kind": "has_item", "value": "<item name>"}` — the party must hold this item
+- `{"kind": "flag_set", "value": "<flag name>"}` — a world flag (set by an earlier beat or interaction) must be true
+
+`advance_rule` is one of:
+- `all_required` — every objective with `required: true` must complete (default)
+- `any` — first completed objective advances the beat
+- `m_of_n` — at least `advance_threshold` objectives must complete
+
+### Playbook by encounter type and subtype
+
+Pick the shape that matches the beat's encounter. The examples below are TEMPLATES — fill in real names from your story.
+
+**social / negotiation** — TALK with calibrated reveals + disposition gates
+```
+"objectives": [
+  {"id": "talk_<npc>", "kind": "talk", "target": "<NPC>", "description": "Engager <NPC> sur les enjeux et lui faire poser ses conditions.", "required": true, "fuzzy_threshold": 0.7, "gate": {"kind": "min_reveals", "value": 2}},
+  {"id": "warm_<npc>", "kind": "talk", "target": "<NPC>", "description": "Faire pencher <NPC> en notre faveur (geste, concession, preuve).", "required": false, "fuzzy_threshold": 0.7, "gate": {"kind": "min_disposition", "value": 1}}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer si le joueur a engagé une vraie négociation, pas un simple bonjour.",
+"player_visible_hint": "Le PNJ a des conditions cachées — creusez avant d'avancer."
+```
+
+**social / interrogation** — TALK with high MIN_REVEALS
+```
+"objectives": [
+  {"id": "extract_from_<npc>", "kind": "talk", "target": "<NPC>", "description": "Soutirer à <NPC> les informations qu'il dissimule.", "required": true, "fuzzy_threshold": 0.7, "gate": {"kind": "min_reveals", "value": 3}}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer si l'interrogé a craqué et livré au moins 3 faits utiles.",
+"player_visible_hint": "Tirez plusieurs informations distinctes au PNJ avant de partir."
+```
+
+**social / seduction** — TALK gated on MIN_DISPOSITION
+```
+"objectives": [
+  {"id": "seduce_<npc>", "kind": "talk", "target": "<NPC>", "description": "Gagner la confiance ou l'affection de <NPC>.", "required": true, "fuzzy_threshold": 0.7, "gate": {"kind": "min_disposition", "value": 2}}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer si l'attitude du PNJ a clairement basculé dans la complicité.",
+"player_visible_hint": "Faites monter la disposition du PNJ vers vous."
+```
+
+**social / deception** — TALK with reveals
+```
+"objectives": [
+  {"id": "deceive_<npc>", "kind": "talk", "target": "<NPC>", "description": "Faire avaler à <NPC> une fausse identité ou un mensonge crédible.", "required": true, "fuzzy_threshold": 0.7, "gate": {"kind": "min_reveals", "value": 2}}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer si la cible a relâché sa garde et révélé ce qu'elle n'aurait pas dit à un inconnu.",
+"player_visible_hint": "Construisez votre mensonge pour pousser le PNJ à se livrer."
+```
+
+**social / ceremony** — TALK + explicit FLAG commit
+```
+"objectives": [
+  {"id": "officiate_<npc>", "kind": "talk", "target": "<NPC>", "description": "Participer à la cérémonie présidée par <NPC>.", "required": true, "fuzzy_threshold": 0.7, "gate": {"kind": "min_reveals", "value": 1}},
+  {"id": "ceremony_done", "kind": "flag", "target": "ceremony_completed", "description": "Achever la cérémonie selon le protocole — décision explicite du joueur.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer seulement si le joueur a explicitement engagé l'acte rituel.",
+"player_visible_hint": "La cérémonie demande un engagement explicite, pas une simple présence."
+```
+
+**combat / *** — DEFEAT, no gate (kill is binary)
+```
+"objectives": [
+  {"id": "defeat_<enemy>", "kind": "defeat", "target": "<enemy name>", "description": "Vaincre <enemy>.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer dès que la cible est mécaniquement vaincue.",
+"player_visible_hint": "L'affrontement doit se conclure mécaniquement."
+```
+
+**boss** — DEFEAT villain_name (engine WILL enforce this — always include it)
+```
+"objectives": [
+  {"id": "defeat_villain", "kind": "defeat", "target": "<villain_name>", "description": "Abattre <villain_name>, l'antagoniste de l'arc.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "all_required",
+"judge_rubric": "L'arc se conclut sur la chute du villain.",
+"player_visible_hint": "Le boss doit tomber au combat."
+```
+
+**exploration / tracking | navigation | survival** — single ARRIVE
+```
+"objectives": [
+  {"id": "arrive_<loc>", "kind": "arrive", "target": "<location_hint>", "description": "Atteindre <location>.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer dès l'arrivée du groupe.",
+"player_visible_hint": "Atteignez le lieu indiqué."
+```
+
+**exploration / infiltration | discovery** — ARRIVE + EXAMINE, M_OF_N=2
+```
+"objectives": [
+  {"id": "arrive_<loc>", "kind": "arrive", "target": "<location>", "description": "Atteindre <location> sans déclencher l'alerte.", "required": true, "fuzzy_threshold": 0.7, "gate": null},
+  {"id": "examine_<thing>", "kind": "examine", "target": "<distinctive object or feature>", "description": "Repérer un détail clé sur les lieux.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "m_of_n",
+"advance_threshold": 2,
+"judge_rubric": "Avancer dès que le groupe a pénétré le lieu ET pris le temps d'observer.",
+"player_visible_hint": "Atteignez les lieux et inspectez quelque chose d'utile."
+```
+
+**puzzle / riddle | cipher** — INTERACT/EXAMINE + explicit FLAG commit
+```
+"objectives": [
+  {"id": "engage_riddle", "kind": "interact", "target": "<key object>", "description": "Manipuler l'énigme pour proposer une réponse.", "required": true, "fuzzy_threshold": 0.7, "gate": null},
+  {"id": "answer_riddle", "kind": "flag", "target": "riddle_solved", "description": "Le joueur affirme explicitement la solution.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer seulement si la réponse a été énoncée comme définitive.",
+"player_visible_hint": "L'énigme attend une réponse explicite — formulez-la clairement."
+```
+
+**puzzle / mechanism** — INTERACT only
+```
+"objectives": [
+  {"id": "trigger_mechanism", "kind": "interact", "target": "<mechanism name>", "description": "Activer le mécanisme.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer dès que le joueur engage l'action mécanique.",
+"player_visible_hint": "Trouvez le mécanisme et actionnez-le."
+```
+
+**puzzle / investigation** — SEARCH + EXAMINE, M_OF_N=2
+```
+"objectives": [
+  {"id": "search_scene", "kind": "search", "target": "<location>", "description": "Fouiller méthodiquement.", "required": true, "fuzzy_threshold": 0.7, "gate": null},
+  {"id": "examine_clues", "kind": "examine", "target": "<key clue>", "description": "Examiner les indices trouvés.", "required": true, "fuzzy_threshold": 0.7, "gate": null}
+],
+"advance_rule": "m_of_n",
+"advance_threshold": 2,
+"judge_rubric": "Avancer si le joueur a recoupé au moins deux investigations distinctes.",
+"player_visible_hint": "Combinez fouille et observation pour boucler l'enquête."
+```
+
+**puzzle / ritual** — INTERACT gated on HAS_ITEM
+```
+"objectives": [
+  {"id": "perform_ritual", "kind": "interact", "target": "<ritual site>", "description": "Accomplir le rituel.", "required": true, "fuzzy_threshold": 0.7, "gate": {"kind": "has_item", "value": "<required component>"}}
+],
+"advance_rule": "all_required",
+"judge_rubric": "Avancer si le joueur a engagé le rituel ET dispose des composants nécessaires.",
+"player_visible_hint": "Rassemblez les composants puis exécutez le rituel."
+```
+
+### Hard rules for objectives
+- `kind` MUST be one of: talk, defeat, arrive, examine, search, interact, pickup, possess, flag.
+- `target` MUST refer to a real NPC (in `npc_names` of this beat OR a previous beat OR the villain), real location (matching `location_hint`), real object/clue you've named in `description`, or a flag name (snake_case) for `flag` kind.
+- `id` MUST be unique within the beat.
+- `fuzzy_threshold` is almost always `0.7`. Lower it (down to `0.5`) only for very loose matching cases.
+- `gate.value` is an INTEGER for `min_reveals` and `min_disposition`. It is a STRING for `has_item` and `flag_set`.
+- For boss beats, ALWAYS include a `defeat` objective targeting the villain_name. The engine enforces this; if you omit it, it will be inserted automatically.
+- Avoid copy-pasting the playbook examples literally — fill in real names from the campaign you've invented.
 
 ## Opening narrative — three-field chain (`premise`, `situation`, `call_to_action`)
 
@@ -103,10 +281,21 @@ Return JSON only with this exact schema:
       "encounter_type": "social",
       "encounter_subtype": "negotiation",
       "is_twist": false,
-      "completion_trigger": {
-        "type": "<interact|defeat|talk|arrive|search|pickup>",
-        "target": "<name of the key object, NPC, or location>"
-      },
+      "objectives": [
+        {
+          "id": "<unique snake_case id>",
+          "kind": "talk",
+          "target": "<NPC name>",
+          "description": "<what the player must do>",
+          "required": true,
+          "fuzzy_threshold": 0.7,
+          "gate": {"kind": "min_reveals", "value": 2}
+        }
+      ],
+      "advance_rule": "all_required",
+      "advance_threshold": null,
+      "judge_rubric": "<when SHOULD the BeatJudge accept a partial match>",
+      "player_visible_hint": "<short hint shown via /hint level 1>",
       "on_complete": {
         "unlock_exits": ["<exit name unlocked by completing this beat>"],
         "add_npcs": [],

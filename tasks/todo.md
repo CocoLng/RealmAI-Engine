@@ -148,3 +148,43 @@ Verification:
 - Audit grep `CampaignLauncher|campaign_launcher` in `*.py` → 2 docstring
   references in `bot/lobby_state.py` (pre-existing from Wave B; instructions
   forbade touching that file)
+
+## Native Objectives Generation (2026-04-27 — completed)
+
+The Arc Generator now emits native `objectives[]` per beat with calibrated
+gates (MIN_REVEALS / MIN_DISPOSITION / HAS_ITEM / FLAG_SET) — eliminating
+the need for the legacy `CompletionTrigger` migration on freshly generated
+arcs. The migration in `world/story_arc.py` stays in place for backward-
+compat with arcs that pre-date this change and live in the DB.
+
+**Files changed:**
+- `ai/objective_recipes.py` (NEW) — per-(encounter_type, subtype) recipe
+  table + `scaffold_objectives()` deterministic builder
+- `ai/arc_generator.py` — added `_sanitize_beat_objectives`,
+  `_clean_objective_list`, `_sanitize_gate`, `_make_objective_id`,
+  `_ensure_boss_defeat_objective`. All wired into the existing
+  `_sanitize_arc_data` pipeline.
+- `ai/prompts/system_arc_generator.txt` — replaced the
+  `completion_trigger` schema section with a full native-objectives schema
+  + per-(type, subtype) playbook with concrete JSON examples.
+- `tests/ai/test_objective_recipes.py` (NEW) — 27 tests
+- `tests/ai/test_arc_generator.py` — 27 new tests in three classes
+  (TestNativeObjectivesSanitization, TestEndToEndNativeObjectives,
+  TestNoLegacyMigrationNeeded)
+
+**Key invariants enforced by the sanitizer:**
+1. Every beat ends up with a non-empty, valid `objectives[]` list.
+2. Boss beats always carry a `defeat <villain_name>` objective (injected
+   if the LLM forgot or named the wrong target).
+3. social/negotiation beats always have a MIN_REVEALS gate (and a
+   secondary MIN_DISPOSITION objective).
+4. puzzle/ritual beats always have a HAS_ITEM gate.
+5. Invalid kinds, gates, or values are dropped/coerced silently with
+   info-level log entries.
+6. `judge_rubric` and `player_visible_hint` are backfilled from the
+   recipe when the LLM left them empty.
+
+Verification:
+- `uv run pytest tests/ -q` → **2221 passed, 1 skipped** (+57 new tests)
+- `uv run ruff check .` → clean
+- `uv run mypy ai/ engine/ world/` → clean (0 errors)

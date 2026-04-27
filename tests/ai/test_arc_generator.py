@@ -13,18 +13,33 @@ from world.story_arc import StoryArc, StoryBeat
 
 
 def _make_arc_data(beat_count: int = 10) -> dict:
-    """Build a valid arc JSON dict with the given number of beats."""
+    """Build a valid arc JSON dict with the given number of beats.
+
+    Beats include npc_names for every social slot so the sanitizer's
+    scaffolded TALK objective gets a real target. The shape stays minimal:
+    no objectives, advance_rule, or completion_trigger — the sanitizer is
+    expected to scaffold them from the encounter (sub)type.
+    """
     encounter_types = ["social", "exploration", "combat", "puzzle"]
     beats = []
     for i in range(1, beat_count + 1):
         is_last = i == beat_count
+        etype = "boss" if is_last else encounter_types[i % len(encounter_types)]
+        # Always provide an NPC name on social/boss beats so scaffolded TALK/DEFEAT
+        # objectives get a real target instead of the fallback placeholder.
+        if etype in ("social", "boss"):
+            npc_names = [f"PNJ_{i}"]
+        elif i % 2 == 0:
+            npc_names = [f"PNJ_{i}"]
+        else:
+            npc_names = []
         beats.append({
             "beat_number": i,
             "title": f"Acte {i}",
             "description": f"Description du beat {i}. Une aventure se dessine. Les heros avancent.",
             "location_hint": f"Lieu {i}",
-            "npc_names": [f"PNJ_{i}"] if i % 2 == 0 else [],
-            "encounter_type": "boss" if is_last else encounter_types[i % len(encounter_types)],
+            "npc_names": npc_names,
+            "encounter_type": etype,
             "is_twist": i == 7,
         })
     return {
@@ -803,3 +818,533 @@ class TestArcGeneratorIndexing:
         # The campaign_id must be the first positional arg to index_beat.
         call_campaign_id = indexer.index_beat.call_args_list[0].args[0]
         assert call_campaign_id == "my_campaign"
+
+
+# ---------------------------------------------------------------------------
+# Native objectives sanitization + scaffolding (refactor 2026-04-27)
+# ---------------------------------------------------------------------------
+
+
+class TestNativeObjectivesSanitization:
+    """Pure-Python tests for ``_sanitize_beat_objectives``.
+
+    These verify the deterministic guarantees the sanitizer makes — every beat
+    leaves the LLM with rich, calibrated objectives, regardless of LLM quality.
+    """
+
+    def _social_beat(self, **overrides) -> dict:
+        """Helper: minimal social/negotiation beat dict."""
+        beat = {
+            "beat_number": 1,
+            "title": "Audience royale",
+            "description": "Le groupe rencontre la régente.",
+            "location_hint": "Salle du trône",
+            "npc_names": ["Régente Elinor"],
+            "encounter_type": "social",
+            "encounter_subtype": "negotiation",
+            "is_twist": False,
+        }
+        beat.update(overrides)
+        return beat
+
+    def test_social_beat_without_objectives_gets_scaffolded(self) -> None:
+        """No objectives → recipe-based scaffold with MIN_REVEALS gate."""
+        beat = self._social_beat()
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+
+        assert beat["objectives"]
+        primary = beat["objectives"][0]
+        assert primary["kind"] == "talk"
+        assert primary["target"] == "Régente Elinor"
+        assert primary["gate"] == {"kind": "min_reveals", "value": 2}
+        assert beat["advance_rule"] == "all_required"
+        assert beat["judge_rubric"]
+        assert beat["player_visible_hint"]
+
+    def test_combat_beat_scaffolds_defeat_objective(self) -> None:
+        beat = {
+            "beat_number": 3,
+            "title": "Embuscade",
+            "description": "...",
+            "location_hint": "Forêt",
+            "npc_names": ["Capitaine brigand"],
+            "encounter_type": "combat",
+            "encounter_subtype": "ambush",
+            "is_twist": False,
+        }
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        assert beat["objectives"][0]["kind"] == "defeat"
+        assert beat["objectives"][0]["target"] == "Capitaine brigand"
+        # No gate on defeat — it's binary.
+        assert beat["objectives"][0].get("gate") is None
+
+    def test_boss_beat_always_targets_villain(self) -> None:
+        beat = {
+            "beat_number": 10,
+            "title": "Confrontation",
+            "description": "...",
+            "location_hint": "Sanctum",
+            "npc_names": [],
+            "encounter_type": "boss",
+            "encounter_subtype": "boss",
+            "is_twist": False,
+        }
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus l'Ombre")
+        defeat_obj = next(o for o in beat["objectives"] if o["kind"] == "defeat")
+        assert defeat_obj["target"] == "Vellus l'Ombre"
+
+    def test_boss_beat_inserts_villain_defeat_when_llm_omits_it(self) -> None:
+        """LLM emitted objectives but missed the defeat villain — engine inserts it."""
+        beat = {
+            "beat_number": 10,
+            "title": "Confrontation finale",
+            "description": "...",
+            "location_hint": "Sanctum",
+            "npc_names": ["Garde du sceau"],
+            "encounter_type": "boss",
+            "encounter_subtype": "boss",
+            "is_twist": False,
+            "objectives": [
+                {
+                    "id": "interrupt_ritual",
+                    "kind": "interact",
+                    "target": "autel ardent",
+                    "description": "Briser le rituel avant la fusion.",
+                    "required": True,
+                    "fuzzy_threshold": 0.7,
+                    "gate": None,
+                },
+            ],
+        }
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus l'Ombre")
+        kinds_targets = [(o["kind"], o["target"]) for o in beat["objectives"]]
+        assert ("defeat", "Vellus l'Ombre") in kinds_targets
+        # Original objective preserved.
+        assert ("interact", "autel ardent") in kinds_targets
+
+    def test_boss_beat_keeps_llm_defeat_when_villain_target_matches(self) -> None:
+        """LLM's defeat objective targeting the villain — keep it, don't duplicate."""
+        beat = {
+            "beat_number": 10,
+            "title": "Confrontation",
+            "description": "...",
+            "location_hint": "Sanctum",
+            "npc_names": [],
+            "encounter_type": "boss",
+            "encounter_subtype": "boss",
+            "is_twist": False,
+            "objectives": [
+                {
+                    "id": "kill_villain",
+                    "kind": "defeat",
+                    "target": "Vellus l'Ombre, Maître du Pacte",
+                    "description": "Faire tomber le villain.",
+                    "required": True,
+                    "fuzzy_threshold": 0.7,
+                    "gate": None,
+                },
+            ],
+        }
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus l'Ombre")
+        defeat_objs = [o for o in beat["objectives"] if o["kind"] == "defeat"]
+        assert len(defeat_objs) == 1, "should not duplicate the LLM's defeat objective"
+
+    def test_invalid_objective_kind_dropped(self) -> None:
+        """Objectives with unknown kinds are filtered — sanitizer scaffolds replacement."""
+        beat = self._social_beat(objectives=[
+            {
+                "id": "bad",
+                "kind": "tap_dance",  # not a real ObjectiveKind
+                "target": "X",
+                "description": "...",
+                "required": True,
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        # No valid objectives left → scaffold from recipe.
+        assert all(o["kind"] in {"talk", "defeat", "arrive", "examine", "interact",
+                                  "search", "pickup", "possess", "flag"}
+                   for o in beat["objectives"])
+
+    def test_objective_with_empty_target_dropped(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "id": "x",
+                "kind": "talk",
+                "target": "   ",
+                "description": "Talk to the regent.",
+                "required": True,
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        # Empty target → dropped → scaffold replaces.
+        assert beat["objectives"][0]["target"] == "Régente Elinor"
+
+    def test_duplicate_objective_ids_get_unique_ids(self) -> None:
+        """Two objectives with the same id → second one gets a fresh id."""
+        beat = self._social_beat(objectives=[
+            {
+                "id": "talk1",
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "Greet the regent.",
+                "required": True,
+            },
+            {
+                "id": "talk1",  # duplicate
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "Negotiate the terms.",
+                "required": False,
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        ids = [o["id"] for o in beat["objectives"]]
+        assert len(set(ids)) == len(ids)
+
+    def test_min_reveals_string_value_coerced_to_int(self) -> None:
+        """LLM emits "2" instead of 2 for MIN_REVEALS → coerce."""
+        beat = self._social_beat(objectives=[
+            {
+                "id": "talk_regent",
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "...",
+                "required": True,
+                "gate": {"kind": "min_reveals", "value": "2"},
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        gate = beat["objectives"][0]["gate"]
+        assert gate == {"kind": "min_reveals", "value": 2}
+
+    def test_min_reveals_garbage_value_drops_gate(self) -> None:
+        """Non-coercible value on MIN_REVEALS → drop gate, keep objective."""
+        beat = self._social_beat(objectives=[
+            {
+                "id": "talk_regent",
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "...",
+                "required": True,
+                "gate": {"kind": "min_reveals", "value": "lots"},
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        primary = beat["objectives"][0]
+        assert primary["target"] == "Régente Elinor"
+        assert primary.get("gate") is None
+
+    def test_has_item_gate_with_non_string_value_dropped(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "id": "ritual",
+                "kind": "interact",
+                "target": "autel",
+                "description": "Effectuer le rituel.",
+                "required": True,
+                "gate": {"kind": "has_item", "value": 42},  # int — invalid
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        primary = beat["objectives"][0]
+        assert primary.get("gate") is None
+
+    def test_has_item_gate_with_string_value_kept(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "id": "ritual",
+                "kind": "interact",
+                "target": "autel",
+                "description": "Effectuer le rituel.",
+                "required": True,
+                "gate": {"kind": "has_item", "value": "calice ardent"},
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        primary = beat["objectives"][0]
+        assert primary["gate"] == {"kind": "has_item", "value": "calice ardent"}
+
+    def test_invalid_gate_kind_dropped_objective_kept(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "id": "talk_regent",
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "...",
+                "required": True,
+                "gate": {"kind": "min_charisma", "value": 12},
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        primary = beat["objectives"][0]
+        assert primary["target"] == "Régente Elinor"
+        assert primary.get("gate") is None
+
+    def test_invalid_advance_rule_falls_back_to_all_required(self) -> None:
+        beat = self._social_beat(
+            advance_rule="majority_vote",
+            objectives=[
+                {
+                    "id": "talk_regent",
+                    "kind": "talk",
+                    "target": "Régente Elinor",
+                    "description": "Speak with the regent.",
+                    "required": True,
+                },
+            ],
+        )
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        assert beat["advance_rule"] == "all_required"
+
+    def test_m_of_n_without_threshold_gets_default(self) -> None:
+        beat = self._social_beat(
+            advance_rule="m_of_n",
+            objectives=[
+                {
+                    "id": "objA", "kind": "talk", "target": "Régente Elinor",
+                    "description": "...", "required": True,
+                },
+                {
+                    "id": "objB", "kind": "talk", "target": "Régente Elinor",
+                    "description": "...", "required": True,
+                },
+                {
+                    "id": "objC", "kind": "talk", "target": "Régente Elinor",
+                    "description": "...", "required": False,
+                },
+            ],
+        )
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        assert beat["advance_rule"] == "m_of_n"
+        # Default = ceil(N/2) → 3 objectives → threshold 2.
+        assert beat["advance_threshold"] == 2
+
+    def test_required_field_string_true_coerced_to_bool(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "id": "talk_regent",
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "...",
+                "required": "true",
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        assert beat["objectives"][0]["required"] is True
+
+    def test_required_field_string_false_coerced_to_bool(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "id": "talk_regent",
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "...",
+                "required": "false",
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        assert beat["objectives"][0]["required"] is False
+
+    def test_missing_id_gets_generated(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "Speak with the regent.",
+                "required": True,
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        oid = beat["objectives"][0]["id"]
+        assert oid.startswith("b1_talk_")
+
+    def test_judge_rubric_backfilled_from_recipe_when_empty(self) -> None:
+        beat = self._social_beat(objectives=[
+            {
+                "id": "talk_regent",
+                "kind": "talk",
+                "target": "Régente Elinor",
+                "description": "Speak with the regent.",
+                "required": True,
+            },
+        ])
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        assert beat["judge_rubric"]  # filled
+
+    def test_existing_judge_rubric_preserved(self) -> None:
+        beat = self._social_beat(
+            judge_rubric="Custom rubric — keep me!",
+            objectives=[
+                {
+                    "id": "talk_regent",
+                    "kind": "talk",
+                    "target": "Régente Elinor",
+                    "description": "Speak with the regent.",
+                    "required": True,
+                },
+            ],
+        )
+        ArcGenerator._sanitize_beat_objectives(beat, villain_name="Vellus")
+        assert beat["judge_rubric"] == "Custom rubric — keep me!"
+
+
+class TestEndToEndNativeObjectives:
+    """End-to-end: ArcGenerator.generate() with native objectives in the LLM payload."""
+
+    def _make_arc_with_native_objectives(self) -> dict:
+        """Arc payload where the LLM emits proper objectives natively."""
+        data = _make_arc_data(beat_count=10)
+        # First social beat — full native objectives shape.
+        data["beats"][0]["encounter_subtype"] = "negotiation"
+        data["beats"][0]["objectives"] = [
+            {
+                "id": "talk_pnj_1",
+                "kind": "talk",
+                "target": "PNJ_1",
+                "description": "Négocier avec PNJ_1.",
+                "required": True,
+                "fuzzy_threshold": 0.7,
+                "gate": {"kind": "min_reveals", "value": 2},
+            },
+        ]
+        data["beats"][0]["advance_rule"] = "all_required"
+        data["beats"][0]["judge_rubric"] = "Avancer si la négociation est substantielle."
+        data["beats"][0]["player_visible_hint"] = "Creusez la négociation."
+        return data
+
+    def test_native_objectives_preserved_through_generate(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        arc_data = self._make_arc_with_native_objectives()
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        first = arc.beats[0]
+        assert first.objectives, "first beat should have objectives"
+        primary = first.objectives[0]
+        assert primary.kind.value == "talk"
+        assert primary.target == "PNJ_1"
+        assert primary.gate is not None
+        assert primary.gate.kind.value == "min_reveals"
+        assert primary.gate.value == 2
+        assert first.judge_rubric == "Avancer si la négociation est substantielle."
+        assert first.player_visible_hint == "Creusez la négociation."
+
+    def test_every_beat_has_native_objectives_after_generate(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """Even when the LLM omits objectives entirely, the sanitizer scaffolds
+        a valid recipe-based objective list per beat."""
+        arc_data = _make_arc_data(beat_count=10)  # no native objectives
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        for beat in arc.beats:
+            assert beat.objectives, f"beat {beat.beat_number} has empty objectives"
+            for obj in beat.objectives:
+                assert obj.kind.value in {
+                    "talk", "defeat", "arrive", "examine", "interact",
+                    "search", "pickup", "possess", "flag",
+                }
+
+    def test_boss_beat_always_has_defeat_villain_after_generate(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        arc_data = _make_arc_data(beat_count=10)
+        # Force the LLM to omit objectives on the boss beat.
+        arc_data["beats"][-1].pop("objectives", None)
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        boss = arc.beats[-1]
+        defeat_objs = [o for o in boss.objectives if o.kind.value == "defeat"]
+        assert defeat_objs, "boss beat must have a defeat objective"
+        # Target may be the villain name OR the recipe scaffold.
+        assert any(arc.villain_name in o.target for o in defeat_objs)
+
+    def test_social_negotiation_gets_min_reveals_gate_when_omitted(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """A social/negotiation beat without objectives gets MIN_REVEALS gate."""
+        arc_data = _make_arc_data(beat_count=10)
+        # Pick a social beat (i=4 is social, since i % 4 == 0 → "social" in our cycle).
+        # Actually let's force beat 1 to be social/negotiation explicitly.
+        arc_data["beats"][0]["encounter_type"] = "social"
+        arc_data["beats"][0]["encounter_subtype"] = "negotiation"
+        arc_data["beats"][0]["npc_names"] = ["L'Émissaire"]
+        arc_data["beats"][0].pop("objectives", None)
+
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        first = arc.beats[0]
+        gates = [o.gate for o in first.objectives if o.gate is not None]
+        gate_kinds = {g.kind.value for g in gates}
+        assert "min_reveals" in gate_kinds
+        # MIN_DISPOSITION is the secondary objective for negotiation.
+        assert "min_disposition" in gate_kinds
+
+    def test_puzzle_ritual_gets_has_item_gate(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        arc_data = _make_arc_data(beat_count=10)
+        # Force beat 3 (was puzzle anyway) to be puzzle/ritual.
+        arc_data["beats"][2]["encounter_type"] = "puzzle"
+        arc_data["beats"][2]["encounter_subtype"] = "ritual"
+        arc_data["beats"][2].pop("objectives", None)
+
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        target_beat = arc.beats[2]
+        gates = [o.gate for o in target_beat.objectives if o.gate is not None]
+        gate_kinds = {g.kind.value for g in gates}
+        assert "has_item" in gate_kinds
+
+    def test_exploration_discovery_gets_m_of_n(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        arc_data = _make_arc_data(beat_count=10)
+        arc_data["beats"][1]["encounter_type"] = "exploration"
+        arc_data["beats"][1]["encounter_subtype"] = "discovery"
+        arc_data["beats"][1].pop("objectives", None)
+
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        target_beat = arc.beats[1]
+        assert target_beat.advance_rule.value == "m_of_n"
+        assert target_beat.advance_threshold == 2
+
+
+class TestNoLegacyMigrationNeeded:
+    """REGRESSION (the whole point of this refactor): newly generated arcs
+    should never need the legacy CompletionTrigger migration to function.
+
+    The migration in ``StoryArc._migrate_legacy_completion_triggers`` only
+    fires when ``objectives`` is empty AND ``completion_trigger`` is set.
+    After this refactor, fresh arcs always have non-empty ``objectives``.
+    """
+
+    def test_freshly_generated_arc_has_no_completion_trigger_dependency(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        arc_data = _make_arc_data(beat_count=10)
+        # Explicitly do NOT include completion_trigger anywhere.
+        for beat in arc_data["beats"]:
+            beat.pop("completion_trigger", None)
+
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        for beat in arc.beats:
+            # The beat is functionally complete WITHOUT any completion_trigger.
+            assert beat.completion_trigger is None
+            assert beat.objectives, (
+                f"beat {beat.beat_number} has empty objectives — would need "
+                f"legacy migration"
+            )

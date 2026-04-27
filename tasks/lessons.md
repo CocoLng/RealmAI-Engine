@@ -50,3 +50,40 @@
   bug AND the unmappable trigger types BEFORE Phase D's destructive
   cutover. Without shadow mode, Phase D would have shipped both bugs to
   prod.
+
+## 2026-04-27 — Native objectives generation: prompt + Python safety net
+
+- **Prompt + sanitizer is more robust than prompt-only.** Telling the LLM
+  "emit calibrated `objectives[]`" works most of the time but qwen3.5:9b
+  occasionally drops `gate`, picks an invalid `kind`, or omits the entire
+  list. The sanitizer in `ai/arc_generator.py` (`_sanitize_beat_objectives`)
+  drops bad entries, coerces gate values to the right type, fills missing
+  ids — and when nothing valid remains, scaffolds a recipe-based fallback
+  from `ai/objective_recipes.py`. Result: every beat ships with rich,
+  valid objectives regardless of LLM quality. Tested via
+  `TestNativeObjectivesSanitization` (~17 cases).
+
+- **Calibration belongs in code, not prompt.** The per-(encounter_type,
+  encounter_subtype) gate calibration lives in `_RECIPES` so it stays
+  testable and consistent across regenerations. The prompt shows examples
+  derived from the same table. If the table changes, the prompt examples
+  should be regenerated to stay aligned (mostly automatic if you stick to
+  the playbook section's structure).
+
+- **Boss invariant is a Python guarantee, not a prompt prayer.**
+  `_ensure_boss_defeat_objective` injects a DEFEAT villain_name objective
+  into the boss beat if the LLM forgot. We trust this MORE than the prompt
+  because shipping an unwinnable arc is a P0 bug. The prompt still asks
+  for it (so the LLM produces flavorful descriptions) but Python enforces.
+
+- **Legacy migration stays for DB read-back, but new generations bypass.**
+  `StoryArc._migrate_legacy_completion_triggers` was the only thing
+  keeping arcs functional after the data model change. After this refactor
+  it's a backward-compat tool for old DB rows only — fresh arcs ship with
+  native objectives and never trigger the migration path. Verified by the
+  regression test `TestNoLegacyMigrationNeeded`.
+
+- **YAGNI on advance_threshold default.** When the LLM picks `m_of_n` but
+  forgets the threshold, defaulting to `ceil(N/2)` keeps the beat playable
+  without inventing additional knobs. Recipe-driven defaults handle the
+  rest.
