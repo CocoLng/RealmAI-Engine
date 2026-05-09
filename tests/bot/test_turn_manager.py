@@ -666,7 +666,12 @@ class TestFlushDiceEmbedsAttackRoll:
         fake_pipeline = MagicMock()
         fake_pipeline._pending_dice_embeds = [("attack_roll", fake_result, "Aragorn")]
 
-        with patch("bot.combat_turn_manager.build_attack_roll_embed") as mock_builder:
+        # The flush goes through bot.embeds.dice_embed.embed_for_dice_entry,
+        # which dispatches to build_attack_roll_embed for the "attack_roll"
+        # tag.
+        with patch(
+            "bot.embeds.dice_embed.build_attack_roll_embed",
+        ) as mock_builder:
             mock_builder.return_value = MagicMock()
             await tm._flush_dice_embeds(fake_pipeline, "Aragorn")
 

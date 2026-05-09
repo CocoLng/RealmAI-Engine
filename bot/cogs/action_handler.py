@@ -24,6 +24,7 @@ from bot.action_pipeline import (
 )
 from bot.embeds.action_progress_embed import build_action_progress_embed
 from bot.embeds.beat_embed import build_beat_advance_embed
+from bot.embeds.dice_embed import embed_for_dice_entry
 from bot.embeds.narrative_embed import build_narrative_embed, build_state_embed
 from bot.embeds.scene_embed import build_scene_embed
 from bot.story_bible_logger import record_turn_and_maybe_check
@@ -273,6 +274,18 @@ class ActionHandlerCog(commands.Cog):
         # 4. Dispatch on result type.
         if isinstance(result, ActionPipelineResult):
             await self._render_success(progress_msg, result, session=session)
+            # Surface any dice rolls produced during resolve_mechanics
+            # (currently: IMPROVISE → skill check). In active combat the
+            # TurnManager flushes _pending_dice_embeds after this handler
+            # returns — skip here to avoid double-rendering.
+            combat_state = session.combat_state
+            if not (combat_state is not None and combat_state.is_active):
+                await self._flush_pending_dice_embeds(
+                    pipeline=pipeline,
+                    channel=message.channel,
+                    actor_name=actor_name,
+                    campaign_id=session.campaign.id,
+                )
             # Story Director — record the turn and trigger a coherence
             # check every N turns, same pattern as combat/exploration cogs.
             await record_turn_and_maybe_check(
@@ -396,6 +409,41 @@ class ActionHandlerCog(commands.Cog):
                 npc_dialogue=result.npc_dialogue,
             )
         await progress_msg.edit(embed=embed, view=None)
+
+    async def _flush_pending_dice_embeds(
+        self,
+        *,
+        pipeline: Any,
+        channel: Any,
+        actor_name: str,
+        campaign_id: str,
+    ) -> None:
+        """Post any dice embeds the pipeline staged during resolve_mechanics.
+
+        Each entry in ``pipeline._pending_dice_embeds`` is converted by
+        :func:`bot.embeds.dice_embed.embed_for_dice_entry` and sent as its
+        own message so the player sees the d20 outcome alongside the
+        narrative. The list is drained even on send failure to avoid
+        replaying the same roll on the next turn.
+        """
+        dice_embeds = getattr(pipeline, "_pending_dice_embeds", None) or []
+        if not dice_embeds:
+            return
+        for entry in list(dice_embeds):
+            embed = embed_for_dice_entry(entry, fallback_actor=actor_name)
+            if embed is None:
+                continue
+            try:
+                await channel.send(embed=embed)
+            except _SEND_ERRORS:
+                logger.warning(
+                    "ACTION dice-embed send dropped campaign=%s",
+                    campaign_id,
+                )
+        try:
+            pipeline._pending_dice_embeds.clear()
+        except AttributeError:
+            pass
 
     async def _render_unknown(
         self,

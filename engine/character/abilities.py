@@ -99,9 +99,23 @@ def assign_standard_array(
 
 
 def compute_skill_modifier(character: Character, skill: Skill) -> int:
-    """Compute skill check modifier: ability mod + proficiency bonus if proficient."""
+    """Compute the skill check modifier for ``skill``.
+
+    SRD 5e formula:
+        ability_mod + (2 × proficiency_bonus  if Expertise applies)
+                    + (proficiency_bonus       if simply proficient)
+
+    Expertise is granted by the Rogue (level 1) and Bard (level 3) class
+    features and is tracked on :attr:`Character.expertise_skills`. A skill
+    listed in ``expertise_skills`` always uses the doubled bonus, even if
+    the same skill is missing from ``skill_proficiencies`` — the only way
+    to legitimately acquire Expertise implies proficiency, so we collapse
+    the two into one branch.
+    """
     ability = SKILL_ABILITY[skill]
     mod = compute_modifier(character.ability_scores.get(ability))
-    if skill in character.skill_proficiencies:
+    if skill in character.expertise_skills:
+        mod += 2 * character.proficiency_bonus
+    elif skill in character.skill_proficiencies:
         mod += character.proficiency_bonus
     return mod

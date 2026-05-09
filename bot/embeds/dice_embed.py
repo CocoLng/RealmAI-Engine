@@ -23,8 +23,11 @@ embeds stay legible without leaking engine enum values into the UI.
 
 from __future__ import annotations
 
+from typing import Any
+
 import discord
 
+from engine.character import SKILL_ABILITY, Skill
 from engine.combat import AttackResult
 from engine.dice import D20CheckResult, DiceResult, RollOutcome
 from engine.inventory import DamageType
@@ -198,6 +201,99 @@ def build_generic_check_embed(
     where the ability context is implicit or absent.
     """
     return build_save_check_embed(check, label, actor_name, ability="-")
+
+
+# ---------------------------------------------------------------------------
+# Skill check embed (IMPROVISE → skill check)
+# ---------------------------------------------------------------------------
+
+# French label per Skill, used in the embed title. Falls back to the SRD
+# (English) name when missing — keeps the embed legible even if a skill is
+# added before this table is updated.
+_SKILL_FR_LABEL: dict[Skill, str] = {
+    Skill.ATHLETICS: "Athlétisme",
+    Skill.ACROBATICS: "Acrobatie",
+    Skill.SLEIGHT_OF_HAND: "Escamotage",
+    Skill.STEALTH: "Discrétion",
+    Skill.ARCANA: "Arcanes",
+    Skill.HISTORY: "Histoire",
+    Skill.INVESTIGATION: "Investigation",
+    Skill.NATURE: "Nature",
+    Skill.RELIGION: "Religion",
+    Skill.ANIMAL_HANDLING: "Dressage",
+    Skill.INSIGHT: "Perspicacité",
+    Skill.MEDICINE: "Médecine",
+    Skill.PERCEPTION: "Perception",
+    Skill.SURVIVAL: "Survie",
+    Skill.DECEPTION: "Tromperie",
+    Skill.INTIMIDATION: "Intimidation",
+    Skill.PERFORMANCE: "Représentation",
+    Skill.PERSUASION: "Persuasion",
+}
+
+
+def build_skill_check_embed(
+    check: D20CheckResult,
+    skill: Skill,
+    actor_name: str,
+) -> discord.Embed:
+    """Render a skill-check d20 result (IMPROVISE → skill check).
+
+    Title shows the French skill name and the underlying ability code,
+    e.g. ``"🎲 Héros — Test de Escamotage (DEX)"``. The body reuses the
+    same formula / outcome / margin layout as
+    :func:`build_save_check_embed` for visual consistency.
+    """
+    label = f"Test de {_SKILL_FR_LABEL.get(skill, skill.value)}"
+    ability = SKILL_ABILITY[skill].value
+    return build_save_check_embed(check, label, actor_name, ability)
+
+
+# ---------------------------------------------------------------------------
+# Tuple → embed dispatcher (used by both action_handler and combat turn manager)
+# ---------------------------------------------------------------------------
+
+
+def embed_for_dice_entry(entry: Any, *, fallback_actor: str) -> discord.Embed | None:
+    """Convert a ``pending_dice_embeds`` tuple into a :class:`discord.Embed`.
+
+    Tuples carry a ``kind`` tag at index 0 plus payload. Recognised kinds:
+
+    - ``("attack_roll", AttackResult, attacker_name)``
+    - ``("flee_check", D20CheckResult, actor_name)``
+    - ``("truce_check", D20CheckResult, actor_name)``
+    - ``("skill_check", D20CheckResult, actor_name, Skill)``
+    - any other tag → generic d20 check embed
+
+    Returns ``None`` for malformed entries so the caller can drop them
+    silently rather than crash.
+    """
+    if not isinstance(entry, tuple) or len(entry) < 2:
+        return None
+    kind = entry[0]
+    payload = entry[1]
+    name = entry[2] if len(entry) >= 3 and isinstance(entry[2], str) else fallback_actor
+
+    if kind == "attack_roll" and isinstance(payload, AttackResult):
+        return build_attack_roll_embed(payload, name)
+    if not isinstance(payload, D20CheckResult):
+        return None
+    if kind == "flee_check":
+        return build_save_check_embed(
+            payload, label="Tentative de fuite", actor_name=name, ability="DEX",
+        )
+    if kind == "truce_check":
+        return build_save_check_embed(
+            payload, label="Tentative de trêve", actor_name=name, ability="CHA",
+        )
+    if kind == "skill_check":
+        skill = entry[3] if len(entry) >= 4 else None
+        if isinstance(skill, Skill):
+            return build_skill_check_embed(payload, skill, name)
+        return build_generic_check_embed(payload, label="Test de compétence", actor_name=name)
+    return build_generic_check_embed(
+        payload, label=str(kind).replace("_", " ").title(), actor_name=name,
+    )
 
 
 # ---------------------------------------------------------------------------

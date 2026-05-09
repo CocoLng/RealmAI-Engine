@@ -42,3 +42,9 @@ class Character(BaseModel):
     size: Size
     features: list[Feature] = Field(default_factory=list)
     skill_proficiencies: list[Skill] = Field(default_factory=list)
+    expertise_skills: list[Skill] = Field(default_factory=list)
+    """Skills with the Expertise feature applied (double proficiency bonus).
+
+    Populated at character creation when the player is a Rogue (level 1)
+    or Bard (level 3) and picks two skills. Empty for everyone else.
+    """

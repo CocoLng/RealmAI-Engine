@@ -44,8 +44,7 @@ from bot.embeds.combat_end_embed import build_combat_end_embed
 from bot.embeds.combat_start_embed import build_combat_start_embed
 from bot.embeds.dice_embed import (
     build_attack_roll_embed,
-    build_generic_check_embed,
-    build_save_check_embed,
+    embed_for_dice_entry,
 )
 from bot.embeds.narrative_embed import build_narrative_embed
 from bot.story_bible_logger import record_turn_and_maybe_check
@@ -516,25 +515,11 @@ class TurnManager:
         self, pipeline: ActionPipeline, actor_name: str,
     ) -> None:
         """Surface dice results stashed on the pipeline as Discord embeds."""
-        from engine.combat import AttackResult
-
         dice_embeds = getattr(pipeline, "_pending_dice_embeds", None) or []
         for entry in dice_embeds:
-            if not isinstance(entry, tuple) or len(entry) < 2:
+            embed = embed_for_dice_entry(entry, fallback_actor=actor_name)
+            if embed is None:
                 continue
-            kind = entry[0]
-            result = entry[1]
-            name = entry[2] if len(entry) >= 3 else actor_name
-            if kind == "attack_roll" and isinstance(result, AttackResult):
-                embed = build_attack_roll_embed(result, name)
-            elif kind == "flee_check":
-                embed = build_save_check_embed(
-                    result, label="Tentative de fuite", actor_name=name, ability="DEX",
-                )
-            else:
-                embed = build_generic_check_embed(
-                    result, label=str(kind).replace("_", " ").title(), actor_name=name,
-                )
             await self._safe_send(embed=embed)
         pipeline._pending_dice_embeds.clear()
 

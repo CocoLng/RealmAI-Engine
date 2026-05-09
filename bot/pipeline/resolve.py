@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ai.models import InterpretedAction, MechanicsOutcome, PublicEffects
-from engine.character import Character, compute_modifier
+from engine.character import (
+    Character,
+    SKILL_ABILITY,
+    compute_modifier,
+    compute_skill_modifier,
+)
 from engine.combat import (
     CombatEndReason,
     check_combat_end,
@@ -28,6 +33,10 @@ from engine.combat import (
 from engine.conditions import ActiveCondition, ConditionType
 from engine.dice import RollOutcome, roll_check
 from engine.inventory import EquipmentSlot, Weapon, equip_item, remove_item, unequip_item
+from engine.skill_check import (
+    compute_skill_check_dc,
+    infer_skill_from_text,
+)
 from engine.validators import ActionType
 from world.location import Location
 from world.npc import NPC, NPCDisposition
@@ -299,12 +308,12 @@ async def resolve_mechanics(
         )
 
     if at == ActionType.IMPROVISE:
-        description = action.improvise_description or action.raw_input
-        return MechanicsOutcome(
-            summary=(
-                f"{action.actor_name} attempts an improvised action: {description}"
-            ),
-            player_intent=intent,
+        return resolve_improvise(
+            action=action,
+            actor_name=actor_name,
+            npcs=npcs,
+            session=session,
+            side=side,
         )
 
     if at == ActionType.ATTACK:
@@ -823,6 +832,146 @@ def resolve_pc_attack(
         outcome_facts=facts,
         public_effects=public,
         target_defeated=target.name if result.hit and not target.is_alive else None,
+    )
+
+
+def _find_actor_character(
+    actor_name: str,
+    session: "GameSession | None",
+) -> Character | None:
+    """Return the live ``Character`` whose ``name`` matches ``actor_name``.
+
+    First searches the active combat state (where the combatant's character
+    carries any in-fight HP delta), then the session character map. Returns
+    ``None`` when neither contains a match — typical for tests that build a
+    pipeline without a session.
+    """
+    if session is None:
+        return None
+    combat_state = getattr(session, "combat_state", None)
+    if combat_state is not None:
+        for combatant in getattr(combat_state, "combatants", []):
+            if combatant.name == actor_name:
+                return combatant.character
+    chars = getattr(session, "characters", None) or {}
+    for char in chars.values():
+        if char.name == actor_name:
+            return char
+    return None
+
+
+def resolve_improvise(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    npcs: dict[str, NPC],
+    session: "GameSession | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Resolve an IMPROVISE action — attempt to convert it to a skill check.
+
+    Pipeline:
+        1. Infer the relevant D&D 5e :class:`Skill` from the action text via
+           :func:`engine.skill_check.infer_skill_from_text`. Both the
+           interpreter-extracted ``improvise_description`` and the raw
+           player text are scanned.
+        2. Compose a difficulty class from
+           :func:`engine.skill_check.compute_skill_check_dc` — when
+           ``action.target_name`` resolves to an NPC in scene, the DC is
+           contested by that NPC's relevant ability score (passive
+           Perception for theft/stealth, passive Insight for deception,
+           CHA for social skills) and adjusted by their disposition;
+           otherwise a static DC is used and shaped by narrative
+           qualifiers ("petit", "risqué", "héroïque").
+        3. If the actor's :class:`Character` is reachable through
+           ``session``, roll a ``1d20 + skill modifier`` (proficiency and
+           Expertise applied via :func:`compute_skill_modifier`) against
+           that DC. The :class:`D20CheckResult` is queued on
+           ``side.pending_dice_embeds`` so the cog renders the visible
+           "🎲 Test de Escamotage (DEX)" embed alongside the narration.
+        4. The narrator receives the outcome tier through
+           :attr:`MechanicsOutcome.outcome_facts` so it describes a
+           success / near-failure / critical-failure faithfully.
+        5. If no skill matches OR the character is missing, fall back to
+           the legacy "narrator arbitrates without a roll" behaviour —
+           preserved for purely flavour actions ("je m'assois", "I take
+           a deep breath").
+    """
+    from bot.pipeline.narrate import build_player_intent
+
+    intent = build_player_intent(action)
+    description = action.improvise_description or action.raw_input or ""
+
+    skill = infer_skill_from_text(
+        description, extra_texts=(action.raw_input,) if action.raw_input else (),
+    )
+
+    legacy_summary = (
+        f"{action.actor_name} attempts an improvised action: {description}"
+    )
+
+    if skill is None:
+        return MechanicsOutcome(summary=legacy_summary, player_intent=intent)
+
+    character = _find_actor_character(action.actor_name, session)
+    if character is None:
+        # No character to roll against — keep legacy behaviour rather than
+        # fabricating a fake roll.
+        logger.info(
+            "IMPROVISE skill=%s but no character found for actor=%s — falling back",
+            skill.value, action.actor_name,
+        )
+        return MechanicsOutcome(summary=legacy_summary, player_intent=intent)
+
+    # Resolve a contest target if the player's action references an NPC
+    # in scene. ``action.target_name`` is canonicalised by
+    # EntityResolver, so a successful match means an NPC really exists.
+    target_npc: NPC | None = None
+    if action.target_name and action.target_name in npcs:
+        target_npc = npcs[action.target_name]
+
+    dc = compute_skill_check_dc(
+        text=f"{description} {action.raw_input or ''}".strip(),
+        skill=skill,
+        target_npc=target_npc,
+    )
+
+    modifier = compute_skill_modifier(character, skill)
+    expression = f"1d20+{modifier}" if modifier >= 0 else f"1d20{modifier}"
+    check = roll_check(expression, dc=dc)
+    ability = SKILL_ABILITY[skill]
+
+    side.pending_dice_embeds.append(
+        ("skill_check", check, action.actor_name, skill),
+    )
+
+    sign = "+" if modifier >= 0 else ""
+    contest_note = (
+        f" (contesté par {target_npc.name})" if target_npc is not None else ""
+    )
+    summary = (
+        f"{action.actor_name} tente {description} — "
+        f"{skill.value} ({ability.value}) {check.total} vs DC {check.dc}"
+        f"{contest_note} → {check.outcome.value}"
+    )
+    facts = (
+        f"Skill check: {skill.value} ({ability.value}{sign}{modifier}) — "
+        f"d20={check.rolls[0]}, total={check.total}, DC={check.dc}"
+        f"{contest_note}, outcome={check.outcome.value}, "
+        f"margin={check.margin:+d}."
+    )
+    logger.info(
+        "IMPROVISE skill_check actor=%s skill=%s ability=%s mod=%d "
+        "nat=%d total=%d dc=%d contest=%s outcome=%s",
+        action.actor_name, skill.value, ability.value, modifier,
+        check.rolls[0], check.total, check.dc,
+        target_npc.name if target_npc else "—",
+        check.outcome.value,
+    )
+    return MechanicsOutcome(
+        summary=summary,
+        player_intent=intent,
+        outcome_facts=facts,
     )
 
 

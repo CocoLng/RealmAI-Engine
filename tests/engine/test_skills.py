@@ -141,6 +141,39 @@ class TestComputeSkillModifier:
         int_mod = compute_modifier(sample_rogue.ability_scores.get(Ability.INT))
         assert arcana_mod == int_mod
 
+    def test_expertise_doubles_proficiency_bonus(
+        self, sample_rogue: Character,
+    ) -> None:
+        # Rogue Expertise: pick 2 skills → double proficiency on those.
+        # Stealth was already proficient (+2 prof). With Expertise it
+        # should become +4 (proficiency × 2). DEX +2, total +6.
+        sample_rogue.expertise_skills = [Skill.STEALTH]
+        mod = compute_skill_modifier(sample_rogue, Skill.STEALTH)
+        dex_mod = compute_modifier(sample_rogue.ability_scores.get(Ability.DEX))
+        assert mod == dex_mod + 2 * sample_rogue.proficiency_bonus
+
+    def test_expertise_without_base_proficiency_still_doubles(
+        self, sample_rogue: Character,
+    ) -> None:
+        # SRD: a skill must be proficient to be Expertise-able. We mirror
+        # that here — Expertise alone (without proficiency) STILL counts
+        # as double-proficiency, since the only legit way to acquire it
+        # implies the proficiency. This keeps the math simple.
+        sample_rogue.skill_proficiencies = []
+        sample_rogue.expertise_skills = [Skill.SLEIGHT_OF_HAND]
+        mod = compute_skill_modifier(sample_rogue, Skill.SLEIGHT_OF_HAND)
+        dex_mod = compute_modifier(sample_rogue.ability_scores.get(Ability.DEX))
+        assert mod == dex_mod + 2 * sample_rogue.proficiency_bonus
+
+    def test_expertise_does_not_leak_to_other_skills(
+        self, sample_rogue: Character,
+    ) -> None:
+        sample_rogue.expertise_skills = [Skill.STEALTH]
+        # Acrobatics is proficient but NOT in expertise — single prof bonus.
+        mod = compute_skill_modifier(sample_rogue, Skill.ACROBATICS)
+        dex_mod = compute_modifier(sample_rogue.ability_scores.get(Ability.DEX))
+        assert mod == dex_mod + sample_rogue.proficiency_bonus
+
 
 # ---------------------------------------------------------------------------
 # CLASS_SKILL_CHOICES
