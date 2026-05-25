@@ -154,7 +154,6 @@ realmAI-engine/
 │   ├── narrator.py
 │   ├── interpreter.py
 │   ├── npc_agent.py
-│   ├── quest_generator.py
 │   ├── world_generator.py
 │   ├── story_director.py
 │   └── prompts/

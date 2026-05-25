@@ -8,6 +8,7 @@ HOSTILE, and writes a world-fact line + story bible event.
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -36,6 +37,9 @@ from world.npc import NPC, NPCDisposition
 
 @pytest.mark.asyncio
 async def test_trivial_kill_propagates_death(tmp_path, monkeypatch) -> None:
+    # Seed RNG so the to-hit roll is deterministic across pytest collection
+    # orderings — Aldric has +5 attack vs Jeanne AC 10, so any roll ≥5 hits.
+    random.seed(0)
     # Run from a temp cwd so the world-fact markdown is written there.
     monkeypatch.chdir(tmp_path)
 

@@ -86,8 +86,7 @@ class StoryBibleLogger:
 
         When ``character_kits`` and ``character_motivations`` are provided,
         a "Composition du groupe" section is rendered so the chosen roles
-        are part of the frozen campaign audit trail — together with the
-        ``party_premise`` (when the story arc carries one).
+        are part of the frozen campaign audit trail.
         """
         lines: list[str] = []
         lines.append(f"# Campagne : {campaign.name}")
@@ -129,9 +128,6 @@ class StoryBibleLogger:
             if story_arc.call_to_action.strip():
                 lines.append("")
                 lines.append(f"**Call to action:** {story_arc.call_to_action}")
-            if story_arc.party_premise.strip():
-                lines.append("")
-                lines.append(f"**Party premise (fait figé):** {story_arc.party_premise}")
             lines.append("")
             lines.append(f"### Beats ({len(story_arc.beats)})")
             for beat in story_arc.beats:

@@ -119,12 +119,6 @@ class StoryArc(BaseModel):
     """Initial hook — why the party is drawn into this story, written in second-
     person plural ("vous"). Represents the apparent objective (may be a red
     herring or deliberately vague). Never reveals the villain or the twist."""
-    party_premise: str = ""
-    """One-sentence frozen fact describing the party's raison d'être at the
-    start of the campaign — anchored in the players' chosen kits + motivations
-    so narrators and the story director can keep framing consistent. Produced
-    by :class:`ai.opening_reframer.OpeningReframer` right before launch.
-    Empty on legacy arcs generated before the reframer existed."""
     beats: list[StoryBeat] = Field(min_length=8, max_length=20)
     current_beat_index: int = Field(default=0, ge=0)
     villain_name: str

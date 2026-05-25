@@ -634,10 +634,6 @@ class TestQuestionAction:
         assert "Autel de pierre" in call["outcome_facts"]
 
 
-# Concurrency serialization is enforced by the action_handler cog via
-# GameSession.action_lock — see tests/test_cog_exploration.py.
-
-
 # ---------------------------------------------------------------------------
 # Beat completion helpers
 # ---------------------------------------------------------------------------

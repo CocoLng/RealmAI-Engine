@@ -143,17 +143,6 @@ Construit un user message incluant : context + fiche NPC (perso, race, dispositi
 
 **Parser résilient** : le parseur construit d'abord les `Zone` individuellement (drop silencieux des entrées invalides), puis tente la construction du `Location` ; si l'adjacence globale casse (`ValidationError` du `_validate_zones_graph`), fallback sur `combat_zones=[]` sans perdre le reste de l'output.
 
-### `quest_generator.py` — `QuestGenerator`
-
-**Modèle** : `qwen3.5:9b` **avec `think=True`**, temperature 0.8.
-
-`generate(campaign_context, location_name, available_npcs, language="fr") -> Quest`.
-
-Contraintes enforced par prompt uniquement (pas code) :
-- 1-4 objectives
-- reward_xp : 50-2000
-- reward_gold : 0-500
-
 ### `arc_generator.py` — `ArcGenerator`
 
 **Modèle** : `qwen3.5:9b` **avec `think=True`**, temperature 0.8.
@@ -226,7 +215,6 @@ SceneContext(
 | `system_npc_agent.txt` | Agency PNJ, règles knowledge/secrets, mécanique disposition |
 | `system_npc_generator.txt` | Génération de fiches PNJ, personnalité spécifique |
 | `system_world_generator.txt` | Générateur de locations, descriptions d'items explicites, aliases NPC |
-| `system_quest_generator.txt` | Design de quêtes contextuelles |
 | `system_arc_generator.txt` | Arc de campagne, structure dramatique, completion triggers, beat effects, contenu FR |
 | `system_story_director.txt` | Analyse de cohérence, hooks, priorité |
 | `system_npc_tactician.txt` | Brain tactique boss : schéma JSON strict, règles pas-de-dés, style FR/EN, no narration |
@@ -256,7 +244,7 @@ Retry sur `OllamaUnavailableError` et `ValueError`. `LLMParseError` dump la pair
 | `test_narrator.py` | Prose generation, tone, temperature |
 | `test_npc_agent.py` | Dialogue, disposition signals |
 | `test_npc_generator.py` | Génération de fiches |
-| `test_quest_generator.py`, `test_arc_generator.py`, `test_world_generator.py` | Générateurs |
+| `test_arc_generator.py`, `test_world_generator.py` | Générateurs |
 | `test_story_director.py` | Coherence checking |
 | `test_scene_context.py` | Scene assembly |
 | `test_models.py` | Validation Pydantic |

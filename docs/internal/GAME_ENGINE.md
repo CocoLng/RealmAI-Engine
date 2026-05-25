@@ -301,8 +301,6 @@ Librairie précalculée de 11 archétypes de combat. `get_archetype(name)` retou
 
 `list_archetypes()` retourne la liste triée, `ARCHETYPE_BUILDERS` expose le dict builder. `KeyError` si l'archétype est inconnu — les appelants doivent guarder ou catch.
 
-Les archétypes narratifs (voir [`engine/npc_archetypes.py`](../../engine/npc_archetypes.py)) sont orthogonaux : ils décrivent la personnalité et le dialogue RP, pas les stats de combat.
-
 ## Combat zones (modèle `world/`)
 
 Positionnement abstrait par **zones nommées** plutôt qu'une grille 5-pieds. `Location.combat_zones: list[Zone]` porte le graphe (voir [`world/combat_zone.py`](../../world/combat_zone.py)). Chaque `Zone` a un `name`, une `description`, une liste `adjacent_zone_names`, et des `tags: list[ZoneTag]`.

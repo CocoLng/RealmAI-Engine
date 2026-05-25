@@ -49,7 +49,7 @@ Le moteur de règles est en Python pur (déterministe, testé à ~98%). Les LLM 
 - `narrator.py` (qwen3.5:9b) : `MechanicsOutcome` → prose.
 - `npc_agent.py` (4b) : génère le dialogue d'un PNJ + `disposition_change`.
 - `npc_generator.py` : fiches PNJ lazily à la première rencontre.
-- `world_generator.py`, `quest_generator.py`, `arc_generator.py` : contenu de campagne.
+- `world_generator.py`, `arc_generator.py` : contenu de campagne.
 - `story_director.py` : check de cohérence périodique (tous les ~20 tours).
 - `entity_resolver.py` : résolveur rule-based (lemmatisation FR + fuzzy) avec fallback LLM.
 - `scene_context.py` : snapshot de ce que l'acteur perçoit.
