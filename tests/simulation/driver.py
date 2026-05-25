@@ -66,9 +66,37 @@ class GameDriver:
         elif action == "move":
             await r.move(direction=args["direction"])
         elif action == "talk":
-            await r.talk(npc=args["npc"])
+            # Route via ActionPipeline so the Interpreter/Narrator pipeline
+            # produces a real NPC response. Fall back to the stub if the
+            # session lacks AI wiring (mock-LLM runs / no Ollama).
+            free_form = getattr(r, "free_form_action", None)
+            session = getattr(r, "session", None)
+            ai_ready = (
+                free_form is not None
+                and session is not None
+                and getattr(session, "interpreter", None) is not None
+                and getattr(session, "narrator", None) is not None
+            )
+            if ai_ready:
+                await free_form(text=f"Je parle à {args['npc']}.", player_idx=idx)
+            else:
+                await r.talk(npc=args["npc"])
         elif action == "search":
-            await r.search(target=args.get("target", ""))
+            # Same dual-path: real LLM if AI is wired, stub otherwise.
+            free_form = getattr(r, "free_form_action", None)
+            session = getattr(r, "session", None)
+            ai_ready = (
+                free_form is not None
+                and session is not None
+                and getattr(session, "interpreter", None) is not None
+                and getattr(session, "narrator", None) is not None
+            )
+            target = args.get("target", "")
+            if ai_ready:
+                suffix = f" {target}" if target else " les environs"
+                await free_form(text=f"Je fouille{suffix}.", player_idx=idx)
+            else:
+                await r.search(target=target)
         elif action == "equip":
             await r.equip(item=args["item"], slot=args.get("slot", "main_hand"), player_idx=idx)
         elif action == "unequip":
