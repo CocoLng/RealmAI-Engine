@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from tests.simulation.rules.hard import check_npc_status
+from tests.simulation.rules.hard import check_npc_status, check_phantom_npc
 
 
 @dataclass
@@ -24,9 +24,11 @@ class FakeState:
     combat_active: bool = False
     combat_state: Any = None
     inventory: Any = None
+    player_names: list[str] = field(default_factory=list)
     player_hp_ratio: float = 1.0
     player_max_hp: int = 15
     player_hp: int = 15
+    current_turn: int = 0
 
 
 class TestR1NpcStatus:
@@ -63,3 +65,30 @@ class TestR1NpcStatus:
         narration = "Garm attaque !"
         alerts = check_npc_status(narration, state, diff={}, history=[])
         assert len(alerts) == 1
+
+
+class TestR1PhantomNpc:
+    def test_unknown_proper_noun_triggers(self) -> None:
+        state = FakeState(npcs={"Garm": FakeNPC(name="Garm")})
+        narration = "Le héros rencontre Khaalim, un sorcier inconnu."
+        alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        assert any(a.rule == "R1.phantom_npc" and "Khaalim" in a.expected for a in alerts)
+
+    def test_known_npc_does_not_trigger(self) -> None:
+        state = FakeState(npcs={"Garm": FakeNPC(name="Garm")})
+        narration = "Garm s'avance."
+        alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        assert alerts == []
+
+    def test_whitelist_words_ignored(self) -> None:
+        # "Dieu", "Roi" etc. are common nouns capitalized; must not trigger
+        state = FakeState(npcs={})
+        narration = "Le Roi a parlé. Que les Dieux nous protègent."
+        alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        assert alerts == []
+
+    def test_player_name_not_phantom(self) -> None:
+        state = FakeState(npcs={}, player_names=["Aria"])
+        narration = "Aria avance prudemment."
+        alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        assert alerts == []

@@ -58,3 +58,52 @@ def check_npc_status(
                 )
                 break
     return alerts
+
+
+# Common French capitalized nouns that are NOT proper names (whitelist).
+_PROPER_NOUN_WHITELIST: frozenset[str] = frozenset({
+    "Le", "La", "Les", "L", "Un", "Une", "Des", "Du", "De", "Dans", "Sur",
+    "Avec", "Sans", "Pour", "Par", "Vers", "Chez", "Vous", "Nous", "Il",
+    "Elle", "Ils", "Elles", "Je", "Tu", "On", "Que", "Qui", "Quoi",
+    "Dieu", "Dieux", "Roi", "Reine", "Capitaine", "Seigneur", "Dame",
+    "Maître", "Madame", "Monsieur", "Père", "Mère", "Frère", "Sœur",
+    "Or", "Mais", "Et", "Donc", "Car", "Aussi", "Si", "Alors", "Puis",
+    "Tout", "Tous", "Toute", "Toutes", "Cette", "Ce", "Ces", "Ses",
+    "Son", "Sa", "Leur", "Leurs", "Mon", "Ma", "Mes", "Notre", "Votre",
+})
+
+_PROPER_NOUN_RE = re.compile(r"\b([A-ZÉÈÊÀÂÔÛÎ][a-zéèêàâôûîç']{2,})\b")
+
+
+def check_phantom_npc(
+    narration: str,
+    state: Any,
+    diff: dict[str, list[Any]],
+    history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.phantom_npc — capitalized proper noun absent from NPC registry."""
+    alerts: list[IncoherenceAlert] = []
+    known_npcs = {n.lower() for n in state.npcs}
+    known_players = {p.lower() for p in getattr(state, "player_names", [])}
+    seen: set[str] = set()
+    for match in _PROPER_NOUN_RE.finditer(narration):
+        word = match.group(1)
+        if word in _PROPER_NOUN_WHITELIST:
+            continue
+        lower = word.lower()
+        if lower in known_npcs or lower in known_players:
+            continue
+        if lower in seen:
+            continue
+        seen.add(lower)
+        alerts.append(
+            IncoherenceAlert(
+                severity="hard",
+                category="phantom_npc",
+                turn=getattr(state, "current_turn", 0),
+                rule="R1.phantom_npc",
+                narration_snippet=_snippet_around(narration, word),
+                expected=f"Proper noun '{word}' is not in NPC registry or player names",
+            )
+        )
+    return alerts
