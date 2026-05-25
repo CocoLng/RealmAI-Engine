@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 from sqlalchemy.orm import Session, sessionmaker
 
+from bot.action_pipeline import ActionPipeline
 from bot.cogs.character import CharacterCog
 from bot.cogs.combat import CombatCog
 from bot.cogs.inventory import InventoryCog
@@ -803,6 +804,82 @@ class ScenarioRunner:
             await self._finalize_combat(session)
 
         return cap
+
+    async def free_form_action(
+        self, *, text: str, player_idx: int = 0
+    ) -> None:
+        """Route a free-form text through the @bot mention pipeline.
+
+        Mirrors the work of bot/cogs/action_handler.py:_run_pipeline minus the
+        Discord-specific message filtering. Requires ai_enabled=True (otherwise
+        session.interpreter / session.narrator are None and this raises).
+        """
+        session = self.session
+        if session is None:
+            msg = "No active session — call start_campaign first"
+            raise RuntimeError(msg)
+        if session.interpreter is None or session.narrator is None:
+            msg = (
+                "free_form_action requires ai_enabled=True so the session has "
+                "real Interpreter/Narrator wired"
+            )
+            raise RuntimeError(msg)
+        player = self._make_player(player_idx)
+        actor = session.characters.get(player.id)
+        if actor is None:
+            msg = (
+                f"Player {player.id} has no character — call add_player first"
+            )
+            raise RuntimeError(msg)
+        actor_name = actor.name
+        inventory = session.inventories.get(player.id)
+
+        pipeline = ActionPipeline(
+            interpreter=session.interpreter,
+            narrator=session.narrator,
+            location=session.current_location,
+            npcs=session.npcs,
+            actor_name=actor_name,
+            language=getattr(session, "language", "fr"),
+            campaign_id=session.campaign.id,
+            combat_state=session.combat_state,
+            inventory=inventory,
+            session=session,
+            db_factory=self.bot.db_factory,
+        )
+        result = await pipeline.process(text)
+
+        # Surface the narration via channel_capture / responses so that
+        # GameDriver._extract_narration finds it.
+        narration_text = self._extract_pipeline_narration(result)
+        if narration_text:
+            embed = discord.Embed(description=narration_text)
+            cap = EmbedCapture(content=None, embed=embed, view=None)
+            self.channel_capture.messages.append(cap)
+            self.responses.append(cap)
+
+    @staticmethod
+    def _extract_pipeline_narration(result: Any) -> str:
+        """Pull the final narration text out of a PipelineOutput-like object.
+
+        ``ActionPipelineResult.narrative`` is the primary field.
+        ``UnknownEntityResult.refusal_narrative`` is the fallback for rule/entity
+        failures. ``AmbiguityResult`` has no narration text.
+        """
+        # Primary: ActionPipelineResult
+        narrative = getattr(result, "narrative", None)
+        if isinstance(narrative, str) and narrative.strip():
+            return narrative
+        # Fallback: UnknownEntityResult (rule failure or entity not found)
+        refusal = getattr(result, "refusal_narrative", None)
+        if isinstance(refusal, str) and refusal.strip():
+            return refusal
+        # Generic fallback scan for other attribute names
+        for attr in ("narration", "text", "final_narration"):
+            value = getattr(result, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
 
     async def _auto_resolve_enemies(self) -> None:
         """Auto-resolve all consecutive enemy turns."""
