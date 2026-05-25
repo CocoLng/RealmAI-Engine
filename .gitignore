@@ -1,47 +1,63 @@
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
 *.pyo
 *.egg-info/
 dist/
 build/
-logs/
 
-# Virtual environment
+# --- Virtual environments ---
 .venv/
 
-# uv
+# --- uv ---
 .python-version
 
-# Environment variables
+# --- Environment variables ---
 .env
 .env.*
 !.env.example
 
-# Tool caches
+# --- Tool caches ---
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
 
-# IDE
+# --- IDE ---
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Database
+# --- Local game data (dev) ---
+# SQLite + ChromaDB live under data/ at dev time; campaigns are reseedable
+# via scripts/reset_dev_data.py, so this directory is never checked in.
+data/
+
+# --- Generic DB / sqlite (safety net for stray files elsewhere) ---
 *.db
 *.sqlite
 *.sqlite3
 
-# ChromaDB local storage
-chroma_data/
+# --- Runtime artifacts ---
+logs/
 
-# OS
+# --- OS ---
 .DS_Store
 Thumbs.db
 
-# Git worktrees
+# --- Git worktrees ---
 .worktrees/
+
+# --- Claude Code local state ---
+# .claude/skills, .claude/settings.json, .mcp.json ARE checked in — they
+# encode shared project configuration. Per-user / per-session state is not.
+.claude/projects/
 .claude/worktrees/
+.claude/settings.local.json
+
+# Simulation run artifacts (transcripts, reports, per-run DBs)
+tests/simulation/runs/

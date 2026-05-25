@@ -1,0 +1,4 @@
+# Known-noisy patterns that produce false positives in the IncoherenceChecker.
+# Each entry is a {rule_id, pattern, reason} tuple.
+# Edit this file as runs reveal patterns that should be ignored.
+patterns: []
