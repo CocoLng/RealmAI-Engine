@@ -151,3 +151,50 @@ async def test_runner_stops_on_agent_stuck(
     status = await runner.run()
     assert status == "agent_stuck"
     assert stub_driver.execute.await_count == 3  # 3 waits then exit
+
+
+@pytest.mark.asyncio
+async def test_runner_computes_real_diff(
+    tmp_path: Path, mock_agent, mock_checker
+) -> None:
+    """The runner must call session_snapshot before AND after each turn
+    and pass the computed diff to checker.check."""
+    from tests.simulation.records import LLMTimings, TurnOutcome
+
+    driver = MagicMock()
+    driver.execute = AsyncMock(
+        return_value=TurnOutcome(
+            narration="ok",
+            action_resolved={},
+            error=None,
+            timing_ms=LLMTimings(agent=1, interpreter=1, engine=1, narrator=1),
+        )
+    )
+
+    # session_snapshot returns different state across calls
+    snapshots = [
+        {"character": {"hp": 15}},  # before turn 1
+        {"character": {"hp": 12}},  # after turn 1
+        {"character": {"hp": 12}},  # before turn 2 (== after turn 1)
+        {"character": {"hp": 10}},  # after turn 2
+        {"character": {"hp": 10}},  # final snapshot for finalize
+    ]
+    snapshot_iter = iter(snapshots)
+    def snapshot():
+        return next(snapshot_iter)
+
+    config = SimulationConfig(seed=1, max_turns=2, run_dir=tmp_path, max_wall_time_s=60)
+    runner = SimulationRunner(
+        config=config,
+        agent=mock_agent,
+        driver=driver,
+        checker=mock_checker,
+        session_snapshot=snapshot,
+    )
+    await runner.run()
+    # checker.check was called twice — once per turn — with a non-empty diff
+    assert mock_checker.check.call_count == 2
+    first_diff = mock_checker.check.call_args_list[0].kwargs.get("diff", {})
+    assert first_diff == {"character.hp": [15, 12]}, (
+        f"expected non-empty diff for turn 1, got {first_diff}"
+    )

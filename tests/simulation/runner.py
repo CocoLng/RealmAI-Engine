@@ -12,6 +12,7 @@ from typing import Any
 
 from tests.simulation.records import AgentIntent, TurnOutcome, TurnRecord
 from tests.simulation.recorder import Recorder
+from tests.simulation.state_diff import state_diff as _compute_diff
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +65,10 @@ class SimulationRunner:
                 else self.agent.decide(observation)
             )
 
+            state_before = self.session_snapshot()
             outcome: TurnOutcome = await self.driver.execute(intent)
-
             state_after = self.session_snapshot()
-            diff: dict[str, list[Any]] = {}  # state diff would be computed here in full impl
+            diff: dict[str, list[Any]] = _compute_diff(state_before, state_after)
             alerts = self.checker.check(
                 outcome.narration, state_after, diff=diff, history=self._history
             )
