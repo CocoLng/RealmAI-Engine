@@ -83,6 +83,24 @@ class HeadlessCharacterSetupFlow:
         self.kit_name: str | None = None
         self.motivation_key: str | None = None
 
+    @classmethod
+    def from_flow(cls, flow: CharacterSetupFlow) -> "HeadlessCharacterSetupFlow":
+        """Wrap a flow that was constructed elsewhere (e.g. by ``SessionCog``).
+
+        The wrapped flow keeps its original ``on_complete`` callback —
+        useful when the cog's closure does work the driver shouldn't
+        replicate (DB persistence, lobby roster update). The driver's
+        :attr:`character` / :attr:`kit_name` / :attr:`motivation_key`
+        attributes stay ``None`` in that case; :meth:`confirm` reads
+        the final ``Character`` from ``flow._preview_character`` instead.
+        """
+        driver = cls.__new__(cls)
+        driver.flow = flow
+        driver.character = None
+        driver.kit_name = None
+        driver.motivation_key = None
+        return driver
+
     async def _capture_complete(
         self, character: Character, kit_name: str, motivation_key: str,
     ) -> None:
@@ -227,15 +245,28 @@ class HeadlessCharacterSetupFlow:
     # ------------------------------------------------------------------
 
     async def confirm(self) -> Character:
-        """Click the Confirmer button — invokes the on_complete callback."""
+        """Click the Confirmer button — invokes the on_complete callback.
+
+        Returns the Character built at the REVIEW step. When the driver
+        owns its own flow, the value is captured via the internal
+        ``_capture_complete`` callback; when wrapping a flow built by
+        another caller (see :meth:`from_flow`), the value is read from
+        ``flow._preview_character`` since the original on_complete
+        callback won't write to ``self.character``.
+        """
         await self.flow._on_confirm(self._fake_interaction())
-        if self.character is None:
+        if self.character is not None:
+            return self.character
+        # Wrapped flow path — the foreign on_complete already fired with
+        # the Character; we recover it from the flow's preview slot.
+        preview = self.flow._preview_character
+        if preview is None:
             msg = (
-                "on_complete was not invoked — the flow likely tripped a "
-                "validation gate (missing fields?)"
+                "confirm() finished but no Character was built — the "
+                "flow likely tripped a validation gate (missing fields?)"
             )
             raise RuntimeError(msg)
-        return self.character
+        return preview
 
     # ------------------------------------------------------------------
     # Convenience: drive everything in one call
