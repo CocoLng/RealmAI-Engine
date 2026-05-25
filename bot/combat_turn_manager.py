@@ -146,28 +146,40 @@ class TurnManager:
         :meth:`dispatch_action`, which posted the narrative embed itself.
         Either way, the action is done, the turn must advance, pending
         off-turn cues must be flushed, and the next turn prompted.
+
+        Holds ``session.action_lock`` for the entire turn-advance sequence
+        so two concurrent callers (e.g. a button click and a free-text
+        action that finished within ms of each other) cannot both run
+        ``advance_turn`` and corrupt ``current_turn_index``. Both callers
+        already release the lock after the pipeline runs, so re-acquiring
+        here is safe and not re-entrant.
         """
         del result  # Only used by callers for diagnostics; we read state directly.
         self._cancel_timeout()
 
-        state = self.session.combat_state
-        if state is None or not state.is_active:
-            await self._finalize()
-            return
+        async with self.session.action_lock:
+            state = self.session.combat_state
+            if state is None or not state.is_active:
+                await self._finalize()
+                return
 
-        advance_turn(state)
-        await self._flush_pending_cues(state)
+            advance_turn(state)
+            await self._flush_pending_cues(state)
 
-        if check_combat_end(state) is not None or not state.is_active:
-            await self._finalize()
-            return
+            if check_combat_end(state) is not None or not state.is_active:
+                await self._finalize()
+                return
 
-        # Persist post-advance_turn state so a disconnect between turns
-        # doesn't lose the rotation / condition ticks / phase transitions
-        # that ``advance_turn`` just applied.
-        await self._persist_state()
+            # Persist post-advance_turn state so a disconnect between turns
+            # doesn't lose the rotation / condition ticks / phase transitions
+            # that ``advance_turn`` just applied.
+            await self._persist_state()
 
-        current = get_current_combatant(state)
+            current = get_current_combatant(state)
+
+        # Release the lock before prompting the next turn — the prompt may
+        # await on Discord I/O for seconds and must not block another action
+        # pipeline from grabbing the lock.
         await self._prompt_turn(current)
 
     async def dispatch_action(self, action: InterpretedAction) -> None:
