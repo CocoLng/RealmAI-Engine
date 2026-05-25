@@ -21,11 +21,24 @@ from sqlalchemy.pool import StaticPool
 
 from ai.client import OllamaClient
 from db.database import Base
+from engine.character import AbilityScores, Race
+from engine.inventory import (
+    DamageType,
+    EquipmentSlot,
+    ItemType,
+    Rarity,
+    Weapon,
+    WeaponCategory,
+    add_item,
+    equip_item,
+)
 from tests.scenarios.scenario_runner import ScenarioRunner
 from tests.simulation.agent import AutonomousAgent, build_observation
 from tests.simulation.checker import IncoherenceChecker
 from tests.simulation.driver import GameDriver
 from tests.simulation.runner import SimulationConfig, SimulationRunner
+from world.location import Location
+from world.npc import NPC, NPCDisposition
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +72,85 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _seed_starting_world(scenario: ScenarioRunner, player_idx: int = 0) -> None:
+    """Populate a minimal starting world so the agent has context to act on.
+
+    Creates a starting Location with one NPC and one connection, equips the
+    character with a starter weapon, and registers everything on the session.
+    """
+    session = scenario.session
+    if session is None:
+        raise RuntimeError("seed_starting_world: no active session")
+
+    # Starting location
+    start = Location(
+        name="Entrée de la grotte",
+        description=(
+            "Une vaste cavité humide s'ouvre devant vous. Des stalactites "
+            "luisent à la lueur d'une torche oubliée. Un passage étroit "
+            "s'enfonce vers le nord."
+        ),
+        arrival_hook=(
+            "Vous franchissez le seuil de la grotte, le bruit du vent "
+            "remplace soudain le calme de l'extérieur."
+        ),
+        connections=["Salle des échos"],
+        exit_aliases={"Salle des échos": ["nord", "north"]},
+        npcs_present=["Garm"],
+    )
+    session.current_location = start
+
+    # NPC: Garm — friendly survivor
+    garm = NPC(
+        name="Garm",
+        race=Race.HUMAN,
+        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=12, WIS=12, CHA=14),
+        hp=8,
+        max_hp=8,
+        ac=10,
+        disposition=NPCDisposition.FRIENDLY,
+        description="Un voyageur usé par la route, blessé à l'épaule.",
+        personality=(
+            "Cordial mais nerveux. Garde un œil sur l'entrée comme si "
+            "quelque chose le poursuivait."
+        ),
+        location_name="Entrée de la grotte",
+        knowledge=["Il y a des gobelins plus profond dans la grotte."],
+    )
+    session.npcs[garm.name] = garm
+
+    # Equip a starter weapon
+    player = scenario._make_player(player_idx)
+    inv = session.inventories.get(player.id)
+    if inv is not None:
+        sword = Weapon(
+            name="Épée courte",
+            item_type=ItemType.WEAPON,
+            weight=2.0,
+            rarity=Rarity.COMMON,
+            value_gp=10,
+            damage_dice="1d6",
+            damage_type=DamageType.PIERCING,
+            weapon_category=WeaponCategory.MARTIAL_MELEE,
+        )
+        inv = add_item(inv, sword)
+        inv = equip_item(inv, sword.name, EquipmentSlot.MAIN_HAND)
+        session.inventories[player.id] = inv
+
+
 def _snapshot_from_session(session) -> dict:
     """Build a JSON-serializable dict from the GameSession."""
     if session is None:
         return {}
     char = next(iter(session.characters.values()), None) if session.characters else None
+    npcs = {n.name: {"status": "alive" if n.is_alive else "dead", "hp": n.hp,
+                     "disposition": n.disposition.value}
+            for n in (session.npcs.values() if session.npcs else [])}
     snap = {
         "campaign_id": session.campaign.id if session.campaign else None,
         "location": getattr(session.current_location, "name", None),
         "combat_active": session.combat_state is not None,
+        "npcs": npcs,
     }
     if char is not None:
         snap["character_name"] = char.name
@@ -110,6 +193,7 @@ async def _run_once(args: argparse.Namespace, seed: int) -> int:
     await scenario.add_player(
         "Aria", race="Elf", class_="Wizard", player_idx=0
     )
+    _seed_starting_world(scenario, player_idx=0)
 
     agent = AutonomousAgent(
         client=client,
@@ -145,6 +229,41 @@ async def _run_once(args: argparse.Namespace, seed: int) -> int:
         loc = sess.current_location
         if char is None or loc is None:
             return f"TURN {turn}\n(no character or location)"
+
+        # Pull inventory + equipment from the real session.
+        player = scenario._make_player(0)
+        inv = sess.inventories.get(player.id)
+        inventory_items: list[str] = []
+        equipped: dict[str, str] = {}
+        if inv is not None:
+            inventory_items = [item.name for item in inv.items]
+            for slot, item in inv.equipped.items():
+                if item is None:
+                    continue
+                slot_label = slot.value if hasattr(slot, "value") else str(slot)
+                item_label = item.name if hasattr(item, "name") else str(item)
+                equipped[slot_label] = item_label
+
+        # NPCs present in the current location (intersect names with registry).
+        npcs_present = [
+            n for n in loc.npcs_present if n in sess.npcs and sess.npcs[n].is_alive
+        ]
+
+        # Map location.connections / exit_aliases into a {direction: target} dict
+        # for the observation builder. Use the first alias of each connection if
+        # available, otherwise the connection name itself.
+        location_with_exits = type(
+            "_Loc",
+            (),
+            {
+                "name": loc.name,
+                "exits": {
+                    (loc.exit_aliases.get(target, [target])[0] if loc.exit_aliases.get(target) else target): target
+                    for target in loc.connections
+                },
+            },
+        )()
+
         return build_observation(
             turn=turn,
             session=type(
@@ -152,12 +271,12 @@ async def _run_once(args: argparse.Namespace, seed: int) -> int:
                 (),
                 {
                     "character": char,
-                    "location": loc,
-                    "inventory_items": [],
-                    "equipped": {},
+                    "location": location_with_exits,
+                    "inventory_items": inventory_items,
+                    "equipped": equipped,
                     "combat_active": sess.combat_state is not None,
                     "combat": sess.combat_state,
-                    "npcs_present": [],
+                    "npcs_present": npcs_present,
                 },
             )(),
             last_actions=[h["intent_action"] for h in runner._history[-3:]],

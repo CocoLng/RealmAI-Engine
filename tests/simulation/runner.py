@@ -27,8 +27,25 @@ def _state_view(snapshot: dict[str, Any], turn: int) -> SimpleNamespace:
     hp = snapshot.get("character_hp")
     max_hp = snapshot.get("character_max_hp")
     ratio = (hp / max_hp) if (isinstance(hp, (int, float)) and isinstance(max_hp, (int, float)) and max_hp) else 1.0
+
+    # NPCs come from snapshot as {name: {status, hp, disposition}} dicts.
+    # Rules duck-type attribute access (npc.name, npc.status, npc.hp), so wrap each.
+    raw_npcs = snapshot.get("npcs", {}) or {}
+    npcs_view: dict[str, SimpleNamespace] = {}
+    for name, data in raw_npcs.items():
+        if isinstance(data, dict):
+            npcs_view[name] = SimpleNamespace(
+                name=name,
+                status=data.get("status", "alive"),
+                hp=data.get("hp", 10),
+                disposition=data.get("disposition", "neutral"),
+            )
+        else:
+            # Already an object — keep as is.
+            npcs_view[name] = data
+
     return SimpleNamespace(
-        npcs=snapshot.get("npcs", {}) or {},
+        npcs=npcs_view,
         current_location=snapshot.get("current_location_obj"),
         combat_active=snapshot.get("combat_active", False),
         combat_state=snapshot.get("combat_state"),
