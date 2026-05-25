@@ -117,6 +117,41 @@ def check_item_use_without_owning(
     return alerts
 
 
+_WOUNDED_RE = re.compile(
+    r"\b(agonise|chancelle|s'effondre|gri[èe]vement bless[ée]|au bord de la mort|"
+    r"à l'agonie|mourant[e]?)\b",
+    re.IGNORECASE,
+)
+
+
+def check_hp_mismatch(
+    narration: str,
+    state: Any,
+    diff: dict[str, list[Any]],
+    history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.hp_mismatch — narration claims wounded/dying while player HP ≥ 80%."""
+    match = _WOUNDED_RE.search(narration)
+    if not match:
+        return []
+    ratio = getattr(state, "player_hp_ratio", 1.0)
+    if ratio < 0.8:
+        return []
+    return [
+        IncoherenceAlert(
+            severity="hard",
+            category="hp_mismatch",
+            turn=getattr(state, "current_turn", 0),
+            rule="R1.hp_mismatch",
+            narration_snippet=_snippet_around(narration, match.group(0)),
+            expected=(
+                f"Player HP = {state.player_hp}/{state.player_max_hp} "
+                f"(ratio {ratio:.2f}), but narration describes wounding"
+            ),
+        )
+    ]
+
+
 def check_phantom_npc(
     narration: str,
     state: Any,

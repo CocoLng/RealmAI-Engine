@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from tests.simulation.rules.hard import check_item_use_without_owning, check_npc_status, check_phantom_npc
+from tests.simulation.rules.hard import check_hp_mismatch, check_item_use_without_owning, check_npc_status, check_phantom_npc
 
 
 @dataclass
@@ -124,4 +124,25 @@ class TestR1ItemUseWithoutOwning:
         state = FakeState(inventory=FakeInventory(items=["Épée longue"]))
         narration = "Une potion de soin trône sur l'étagère."
         alerts = check_item_use_without_owning(narration, state, diff={}, history=[])
+        assert alerts == []
+
+
+class TestR1HpMismatch:
+    def test_wounded_narration_full_hp_triggers(self) -> None:
+        state = FakeState(player_hp=15, player_max_hp=15, player_hp_ratio=1.0)
+        narration = "Aria agonise au sol, grièvement blessée."
+        alerts = check_hp_mismatch(narration, state, diff={}, history=[])
+        assert len(alerts) == 1
+        assert alerts[0].rule == "R1.hp_mismatch"
+
+    def test_wounded_narration_low_hp_no_trigger(self) -> None:
+        state = FakeState(player_hp=2, player_max_hp=15, player_hp_ratio=0.13)
+        narration = "Aria agonise au sol."
+        alerts = check_hp_mismatch(narration, state, diff={}, history=[])
+        assert alerts == []
+
+    def test_neutral_narration_no_trigger(self) -> None:
+        state = FakeState(player_hp=15, player_max_hp=15, player_hp_ratio=1.0)
+        narration = "Aria avance prudemment dans la grotte."
+        alerts = check_hp_mismatch(narration, state, diff={}, history=[])
         assert alerts == []
