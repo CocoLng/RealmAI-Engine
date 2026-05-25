@@ -152,6 +152,44 @@ def check_hp_mismatch(
     ]
 
 
+def check_location_mismatch(
+    narration: str,
+    state: Any,
+    diff: dict[str, list[Any]],
+    history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.location_mismatch — a known location other than current is described as present."""
+    current = getattr(state.current_location, "name", None)
+    if current is None:
+        return []
+    if not history:
+        return []
+    last = history[-1] if isinstance(history[-1], dict) else {}
+    if last.get("moved_this_turn"):
+        return []
+    known = last.get("location_known", []) or []
+    alerts: list[IncoherenceAlert] = []
+    narration_lower = narration.lower()
+    for loc_name in known:
+        if loc_name == current:
+            continue
+        if loc_name.lower() in narration_lower:
+            alerts.append(
+                IncoherenceAlert(
+                    severity="hard",
+                    category="location_mismatch",
+                    turn=getattr(state, "current_turn", 0),
+                    rule="R1.location_mismatch",
+                    narration_snippet=_snippet_around(narration, loc_name),
+                    expected=(
+                        f"Current location is '{current}' and player did not move "
+                        f"this turn, but narration mentions '{loc_name}'"
+                    ),
+                )
+            )
+    return alerts
+
+
 def check_phantom_npc(
     narration: str,
     state: Any,

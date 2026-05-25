@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from tests.simulation.rules.hard import check_hp_mismatch, check_item_use_without_owning, check_npc_status, check_phantom_npc
+from tests.simulation.rules.hard import check_hp_mismatch, check_item_use_without_owning, check_location_mismatch, check_npc_status, check_phantom_npc
 
 
 @dataclass
@@ -145,4 +145,37 @@ class TestR1HpMismatch:
         state = FakeState(player_hp=15, player_max_hp=15, player_hp_ratio=1.0)
         narration = "Aria avance prudemment dans la grotte."
         alerts = check_hp_mismatch(narration, state, diff={}, history=[])
+        assert alerts == []
+
+
+@dataclass
+class FakeLocation:
+    name: str
+    aliases: list[str] = field(default_factory=list)
+
+
+class TestR1LocationMismatch:
+    def test_other_location_mentioned_no_movement_triggers(self) -> None:
+        state = FakeState(current_location=FakeLocation(name="Cave entrance"))
+        narration = "Le héros traverse la Grande Bibliothèque."
+        history = [
+            {"location_known": ["Cave entrance", "Grande Bibliothèque"], "moved_this_turn": False}
+        ]
+        alerts = check_location_mismatch(narration, state, diff={}, history=history)
+        assert any(a.rule == "R1.location_mismatch" for a in alerts)
+
+    def test_moved_this_turn_no_trigger(self) -> None:
+        state = FakeState(current_location=FakeLocation(name="Cave entrance"))
+        narration = "Le héros traverse la Grande Bibliothèque."
+        history = [
+            {"location_known": ["Cave entrance", "Grande Bibliothèque"], "moved_this_turn": True}
+        ]
+        alerts = check_location_mismatch(narration, state, diff={}, history=history)
+        assert alerts == []
+
+    def test_same_location_no_trigger(self) -> None:
+        state = FakeState(current_location=FakeLocation(name="Cave entrance"))
+        narration = "Le héros observe l'entrée de la grotte."
+        history = [{"location_known": ["Cave entrance"], "moved_this_turn": False}]
+        alerts = check_location_mismatch(narration, state, diff={}, history=history)
         assert alerts == []
