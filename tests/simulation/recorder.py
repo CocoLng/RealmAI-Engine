@@ -70,3 +70,83 @@ class Recorder:
             file=sys.stderr,
         )
         print(f"     expected: {alert.expected}", file=sys.stderr)
+
+    def finalize(
+        self,
+        *,
+        outcome_status: str,
+        wall_time_s: float,
+        config: dict,
+        final_state: dict,
+    ) -> None:
+        """Write report.md, final_state.json, and config.json."""
+        (self.run_dir / "final_state.json").write_text(
+            json.dumps(final_state, indent=2, default=str),
+            encoding="utf-8",
+        )
+        (self.run_dir / "config.json").write_text(
+            json.dumps(config, indent=2, default=str),
+            encoding="utf-8",
+        )
+        report = self._build_report(
+            outcome_status=outcome_status, wall_time_s=wall_time_s
+        )
+        (self.run_dir / "report.md").write_text(report, encoding="utf-8")
+
+    def _build_report(self, *, outcome_status: str, wall_time_s: float) -> str:
+        n_turns = len(self._records)
+        all_alerts: list[IncoherenceAlert] = [
+            a for rec in self._records for a in rec.alerts
+        ]
+        hard = [a for a in all_alerts if a.severity == "hard"]
+        soft = [a for a in all_alerts if a.severity == "soft"]
+        drift = [a for a in all_alerts if a.severity == "drift"]
+
+        lines = [
+            "# Simulation Run Report",
+            "",
+            "## Outcome",
+            f"- Status: **{outcome_status}**",
+            f"- Wall time: {wall_time_s:.1f} s",
+            f"- Turns: {n_turns}",
+            f"- Alerts: {len(all_alerts)} (hard={len(hard)}, soft={len(soft)}, drift={len(drift)})",
+            "",
+        ]
+
+        if all_alerts:
+            lines.append("## Alerts")
+            lines.append("")
+            lines.append("| Turn | Severity | Rule | Snippet |")
+            lines.append("|------|----------|------|---------|")
+            for a in all_alerts:
+                snippet = a.narration_snippet.replace("|", "\\|").replace("\n", " ")[:80]
+                lines.append(f"| {a.turn} | {a.severity} | {a.rule} | {snippet} |")
+            lines.append("")
+
+        lines.append("## Turn-by-turn")
+        for rec in self._records:
+            intent_args = (
+                "(" + ",".join(f"{k}={v}" for k, v in rec.intent.args.items()) + ")"
+                if rec.intent.args
+                else ""
+            )
+            lines.extend(
+                [
+                    f"### Turn {rec.turn} — {rec.intent.action}{intent_args}",
+                    f"**Intent reasoning:** {rec.intent.reasoning}",
+                    "",
+                    f"**Narration:** {rec.outcome.narration.strip()[:500]}",
+                    "",
+                ]
+            )
+            if rec.diff:
+                lines.append("**Diff:**")
+                for path, change in rec.diff.items():
+                    lines.append(f"- `{path}`: {change[0]} → {change[1]}")
+                lines.append("")
+            if rec.alerts:
+                lines.append("**Alerts this turn:**")
+                for a in rec.alerts:
+                    lines.append(f"- `{a.rule}` ({a.severity}): {a.expected}")
+                lines.append("")
+        return "\n".join(lines)
