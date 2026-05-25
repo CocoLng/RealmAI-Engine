@@ -277,6 +277,57 @@ class TestQuestMapper:
         assert row.status == "active"
 
 
+class TestCorruptedDataResilience:
+    """A single corrupted JSON entry must not crash the whole entity load."""
+
+    def test_corrupted_objective_is_skipped(
+        self, sample_quest: Quest, caplog,
+    ) -> None:
+        row = quest_to_db(sample_quest, "c")
+        # Inject a malformed objective alongside the valid ones.
+        row.objectives = [
+            row.objectives[0],
+            {"not": "valid"},
+            row.objectives[1],
+        ]
+        restored = quest_from_db(row)
+        # Bad entry dropped; valid ones survive.
+        assert len(restored.objectives) == 2
+        assert restored.objectives[0].description == sample_quest.objectives[0].description
+
+    def test_corrupted_zone_is_skipped(self) -> None:
+        from world.combat_zone import Zone
+        loc = Location(name="Hall", combat_zones=[Zone(name="Z1")])
+        row = location_to_db(loc, "c")
+        # Inject a bogus zone dict
+        row.combat_zones = [row.combat_zones[0], {"bogus": "fields"}]  # missing name
+        restored = location_from_db(row)
+        assert len(restored.combat_zones) == 1
+        assert restored.combat_zones[0].name == "Z1"
+
+    def test_corrupted_dialogue_entry_is_skipped(self) -> None:
+        npc = NPC(
+            name="Gunther",
+            race=Race.HUMAN,
+            ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+            hp=10,
+            max_hp=10,
+            ac=10,
+            disposition=NPCDisposition.NEUTRAL,
+            dialogue_history=[
+                DialogueExchange(player_said="Hi", npc_said="Hello"),
+            ],
+        )
+        row = npc_to_db(npc, "c")
+        row.dialogue_history = [
+            row.dialogue_history[0],
+            {"bogus": True},
+        ]
+        restored = npc_from_db(row)
+        assert len(restored.dialogue_history) == 1
+        assert restored.dialogue_history[0].player_said == "Hi"
+
+
 class TestPlayerCharacterMapper:
     """PlayerCharacter mapper round-trip tests."""
 

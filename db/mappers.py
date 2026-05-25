@@ -4,7 +4,11 @@ Each entity has a to_db() and from_db() mapper. JSON fields use
 Pydantic's model_dump/model_validate for serialization.
 """
 
+import logging
 from datetime import datetime
+from typing import TypeVar
+
+from pydantic import BaseModel, ValidationError
 
 from engine.character import AbilityScores, Character, CharacterClass, Race
 from engine.inventory import Inventory
@@ -34,6 +38,76 @@ from db.models import (
     StoryArcRow,
     SummaryRow,
 )
+
+logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T", bound=BaseModel)
+
+
+def _validate_list(
+    model_cls: type[_T],
+    raw_items: list | None,
+    *,
+    context: str,
+) -> list[_T]:
+    """Validate a list of dicts into Pydantic models, skipping bad entries.
+
+    Logs each failed item with ``context`` (e.g. ``"NPC dialogue_history npc=Goblin"``)
+    so a single corrupted entry never crashes campaign load. Returns an empty
+    list if ``raw_items`` is falsy.
+    """
+    if not raw_items:
+        return []
+    validated: list[_T] = []
+    for index, item in enumerate(raw_items):
+        try:
+            validated.append(model_cls.model_validate(item))
+        except ValidationError as exc:
+            logger.warning(
+                "Skipping invalid %s[%d] in %s: %s",
+                model_cls.__name__, index, context, exc,
+            )
+    return validated
+
+
+def _validate_dict(
+    model_cls: type[_T],
+    raw_items: dict | None,
+    *,
+    context: str,
+) -> dict[str, _T]:
+    """Validate a dict-of-dicts into Pydantic models, skipping bad entries."""
+    if not raw_items:
+        return {}
+    validated: dict[str, _T] = {}
+    for key, value in raw_items.items():
+        try:
+            validated[str(key)] = model_cls.model_validate(value)
+        except ValidationError as exc:
+            logger.warning(
+                "Skipping invalid %s[%r] in %s: %s",
+                model_cls.__name__, key, context, exc,
+            )
+    return validated
+
+
+def _safe_validate_json(
+    model_cls: type[_T],
+    raw_json: str | None,
+    *,
+    context: str,
+) -> _T | None:
+    """Validate a JSON string into a Pydantic model, returning None on failure."""
+    if not raw_json:
+        return None
+    try:
+        return model_cls.model_validate_json(raw_json)
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid %s JSON in %s, treating as missing: %s",
+            model_cls.__name__, context, exc,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -116,15 +190,15 @@ def npc_from_db(row: NPCRow) -> NPC:
         aliases=list(row.aliases) if row.aliases else [],
         secrets=list(row.secrets) if row.secrets else [],
         knowledge=list(row.knowledge) if row.knowledge else [],
-        dialogue_history=[
-            DialogueExchange.model_validate(exch) for exch in row.dialogue_history
-        ]
-        if row.dialogue_history
-        else [],
-        stat_block=(
-            NPCStatBlock.model_validate_json(row.stat_block_json)
-            if row.stat_block_json
-            else None
+        dialogue_history=_validate_list(
+            DialogueExchange,
+            row.dialogue_history,
+            context=f"NPC dialogue_history npc={row.name!r}",
+        ),
+        stat_block=_safe_validate_json(
+            NPCStatBlock,
+            row.stat_block_json,
+            context=f"NPC stat_block npc={row.name!r}",
         ),
     )
 
@@ -175,13 +249,14 @@ def location_from_db(row: LocationRow) -> Location:
         state_flags=dict(row.state_flags) if row.state_flags else {},
         unlocked_exits=list(row.unlocked_exits) if row.unlocked_exits else [],
         generated=bool(row.generated),
-        combat_zones=[Zone.model_validate(z) for z in row.combat_zones]
-        if row.combat_zones
-        else [],
-        combat_triggers={
-            str(key): CombatTriggerDef.model_validate(value)
-            for key, value in (row.combat_triggers or {}).items()
-        },
+        combat_zones=_validate_list(
+            Zone, row.combat_zones, context=f"Location combat_zones name={row.name!r}",
+        ),
+        combat_triggers=_validate_dict(
+            CombatTriggerDef,
+            row.combat_triggers,
+            context=f"Location combat_triggers name={row.name!r}",
+        ),
         npc_roles={
             str(key): str(value)
             for key, value in (row.npc_roles or {}).items()
@@ -214,7 +289,11 @@ def quest_from_db(row: QuestRow) -> Quest:
         title=row.title,
         description=row.description,
         status=QuestStatus(row.status),
-        objectives=[QuestObjective.model_validate(o) for o in row.objectives] if row.objectives else [],
+        objectives=_validate_list(
+            QuestObjective,
+            row.objectives,
+            context=f"Quest objectives title={row.title!r}",
+        ),
         reward_xp=row.reward_xp,
         reward_gold=row.reward_gold,
         giver_npc=row.giver_npc,
