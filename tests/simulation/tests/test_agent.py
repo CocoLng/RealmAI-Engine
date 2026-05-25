@@ -117,3 +117,53 @@ class TestBuildObservation:
             last_narration="",
         )
         assert len(obs.split()) < 600
+
+
+from unittest.mock import MagicMock
+
+from tests.simulation.agent import AutonomousAgent
+
+
+class TestAutonomousAgentDecide:
+    def test_valid_intent_parsed(self) -> None:
+        # Mock the LLM client to return a valid intent JSON.
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "reasoning": "look around first",
+            "action": "look",
+            "args": {},
+            "raw_text": None,
+        }
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b")
+        intent = agent.decide(observation="TURN 1\n...")
+        assert intent.action == "look"
+        assert intent.reasoning == "look around first"
+        client.chat_json.assert_called_once()
+
+    def test_invalid_intent_retries_then_returns(self) -> None:
+        client = MagicMock()
+        # First two calls return garbage, third returns valid.
+        client.chat_json.side_effect = [
+            {"reasoning": "x", "action": "dance"},  # invalid action
+            {"reasoning": "y", "action": "free_form"},  # missing raw_text
+            {"reasoning": "z", "action": "look", "args": {}, "raw_text": None},
+        ]
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=3)
+        intent = agent.decide(observation="TURN 1\n...")
+        assert intent.action == "look"
+        assert client.chat_json.call_count == 3
+
+    def test_exhausted_retries_falls_back_to_safe_default(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {"action": "dance"}  # always invalid
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=2)
+        intent = agent.decide(observation="TURN 1\nCombat: not in combat")
+        assert intent.action == "look"  # safe default out of combat
+        assert intent.reasoning.startswith("fallback")
+
+    def test_exhausted_retries_in_combat_falls_back_to_defend(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {"action": "dance"}
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=2)
+        intent = agent.decide(observation="TURN 1\nCombat: IN COMBAT")
+        assert intent.action == "defend"
