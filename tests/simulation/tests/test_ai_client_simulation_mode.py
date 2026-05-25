@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from pytest_httpx import HTTPXMock
 
 from ai.client import OllamaClient

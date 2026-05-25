@@ -146,7 +146,7 @@ def check_unknown_proper_noun(
     known_names = (
         {n.lower() for n in state.npcs}
         | {p.lower() for p in getattr(state, "player_names", [])}
-        | {l.lower() for l in getattr(state, "locations_known", [])}
+        | {loc.lower() for loc in getattr(state, "locations_known", [])}
         | {f.lower() for f in getattr(state, "factions_known", [])}
     )
     seen: set[str] = set()

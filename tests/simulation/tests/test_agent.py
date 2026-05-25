@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from unittest.mock import MagicMock
 
-import pytest
-
-from tests.simulation.agent import build_observation
+from tests.simulation.agent import AutonomousAgent, build_observation, is_legal
+from tests.simulation.records import AgentIntent
 
 
 @dataclass
@@ -119,11 +118,6 @@ class TestBuildObservation:
         assert len(obs.split()) < 600
 
 
-from unittest.mock import MagicMock
-
-from tests.simulation.agent import AutonomousAgent
-
-
 class TestAutonomousAgentDecide:
     def test_valid_intent_parsed(self) -> None:
         # Mock the LLM client to return a valid intent JSON.
@@ -167,11 +161,6 @@ class TestAutonomousAgentDecide:
         agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=2)
         intent = agent.decide(observation="TURN 1\nCombat: IN COMBAT")
         assert intent.action == "defend"
-
-
-from tests.simulation.agent import is_legal
-
-from tests.simulation.records import AgentIntent
 
 
 class FakeStateForLegality:
@@ -272,7 +261,7 @@ class TestAntiDeadlockHint:
         agent = AutonomousAgent(client=client, model="qwen3.5:4b")
         # Simulate 4 prior identical look intents → hint should be injected
         history = [{"intent_action": "look", "intent_args": {}}] * 4
-        intent = agent.decide(observation="TURN 5\n...", history=history)
+        agent.decide(observation="TURN 5\n...", history=history)
         # Check that the messages included the corrective hint
         call_args = client.chat_json.call_args
         messages = (

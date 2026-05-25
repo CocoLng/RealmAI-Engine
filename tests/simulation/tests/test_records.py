@@ -31,7 +31,7 @@ class TestAgentIntent:
 
     def test_unknown_action_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            AgentIntent(reasoning="x", action="dance", args={})
+            AgentIntent(reasoning="x", action="dance", args={})  # type: ignore[arg-type]
 
     def test_reasoning_max_length(self) -> None:
         with pytest.raises(ValidationError):
@@ -54,7 +54,7 @@ class TestIncoherenceAlert:
     def test_severity_enum(self) -> None:
         with pytest.raises(ValidationError):
             IncoherenceAlert(
-                severity="critical",  # not in enum
+                severity="critical",  # type: ignore[arg-type]  # not in enum
                 category="x",
                 turn=1,
                 rule="r",

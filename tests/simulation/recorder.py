@@ -41,7 +41,7 @@ class Recorder:
             + record.outcome.timing_ms.narrator
         ) / 1000.0
         intent = record.intent
-        action_str = intent.action
+        action_str: str = intent.action
         if intent.args:
             args_str = ",".join(f"{k}={v}" for k, v in intent.args.items())
             action_str += f"({args_str})"

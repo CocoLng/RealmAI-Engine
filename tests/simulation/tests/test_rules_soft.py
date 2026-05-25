@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from tests.simulation.rules.soft import (
     check_npc_name_drift,
