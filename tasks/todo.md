@@ -106,6 +106,14 @@ remaining work.
 
 Recommended order: **1+2 → 3 → 4 → 5**.
 
+### Deferred follow-up
+- [ ] **Narrator monotony at T=0** — R2.repetition flagged a real Narrator
+      pattern during the 2026-05-25 testing pass (identical text on T1 and
+      T4 of the same `talk` action). Wave 2 mitigates indirectly via state
+      mutation per turn, but the root cause (deterministic Narrator at
+      `temperature=0` with identical memory context) is unfixed. Revisit
+      if simulator runs keep flagging R2.repetition on `talk`/`look`.
+
 ## Chantier en cours : Système de Combat D&D 5e
 
 Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.md` pour les fiches détaillées.

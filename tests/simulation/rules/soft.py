@@ -42,7 +42,7 @@ def check_repetition(
     history: list[Any],
 ) -> list[IncoherenceAlert]:
     """R2.repetition — narration matches a phrase from any of the last 5 turns
-    by ≥10 consecutive words."""
+    by ≥8 consecutive words."""
     window = history[-5:] if history else []
     words = narration.split()
     for prev in window:
