@@ -15,6 +15,21 @@ logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+_POLICY_ADDENDA: dict[str, str] = {
+    "balanced": (
+        "Play with a balanced mix of combat, exploration, and dialogue. Use "
+        "free_form actions occasionally (every 3-4 exploration turns)."
+    ),
+    "combat_focused": (
+        "Bias your play toward combat. Engage enemies whenever possible. "
+        "Seek out fights; attack and cast offensive spells aggressively."
+    ),
+    "story_focused": (
+        "Bias your play toward narrative and dialogue. Prefer talk and "
+        "free_form actions over combat. Avoid initiating fights when possible."
+    ),
+}
+
 
 def _load_system_prompt() -> str:
     return (_PROMPTS_DIR / "agent_system.txt").read_text(encoding="utf-8")
@@ -38,13 +53,22 @@ class AutonomousAgent:
         model: str = "qwen3.5:4b",
         max_retries: int = 3,
         temperature: float = 0.3,
+        policy: str = "balanced",
     ) -> None:
         self.client = client
         self.model = model
         self.max_retries = max_retries
         self.temperature = temperature
-        self._system_prompt = _load_system_prompt()
+        self.policy = policy
+        self._system_prompt = _load_system_prompt() + "\n\n" + self._policy_addendum()
         self._few_shots = _load_few_shots()
+
+    def _policy_addendum(self) -> str:
+        """Return a policy-specific addendum to append to the system prompt."""
+        text = _POLICY_ADDENDA.get(self.policy)
+        if text is None:
+            text = _POLICY_ADDENDA["balanced"]
+        return f"[POLICY: {self.policy}] {text}"
 
     def _build_messages(
         self,

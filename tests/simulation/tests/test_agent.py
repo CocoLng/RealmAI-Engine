@@ -249,6 +249,56 @@ class TestIsLegal:
         assert legal is True
 
 
+class TestPolicyAddendum:
+    def test_balanced_policy_default(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "reasoning": "r", "action": "look", "args": {}, "raw_text": None
+        }
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", policy="balanced")
+        agent.decide(observation="TURN 1\n...")
+        system_msg = client.chat_json.call_args.kwargs["messages"][0]["content"]
+        # balanced is the default — its addendum should mention "balanced" or "mix"
+        assert "balanced" in system_msg.lower() or "mix" in system_msg.lower()
+
+    def test_combat_focused_policy_addendum(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "reasoning": "r", "action": "look", "args": {}, "raw_text": None
+        }
+        agent = AutonomousAgent(
+            client=client, model="qwen3.5:4b", policy="combat_focused"
+        )
+        agent.decide(observation="TURN 1\n...")
+        system_msg = client.chat_json.call_args.kwargs["messages"][0]["content"]
+        assert "combat" in system_msg.lower() and "engage" in system_msg.lower()
+
+    def test_story_focused_policy_addendum(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "reasoning": "r", "action": "look", "args": {}, "raw_text": None
+        }
+        agent = AutonomousAgent(
+            client=client, model="qwen3.5:4b", policy="story_focused"
+        )
+        agent.decide(observation="TURN 1\n...")
+        system_msg = client.chat_json.call_args.kwargs["messages"][0]["content"]
+        assert "talk" in system_msg.lower() or "dialogue" in system_msg.lower() \
+            or "narrative" in system_msg.lower()
+
+    def test_unknown_policy_falls_back_to_balanced(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "reasoning": "r", "action": "look", "args": {}, "raw_text": None
+        }
+        # Should not raise — falls back to balanced
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", policy="garbage")
+        agent.decide(observation="TURN 1\n...")
+        # Still emits a valid system prompt
+        system_msg = client.chat_json.call_args.kwargs["messages"][0]["content"]
+        assert "JSON" in system_msg
+
+
 class TestAntiDeadlockHint:
     def test_repeated_action_triggers_hint(self) -> None:
         client = MagicMock()

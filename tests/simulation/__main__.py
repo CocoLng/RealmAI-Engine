@@ -108,7 +108,10 @@ async def _run_once(args: argparse.Namespace, seed: int) -> int:
     )
 
     agent = AutonomousAgent(
-        client=client, model="qwen3.5:4b", temperature=args.agent_temp
+        client=client,
+        model="qwen3.5:4b",
+        temperature=args.agent_temp,
+        policy=args.policy,
     )
     driver = GameDriver(scenario_runner=scenario)
     checker = IncoherenceChecker()
