@@ -71,9 +71,14 @@ class AutonomousAgent:
         messages.append({"role": "user", "content": user_content})
         return messages
 
-    def decide(self, observation: str) -> AgentIntent:
+    def decide(
+        self,
+        observation: str,
+        history: list[dict[str, Any]] | None = None,
+    ) -> AgentIntent:
         """Return a valid AgentIntent, retrying or falling back as needed."""
-        hint: str | None = None
+        anti_deadlock_hint = self._anti_deadlock_hint(history or [])
+        hint: str | None = anti_deadlock_hint
         last_err: str | None = None
         for attempt in range(self.max_retries):
             messages = self._build_messages(observation, corrective_hint=hint)
@@ -85,7 +90,10 @@ class AutonomousAgent:
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("LLM call failed attempt=%d: %s", attempt, e)
-                hint = "Previous response could not be parsed. Return strict JSON."
+                hint = (
+                    "Previous response could not be parsed. Return strict JSON. "
+                    + (anti_deadlock_hint or "")
+                ).strip()
                 last_err = str(e)
                 continue
             try:
@@ -97,8 +105,11 @@ class AutonomousAgent:
                 last_err = str(e)
                 hint = (
                     "Your previous response was invalid. Return EXACTLY one JSON "
-                    "object matching the schema. Errors: " + last_err[:200]
-                )
+                    "object matching the schema. Errors: "
+                    + last_err[:200]
+                    + " "
+                    + (anti_deadlock_hint or "")
+                ).strip()
                 continue
         logger.warning(
             "Agent exhausted %d retries (last_err=%s) — falling back",
@@ -106,6 +117,22 @@ class AutonomousAgent:
             last_err,
         )
         return self._safe_fallback(observation, reason=last_err or "exhausted_retries")
+
+    @staticmethod
+    def _anti_deadlock_hint(history: list[dict[str, Any]]) -> str | None:
+        """Inject a hint if the last 4 turns chose the same (action, args)."""
+        if len(history) < 4:
+            return None
+        last_four = history[-4:]
+        first = (last_four[0].get("intent_action"), last_four[0].get("intent_args"))
+        if all(
+            (h.get("intent_action"), h.get("intent_args")) == first for h in last_four
+        ):
+            return (
+                "You are repeating the same action 4 turns in a row. "
+                "Pick a DIFFERENT action this turn to vary the play."
+            )
+        return None
 
     @staticmethod
     def _safe_fallback(observation: str, *, reason: str) -> AgentIntent:
@@ -186,3 +213,58 @@ def build_observation(
         lines.append(f'Last narration: "{snippet}"')
 
     return "\n".join(lines)
+
+
+def is_legal(intent: AgentIntent, state: Any) -> tuple[bool, str | None]:
+    """Check whether the intent is legal given the current game state.
+
+    Returns (True, None) if legal, (False, reason) otherwise.
+    """
+    action = intent.action
+    args = intent.args
+
+    if action == "attack":
+        if not state.combat_active:
+            return False, "attack is only legal in combat"
+        target = args.get("target")
+        if not target or target not in getattr(state, "living_enemies", []):
+            return False, f"target '{target}' is not a living enemy"
+        return True, None
+
+    if action == "cast_spell":
+        spell = args.get("spell")
+        if spell not in getattr(state, "spellbook", []):
+            return False, f"spell '{spell}' not in spellbook"
+        if state.mana <= 0:
+            return False, "insufficient mana"
+        return True, None
+
+    if action == "move":
+        if state.combat_active:
+            return False, "cannot move during combat"
+        direction = args.get("direction")
+        if direction not in getattr(state, "location_exits", []):
+            return False, f"direction '{direction}' is not a valid exit"
+        return True, None
+
+    if action in {"equip", "unequip"}:
+        item = args.get("item")
+        if action == "equip" and item not in getattr(state, "inventory_items", []):
+            return False, f"item '{item}' not in inventory"
+        return True, None
+
+    if action == "use_item":
+        item = args.get("item")
+        if item not in getattr(state, "consumable_items", []):
+            return False, f"'{item}' is not a usable consumable"
+        return True, None
+
+    if action == "free_form":
+        if not intent.raw_text or not intent.raw_text.strip():
+            return False, "free_form requires non-empty raw_text"
+        if len(intent.raw_text) > 200:
+            return False, "raw_text too long (>200 chars)"
+        return True, None
+
+    # look, talk, search, defend, flee, wait — always legal at this layer.
+    return True, None

@@ -167,3 +167,122 @@ class TestAutonomousAgentDecide:
         agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=2)
         intent = agent.decide(observation="TURN 1\nCombat: IN COMBAT")
         assert intent.action == "defend"
+
+
+from tests.simulation.agent import is_legal
+
+from tests.simulation.records import AgentIntent
+
+
+class FakeStateForLegality:
+    def __init__(self, **kwargs) -> None:
+        self.combat_active = kwargs.get("combat_active", False)
+        self.living_enemies = kwargs.get("living_enemies", [])
+        self.location_exits = kwargs.get("location_exits", [])
+        self.inventory_items = kwargs.get("inventory_items", [])
+        self.consumable_items = kwargs.get("consumable_items", [])
+        self.spellbook = kwargs.get("spellbook", [])
+        self.mana = kwargs.get("mana", 10)
+
+
+class TestIsLegal:
+    def test_attack_legal_in_combat_with_valid_target(self) -> None:
+        state = FakeStateForLegality(combat_active=True, living_enemies=["Goblin_1"])
+        intent = AgentIntent(
+            reasoning="r", action="attack", args={"target": "Goblin_1"}, raw_text=None
+        )
+        legal, reason = is_legal(intent, state)
+        assert legal is True
+
+    def test_attack_illegal_out_of_combat(self) -> None:
+        state = FakeStateForLegality(combat_active=False)
+        intent = AgentIntent(
+            reasoning="r", action="attack", args={"target": "Goblin_1"}, raw_text=None
+        )
+        legal, reason = is_legal(intent, state)
+        assert legal is False
+        assert reason and "combat" in reason.lower()
+
+    def test_move_illegal_in_combat(self) -> None:
+        state = FakeStateForLegality(combat_active=True, location_exits=["north"])
+        intent = AgentIntent(
+            reasoning="r", action="move", args={"direction": "north"}, raw_text=None
+        )
+        legal, reason = is_legal(intent, state)
+        assert legal is False
+
+    def test_move_legal_with_valid_direction(self) -> None:
+        state = FakeStateForLegality(combat_active=False, location_exits=["north"])
+        intent = AgentIntent(
+            reasoning="r", action="move", args={"direction": "north"}, raw_text=None
+        )
+        legal, reason = is_legal(intent, state)
+        assert legal is True
+
+    def test_use_item_requires_consumable(self) -> None:
+        state = FakeStateForLegality(
+            inventory_items=["Quarterstaff"], consumable_items=[]
+        )
+        intent = AgentIntent(
+            reasoning="r",
+            action="use_item",
+            args={"item": "Quarterstaff"},
+            raw_text=None,
+        )
+        legal, reason = is_legal(intent, state)
+        assert legal is False
+
+    def test_use_item_legal_consumable(self) -> None:
+        state = FakeStateForLegality(
+            inventory_items=["Healing potion"], consumable_items=["Healing potion"]
+        )
+        intent = AgentIntent(
+            reasoning="r",
+            action="use_item",
+            args={"item": "Healing potion"},
+            raw_text=None,
+        )
+        legal, reason = is_legal(intent, state)
+        assert legal is True
+
+    def test_free_form_legal_with_raw_text(self) -> None:
+        state = FakeStateForLegality()
+        intent = AgentIntent(
+            reasoning="r", action="free_form", args={}, raw_text="je fouille le coffre"
+        )
+        legal, _ = is_legal(intent, state)
+        assert legal is True
+
+    def test_look_always_legal(self) -> None:
+        state = FakeStateForLegality()
+        intent = AgentIntent(reasoning="r", action="look", args={}, raw_text=None)
+        legal, _ = is_legal(intent, state)
+        assert legal is True
+
+
+class TestAntiDeadlockHint:
+    def test_repeated_action_triggers_hint(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "reasoning": "r",
+            "action": "look",
+            "args": {},
+            "raw_text": None,
+        }
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b")
+        # Simulate 4 prior identical look intents → hint should be injected
+        history = [{"intent_action": "look", "intent_args": {}}] * 4
+        intent = agent.decide(observation="TURN 5\n...", history=history)
+        # Check that the messages included the corrective hint
+        call_args = client.chat_json.call_args
+        messages = (
+            call_args.kwargs.get("messages")
+            if call_args.kwargs
+            else call_args.args[1]
+        )
+        last = messages[-1]["content"]
+        assert (
+            "repeating" in last.lower()
+            or "vary" in last.lower()
+            or "differ" in last.lower()
+        )
