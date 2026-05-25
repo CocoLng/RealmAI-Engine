@@ -1075,6 +1075,15 @@ class SessionCog(commands.Cog):
             )
             return
 
+        # Host-only gate. creator_id == 0 means a legacy/test session with no
+        # recorded host (older saves predate the field), so we allow those.
+        if session.creator_id != 0 and interaction.user.id != session.creator_id:
+            await interaction.response.send_message(
+                "Seul l'hôte de la campagne peut la terminer.",
+                ephemeral=True,
+            )
+            return
+
         try:
             await interaction.response.defer()
         except discord.NotFound:

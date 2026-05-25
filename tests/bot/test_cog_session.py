@@ -330,6 +330,50 @@ class TestEndCampaign:
         interaction.response.send_message.assert_called_once()
         assert interaction.response.send_message.call_args[1].get("ephemeral") is True
 
+    @pytest.mark.asyncio
+    async def test_end_rejects_non_host(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """A player who is not the campaign host cannot end the campaign."""
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+        # Interaction comes from a *different* user
+        interaction.user.id = PLAYER_ID
+
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        interaction.response.send_message.assert_called_once()
+        msg = interaction.response.send_message.call_args[0][0]
+        assert "hôte" in msg.lower() or "host" in msg.lower()
+        assert interaction.response.send_message.call_args[1].get("ephemeral") is True
+        # Defer + archive must NOT have been called
+        interaction.response.defer.assert_not_called()
+        # Session is still alive
+        assert CHANNEL_ID in cog.bot.sessions
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_allows_host(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """The campaign host can end the campaign."""
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+        interaction.user.id = USER_ID
+
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        interaction.response.defer.assert_called_once()
+        mock_archive.assert_called_once()
+        assert CHANNEL_ID not in cog.bot.sessions
+
 
 # ---------------------------------------------------------------------------
 # /settings
