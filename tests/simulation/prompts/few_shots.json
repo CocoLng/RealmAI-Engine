@@ -1,0 +1,44 @@
+{
+  "exploration": [
+    {
+      "observation": "TURN 1\nYou play: Aria (Elf, Wizard, lvl 1, HP 15/15)\nLocation: Cave entrance. Exits: north → Cave deep\nEquipped: Quarterstaff\nInventory: Healing potion (x2)\nCombat: not in combat\nNPCs present: none\nLast 3 turns: -, -, -",
+      "intent": {
+        "reasoning": "First turn, observe the surroundings before moving in",
+        "action": "look",
+        "args": {},
+        "raw_text": null
+      }
+    },
+    {
+      "observation": "TURN 3\nYou play: Aria (Elf, Wizard, lvl 1, HP 15/15)\nLocation: Cave entrance. Exits: north → Cave deep\nCombat: not in combat\nNPCs present: Garm (friendly)\nLast 3 turns: look, look, look",
+      "intent": {
+        "reasoning": "Garm is here and I've been idle — engage in conversation",
+        "action": "talk",
+        "args": {"npc": "Garm"},
+        "raw_text": null
+      }
+    }
+  ],
+  "combat": [
+    {
+      "observation": "TURN 5\nYou play: Aria (Elf, Wizard, lvl 1, HP 12/15)\nCombat: IN COMBAT, your turn\n  Enemies: Goblin_1 HP 4/4 AC 12; Goblin_2 HP 1/4 AC 12 (BLOODIED)\nEquipped: Quarterstaff\nLast 3 turns: look, attack(Goblin_2), -",
+      "intent": {
+        "reasoning": "Goblin_2 is bloodied, finishing it removes one threat",
+        "action": "attack",
+        "args": {"target": "Goblin_2"},
+        "raw_text": null
+      }
+    }
+  ],
+  "free_form": [
+    {
+      "observation": "TURN 8\nYou play: Aria (Elf, Wizard, lvl 1, HP 15/15)\nLocation: Library. Exits: south → Cave deep\nInventory: Healing potion (x2), Old tome\nCombat: not in combat\nNPCs present: none\nLast 3 turns: move(north), look, search(shelves)",
+      "intent": {
+        "reasoning": "Exploration has been mechanical — try a creative action to engage the Narrator",
+        "action": "free_form",
+        "args": {},
+        "raw_text": "Je m'assieds et feuillette l'Old tome à voix haute."
+      }
+    }
+  ]
+}
