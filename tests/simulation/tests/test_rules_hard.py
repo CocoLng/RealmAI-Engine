@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from tests.simulation.rules.hard import check_hp_mismatch, check_item_use_without_owning, check_location_mismatch, check_npc_status, check_phantom_npc
+from tests.simulation.rules.hard import check_hp_mismatch, check_item_use_without_owning, check_location_mismatch, check_npc_status, check_phantom_npc, check_zone_violation
 
 
 @dataclass
@@ -178,4 +178,36 @@ class TestR1LocationMismatch:
         narration = "Le héros observe l'entrée de la grotte."
         history = [{"location_known": ["Cave entrance"], "moved_this_turn": False}]
         alerts = check_location_mismatch(narration, state, diff={}, history=history)
+        assert alerts == []
+
+
+@dataclass
+class FakeCombatState:
+    zones: list[str] = field(default_factory=lambda: ["front", "back"])
+
+
+class TestR1ZoneViolation:
+    def test_unknown_zone_triggers(self) -> None:
+        state = FakeState(
+            combat_active=True,
+            combat_state=FakeCombatState(zones=["front", "back"]),
+        )
+        narration = "Le gobelin s'avance vers la zone flanc droit."
+        alerts = check_zone_violation(narration, state, diff={}, history=[])
+        assert len(alerts) == 1
+        assert alerts[0].rule == "R1.zone_violation"
+
+    def test_known_zone_no_trigger(self) -> None:
+        state = FakeState(
+            combat_active=True,
+            combat_state=FakeCombatState(zones=["front", "back"]),
+        )
+        narration = "Le gobelin s'avance vers la zone front."
+        alerts = check_zone_violation(narration, state, diff={}, history=[])
+        assert alerts == []
+
+    def test_not_in_combat_no_trigger(self) -> None:
+        state = FakeState(combat_active=False)
+        narration = "La zone flanc droit est silencieuse."
+        alerts = check_zone_violation(narration, state, diff={}, history=[])
         assert alerts == []

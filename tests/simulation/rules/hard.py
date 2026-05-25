@@ -222,3 +222,34 @@ def check_phantom_npc(
             )
         )
     return alerts
+
+
+_ZONE_RE = re.compile(r"\bzone\s+([a-zà-ÿ]+(?:\s+[a-zà-ÿ]+)?)\b", re.IGNORECASE)
+
+
+def check_zone_violation(
+    narration: str,
+    state: Any,
+    diff: dict[str, list[Any]],
+    history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.zone_violation — narration references a combat zone that doesn't exist."""
+    if not state.combat_active or state.combat_state is None:
+        return []
+    valid = {z.lower() for z in getattr(state.combat_state, "zones", [])}
+    alerts: list[IncoherenceAlert] = []
+    for match in _ZONE_RE.finditer(narration):
+        zone = match.group(1).strip().lower()
+        if zone in valid:
+            continue
+        alerts.append(
+            IncoherenceAlert(
+                severity="hard",
+                category="zone_violation",
+                turn=getattr(state, "current_turn", 0),
+                rule="R1.zone_violation",
+                narration_snippet=_snippet_around(narration, match.group(0)),
+                expected=f"Zone '{zone}' not in combat zones {sorted(valid)}",
+            )
+        )
+    return alerts
