@@ -2,7 +2,7 @@
 
 Commit at the end of a phase, do not co author claude.
 
-## Chantier en cours : Simulator hardening (2026-05-25)
+## Chantier clos : Simulator hardening (2026-05-25)
 
 Context: first end-to-end tests of `tests/simulation/` surfaced 5 improvement leads
 (memo : `~/.claude/.../memory/project_simulator_test_findings.md`).
@@ -53,25 +53,49 @@ remaining work.
     `location_known` across turns; `locked_facts` is a placeholder until
     the session gets a real registry.
 
-### Wave 3 — UX flow coverage (deferred unless flow bugs surface)
-- [ ] Lead 4 — Headless `CharacterSetupFlow` driver
-  - New helper module, e.g. `tests/scenarios/headless_character_flow.py`
-  - Drives, in order: `IdentityModal.on_submit` → `flow._on_race_selected`
-    → `_on_class_selected` → `_on_preset_stats` (or `_on_random_stats`)
-    → `_on_skills_selected` → `_on_kit_selected` → `_on_motivation_selected`
-    → `transition_to(REVIEW)` → `_on_confirm`
-  - Capture the `on_setup_complete` callback so the resulting Character is
-    surfaced to assertions
-  - TDD: assert character.race / char_class / skills match the driver inputs
-- [ ] Lead 5 — Headless `SessionCog.start_campaign.callback`
-  - Patch `bot.cogs.session.create_session_channel` → returns the
-    runner's `MockChannel`
-  - Patch `_pregenerate_campaign_world` → use the runner's mock-LLM client
-    (or pre-seed `lobby.story_arc` + `lobby.current_location` directly)
-  - Drive `LobbyView.on_join` (per player → invokes Lead 4 driver) and
-    finally `on_launch` (host)
-  - Depends on Lead 4
-  - TDD: assert opening crawl + scene embed land in `channel_capture.messages`
+### Wave 3 — UX flow coverage — done 2026-05-25 (commits 8e0633e + 3615fdf)
+- [x] Lead 4 — Headless `CharacterSetupFlow` driver (commit 8e0633e)
+  - `tests/scenarios/headless_character_flow.py:HeadlessCharacterSetupFlow`
+    drives every callback through fake `discord.Interaction` objects
+    (`send_message` / `edit_message` are `AsyncMock`s). Steps:
+    `IdentityModal.on_submit` (sets `_value` on the underlying `TextInput`)
+    → `_on_race_selected` → `_on_class_selected` → `transition_to(STATS)`
+    → `_on_preset_stats` | `_on_random_stats` → `transition_to(SKILLS)`
+    → `_on_skills_selected` → `transition_to(KIT_MOTIV)`
+    → `_on_kit_selected` → `_on_motivation_selected`
+    → `transition_to(REVIEW)` → `_on_confirm`.
+  - Public API: `run_full_flow(...)` for one-shot use plus fluent step
+    methods. `from_flow(flow)` classmethod wraps an existing flow built
+    elsewhere (consumed by Lead 5).
+  - The resulting `Character` is exposed on `driver.character` /
+    `kit_name` / `motivation_key`.
+  - Tests: `tests/scenarios/test_headless_character_flow.py` (5 cases:
+    preset stats, random stats, stepwise API, identity modal path,
+    on_complete capture).
+- [x] Lead 5 — Headless `SessionCog.start_campaign.callback` (commit 3615fdf)
+  - `tests/scenarios/headless_session_flow.py:HeadlessSessionFlow` runs
+    the real cog code under four targeted patches:
+      - `create_session_channel` → returns `scenario.channel`
+      - `SessionCog._pregenerate_campaign_world` → seeds
+        `lobby.story_arc` / `lobby.current_location` inline (no LLM)
+      - `bot.cogs.session.asyncio.sleep` → no-op (kills the 4.5 s
+        launch countdown)
+      - `StoryBibleLogger.write_header` → no-op (no Markdown audit
+        artifacts under `logs/`)
+  - The driver also rewires `channel.send` so the returned message
+    exposes async `edit`/`delete`/`pin` (the cog awaits them for the
+    lobby refresh + countdown).
+  - `add_player` intercepts `inter.response.send_modal` in the
+    `on_join` closure, extracts the live `CharacterSetupFlow` from the
+    captured modal, and drives it via
+    `HeadlessCharacterSetupFlow.from_flow(...)` — the cog's
+    `on_setup_complete` closure (DB persistence, lobby roster
+    transitions, `refresh_lobby_message`) still fires.
+  - Tests: `tests/scenarios/test_headless_session_flow.py` (3 cases:
+    happy path with opening crawl + scene assertion, 2-player launch,
+    lobby → sessions transition).
+  - Verification: `uv run pytest tests/` → 2452 passed, 1 skipped;
+    ruff clean; mypy 0 errors on the new files.
 
 ### Order & dependencies
 - Bundle Leads **1 + 2** as a single PR (both touch the same regex helpers)
