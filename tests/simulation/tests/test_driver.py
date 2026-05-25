@@ -93,7 +93,6 @@ async def test_scenario_runner_has_free_form_action_method(scenario_ai) -> None:
 async def test_free_form_action_invokes_action_pipeline(scenario_ai) -> None:
     """When called, free_form_action builds an ActionPipeline and runs process()."""
     from unittest.mock import MagicMock, patch
-    from bot.action_pipeline import ActionPipeline
 
     await scenario_ai.start_campaign(theme="Test", players=1)
     await scenario_ai.add_player("Aria", race="Elf", class_="Wizard", player_idx=0)
