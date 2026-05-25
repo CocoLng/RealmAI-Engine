@@ -8,11 +8,39 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from tests.simulation.records import AgentIntent, TurnOutcome, TurnRecord
 from tests.simulation.recorder import Recorder
 from tests.simulation.state_diff import state_diff as _compute_diff
+
+
+def _state_view(snapshot: dict[str, Any], turn: int) -> SimpleNamespace:
+    """Wrap a session_snapshot dict in an object that satisfies rule attribute access.
+
+    The rules in tests/simulation/rules/ duck-type the state — they expect an object
+    with `.npcs`, `.combat_active`, etc. The snapshot is a flat dict (so state_diff
+    can compare two of them). This bridge populates a SimpleNamespace with the
+    fields rules need, falling back to safe defaults when the snapshot is sparse.
+    """
+    hp = snapshot.get("character_hp")
+    max_hp = snapshot.get("character_max_hp")
+    ratio = (hp / max_hp) if (isinstance(hp, (int, float)) and isinstance(max_hp, (int, float)) and max_hp) else 1.0
+    return SimpleNamespace(
+        npcs=snapshot.get("npcs", {}) or {},
+        current_location=snapshot.get("current_location_obj"),
+        combat_active=snapshot.get("combat_active", False),
+        combat_state=snapshot.get("combat_state"),
+        inventory=snapshot.get("inventory"),
+        player_names=snapshot.get("player_names", []) or [],
+        player_hp=hp if hp is not None else 0,
+        player_max_hp=max_hp if max_hp is not None else 0,
+        player_hp_ratio=ratio,
+        locations_known=snapshot.get("locations_known", []) or [],
+        factions_known=snapshot.get("factions_known", []) or [],
+        current_turn=turn,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +97,9 @@ class SimulationRunner:
             outcome: TurnOutcome = await self.driver.execute(intent)
             state_after = self.session_snapshot()
             diff: dict[str, list[Any]] = _compute_diff(state_before, state_after)
+            state_view = _state_view(state_after, turn=turn)
             alerts = self.checker.check(
-                outcome.narration, state_after, diff=diff, history=self._history
+                outcome.narration, state_view, diff=diff, history=self._history
             )
             self._hard_alert_count += sum(1 for a in alerts if a.severity == "hard")
 

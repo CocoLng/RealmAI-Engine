@@ -63,7 +63,7 @@ def _snapshot_from_session(session) -> dict:
     """Build a JSON-serializable dict from the GameSession."""
     if session is None:
         return {}
-    char = session.characters[0] if session.characters else None
+    char = next(iter(session.characters.values()), None) if session.characters else None
     snap = {
         "campaign_id": session.campaign.id if session.campaign else None,
         "location": getattr(session.current_location, "name", None),
@@ -141,8 +141,10 @@ async def _run_once(args: argparse.Namespace, seed: int) -> int:
         sess = scenario.session
         if sess is None:
             return f"TURN {turn}\n(no session)"
-        char = sess.characters[0]
+        char = next(iter(sess.characters.values()), None) if sess.characters else None
         loc = sess.current_location
+        if char is None or loc is None:
+            return f"TURN {turn}\n(no character or location)"
         return build_observation(
             turn=turn,
             session=type(

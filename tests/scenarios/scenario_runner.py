@@ -513,6 +513,38 @@ class ScenarioRunner:
         return self._record(inter)
 
     # ------------------------------------------------------------------
+    # Exploration (MVP stubs — produce a neutral narration so the
+    # simulator can complete a turn; real exploration mechanics live in
+    # the cogs and would need their own scenario wrappers later)
+    # ------------------------------------------------------------------
+
+    async def look(self, player_idx: int = 0) -> EmbedCapture:
+        """No-op exploration: emit a neutral 'look around' narration."""
+        return await self._exploration_stub("Vous observez votre environnement.")
+
+    async def move(self, direction: str, player_idx: int = 0) -> EmbedCapture:
+        """No-op exploration: emit a neutral 'move' narration."""
+        return await self._exploration_stub(
+            f"Vous vous déplacez vers {direction}.",
+        )
+
+    async def talk(self, npc: str, player_idx: int = 0) -> EmbedCapture:
+        """No-op exploration: emit a neutral 'talk' narration."""
+        return await self._exploration_stub(f"Vous engagez la conversation avec {npc}.")
+
+    async def search(self, target: str = "", player_idx: int = 0) -> EmbedCapture:
+        """No-op exploration: emit a neutral 'search' narration."""
+        suffix = f" {target}" if target else ""
+        return await self._exploration_stub(f"Vous fouillez{suffix}.")
+
+    async def _exploration_stub(self, text: str) -> EmbedCapture:
+        embed = discord.Embed(description=text)
+        cap = EmbedCapture(content=None, embed=embed, view=None)
+        self.channel_capture.messages.append(cap)
+        self.responses.append(cap)
+        return cap
+
+    # ------------------------------------------------------------------
     # Combat
     # ------------------------------------------------------------------
 
