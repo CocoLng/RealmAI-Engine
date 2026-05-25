@@ -238,5 +238,6 @@ README with GIFs + architecture diagram, GitHub Actions CI/CD, real play session
 - **No raw dicts** — always Pydantic models or named tuples
 - Use `uv run` to execute anything (tests, scripts, linting) — never activate venv manually
 - Add deps with `uv add`, dev deps with `uv add --dev`
-- Commits: conventional commits format (feat:, fix:, test:, docs:)
-- **Undercover mode** — Never add `Co-Authored-By`, AI attribution, or any Claude/AI mention in commit messages
+- **Commits**: create commits autonomously when a piece of work is complete and verified — no need to ask each time. Conventional commits format (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`). Applies equally to subagent work in isolated worktrees — subagents should commit their changes before returning so the main session can review or amend.
+- **Undercover mode** — Never add `Co-Authored-By`, AI attribution, or any Claude/AI mention in commit messages, PR descriptions, or code comments.
+- **Still ask before**: pushing to a remote (`git push`), force-push, rebase that rewrites shared history, merging/closing PRs, or any destructive git operation (`reset --hard`, `branch -D`, `clean -f`).

@@ -187,18 +187,95 @@ def _hardcoded_starting_location() -> Location:
 
 
 def _snapshot_from_session(session) -> dict:
-    """Build a JSON-serializable dict from the GameSession."""
+    """Build a JSON-serializable dict from the GameSession.
+
+    Provides every field the rules in ``tests/simulation/rules/`` consume:
+    NPC registry, current location, combat state, inventory, known
+    locations/factions, and player names. The shape is flat and JSON-safe
+    so ``state_diff`` can compare two snapshots without exotic equality
+    rules; ``_state_view`` in ``runner.py`` wraps these primitives into
+    objects the rule helpers expect.
+    """
     if session is None:
         return {}
+
     char = next(iter(session.characters.values()), None) if session.characters else None
     npcs = {n.name: {"status": "alive" if n.is_alive else "dead", "hp": n.hp,
                      "disposition": n.disposition.value}
             for n in (session.npcs.values() if session.npcs else [])}
-    snap = {
+
+    # All character names present in the session — used by R1.phantom_npc
+    # to whitelist proper nouns the narration may legitimately mention.
+    player_names = (
+        [c.name for c in session.characters.values()] if session.characters else []
+    )
+
+    # First inventory (simulator runs single-player today). Item names are
+    # surfaced as plain strings — R1.item_use_without_owning lowercases and
+    # compares textually.
+    inventory_items: list[str] = []
+    equipped: dict[str, str] = {}
+    if session.inventories:
+        first_inv = next(iter(session.inventories.values()), None)
+        if first_inv is not None:
+            inventory_items = [i.name for i in first_inv.items]
+            for slot, item in first_inv.equipped.items():
+                if item is None:
+                    continue
+                slot_label = slot.value if hasattr(slot, "value") else str(slot)
+                item_label = item.name if hasattr(item, "name") else str(item)
+                equipped[slot_label] = item_label
+
+    # Combat state — only zones are exposed today; the rule short-circuits
+    # when combat is inactive so an empty list is the safe default.
+    combat_active = (
+        session.combat_state is not None and session.combat_state.is_active
+    )
+    combat_zones: list[str] = []
+    if session.current_location is not None:
+        combat_zones = [
+            z.name for z in (session.current_location.combat_zones or [])
+        ]
+
+    # Locations the narrator is allowed to mention: the current location,
+    # its declared exits (the LLM is told about them in the prompt), and
+    # any location_hint from the story arc beats (the arc is part of the
+    # context). Adjacent stub rows that haven't been mentioned yet are
+    # already covered by ``current_location.connections``.
+    locations_known: list[str] = []
+    if session.current_location is not None:
+        locations_known.append(session.current_location.name)
+        locations_known.extend(session.current_location.connections)
+    if session.story_arc is not None:
+        for beat in session.story_arc.beats:
+            hint = getattr(beat, "location_hint", None)
+            if hint and hint not in locations_known:
+                locations_known.append(hint)
+
+    # Factions/named groups. The repo has no faction registry on
+    # GameSession yet; the only canonical proper-name we can surface is
+    # the villain's. Keep the list pruned of empty strings.
+    factions_known: list[str] = []
+    if session.story_arc is not None:
+        villain = getattr(session.story_arc, "villain_name", None)
+        if villain:
+            factions_known.append(villain)
+
+    snap: dict = {
         "campaign_id": session.campaign.id if session.campaign else None,
         "location": getattr(session.current_location, "name", None),
-        "combat_active": session.combat_state is not None,
+        "location_connections": (
+            list(session.current_location.connections)
+            if session.current_location is not None else []
+        ),
+        "combat_active": combat_active,
+        "combat_zones": combat_zones,
         "npcs": npcs,
+        "player_names": player_names,
+        "inventory_items": inventory_items,
+        "inventory_equipped": equipped,
+        "locations_known": locations_known,
+        "factions_known": factions_known,
     }
     if char is not None:
         snap["character_name"] = char.name

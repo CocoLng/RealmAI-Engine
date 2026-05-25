@@ -2,6 +2,82 @@
 
 Commit at the end of a phase, do not co author claude.
 
+## Chantier en cours : Simulator hardening (2026-05-25)
+
+Context: first end-to-end tests of `tests/simulation/` surfaced 5 improvement leads
+(memo : `~/.claude/.../memory/project_simulator_test_findings.md`).
+This session landed the snapshot enrichment that unblocks rule visibility for the
+remaining work.
+
+### Done in this session
+- [x] Enrich `_snapshot_from_session` (player_names, inventory_items/equipped,
+      locations_known, factions_known, combat_zones, location_connections).
+      File: `tests/simulation/__main__.py`.
+- [x] Update `_state_view` to wrap snapshot primitives into rule-compatible
+      objects (current_location, combat_state.zones, inventory.items).
+      File: `tests/simulation/runner.py`.
+- [x] Verify: `uv run pytest tests/simulation/ -q` → 108 passed
+- [x] Verify: mock-LLM smoke 3 tours → exit_code=0, final_state.json carries
+      all new keys
+
+### Wave 1 — Rule precision (cheap, no LLM cost, ~30 min total)
+- [ ] Lead 1 — R1.phantom_npc location-aware whitelist
+  - `tests/simulation/rules/hard.py:check_phantom_npc` — fold
+    `state.locations_known` into the known-name set
+  - TDD: `tests/simulation/tests/test_rules_hard.py` — case "Salle des échos"
+    appears in narration AND in `locations_known` → no alert
+- [ ] Lead 2 — Multi-word NPC name canonicalization (first-word match)
+  - `tests/simulation/rules/hard.py:check_phantom_npc` — also match
+    `npc_name.split()[0]`
+  - `tests/simulation/rules/soft.py:check_npc_name_drift` — same gate so
+    short forms of registered NPCs don't cross-fire as "drift"
+  - TDD: "Elara" must NOT alert when registry holds "Elara, la Gardienne…"
+
+### Wave 2 — State mutation so the world comes alive (~2-3 h)
+- [ ] Lead 3 — `move(direction)` mutates session + hydrates destination
+  - `tests/scenarios/scenario_runner.py:move` — resolve direction via
+    `current_location.exit_aliases`, delegate to
+    `bot.world_navigation.change_location` (already production-tested)
+  - Budget impact: +75 s per hydrated stub. A 30-turn balanced run with 3-4
+    moves hits ~5 min more wall-time. Mention in `reference_simulator_testing.md`.
+  - TDD: scenario test in `tests/scenarios/` asserts
+    `session.current_location.name` changed AND new NPCs appeared
+- [ ] Lead 3.b — `look()` returns an updated observation from current state
+  - The mutation in 3 is what kills the loop; `look` itself probably stays
+    a stub but is now meaningful because the underlying state changed.
+- [ ] Lead 3.c — feed `runner._history` with `location_known` /
+  `moved_this_turn` keys so R1.location_mismatch can finally fire
+  - `tests/simulation/runner.py` — extend the history-append block (line ~134)
+
+### Wave 3 — UX flow coverage (deferred unless flow bugs surface)
+- [ ] Lead 4 — Headless `CharacterSetupFlow` driver
+  - New helper module, e.g. `tests/scenarios/headless_character_flow.py`
+  - Drives, in order: `IdentityModal.on_submit` → `flow._on_race_selected`
+    → `_on_class_selected` → `_on_preset_stats` (or `_on_random_stats`)
+    → `_on_skills_selected` → `_on_kit_selected` → `_on_motivation_selected`
+    → `transition_to(REVIEW)` → `_on_confirm`
+  - Capture the `on_setup_complete` callback so the resulting Character is
+    surfaced to assertions
+  - TDD: assert character.race / char_class / skills match the driver inputs
+- [ ] Lead 5 — Headless `SessionCog.start_campaign.callback`
+  - Patch `bot.cogs.session.create_session_channel` → returns the
+    runner's `MockChannel`
+  - Patch `_pregenerate_campaign_world` → use the runner's mock-LLM client
+    (or pre-seed `lobby.story_arc` + `lobby.current_location` directly)
+  - Drive `LobbyView.on_join` (per player → invokes Lead 4 driver) and
+    finally `on_launch` (host)
+  - Depends on Lead 4
+  - TDD: assert opening crawl + scene embed land in `channel_capture.messages`
+
+### Order & dependencies
+- Bundle Leads **1 + 2** as a single PR (both touch the same regex helpers)
+- **Lead 3** is independent and the highest-leverage — it stops the agent
+  from looping on the same world snapshot
+- **Lead 4** is independent of 1-3 (touches Discord views, not rules)
+- **Lead 5** consumes Lead 4
+
+Recommended order: **1+2 → 3 → 4 → 5**.
+
 ## Chantier en cours : Système de Combat D&D 5e
 
 Voir `tasks/combat/README.md` pour l'orchestration complète et `tasks/combat/*.md` pour les fiches détaillées.

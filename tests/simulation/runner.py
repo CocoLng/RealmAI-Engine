@@ -20,9 +20,10 @@ def _state_view(snapshot: dict[str, Any], turn: int) -> SimpleNamespace:
     """Wrap a session_snapshot dict in an object that satisfies rule attribute access.
 
     The rules in tests/simulation/rules/ duck-type the state — they expect an object
-    with `.npcs`, `.combat_active`, etc. The snapshot is a flat dict (so state_diff
-    can compare two of them). This bridge populates a SimpleNamespace with the
-    fields rules need, falling back to safe defaults when the snapshot is sparse.
+    with `.npcs`, `.combat_active`, etc. The snapshot is a flat JSON-friendly dict
+    (so state_diff can compare two of them); this bridge reconstructs the few
+    object-shaped accessors the rules expect (`current_location.name`,
+    `combat_state.zones`, `inventory.items`, `npc.status`).
     """
     hp = snapshot.get("character_hp")
     max_hp = snapshot.get("character_max_hp")
@@ -44,12 +45,31 @@ def _state_view(snapshot: dict[str, Any], turn: int) -> SimpleNamespace:
             # Already an object — keep as is.
             npcs_view[name] = data
 
+    # Current location wrapper — rules read `.name` only.
+    current_loc_name = snapshot.get("location")
+    current_location_view = (
+        SimpleNamespace(name=current_loc_name) if current_loc_name else None
+    )
+
+    # Combat state wrapper — rules read `.zones` (list of strings).
+    combat_active = bool(snapshot.get("combat_active", False))
+    combat_state_view: SimpleNamespace | None = None
+    if combat_active:
+        combat_state_view = SimpleNamespace(
+            zones=list(snapshot.get("combat_zones", []) or []),
+        )
+
+    # Inventory wrapper — rules read `.items` (list of strings).
+    inventory_view = SimpleNamespace(
+        items=list(snapshot.get("inventory_items", []) or []),
+    )
+
     return SimpleNamespace(
         npcs=npcs_view,
-        current_location=snapshot.get("current_location_obj"),
-        combat_active=snapshot.get("combat_active", False),
-        combat_state=snapshot.get("combat_state"),
-        inventory=snapshot.get("inventory"),
+        current_location=current_location_view,
+        combat_active=combat_active,
+        combat_state=combat_state_view,
+        inventory=inventory_view,
         player_names=snapshot.get("player_names", []) or [],
         player_hp=hp if hp is not None else 0,
         player_max_hp=max_hp if max_hp is not None else 0,
