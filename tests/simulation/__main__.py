@@ -98,7 +98,11 @@ async def _run_once(args: argparse.Namespace, seed: int) -> int:
     Base.metadata.create_all(engine)
     db_factory = sessionmaker(bind=engine)
 
-    client = OllamaClient(simulation_mode=True)
+    if args.mock_llm:
+        from tests.simulation.mock_llm import MockOllamaClient
+        client = MockOllamaClient(simulation_mode=True)  # type: ignore[assignment]
+    else:
+        client = OllamaClient(simulation_mode=True)
     scenario = ScenarioRunner(
         db_factory, ai_enabled=True, ollama_client=client
     )
