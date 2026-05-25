@@ -12,6 +12,7 @@ from tests.simulation.records import IncoherenceAlert
 from tests.simulation.rules.hard import (
     _PROPER_NOUN_RE,
     _PROPER_NOUN_WHITELIST,
+    _canonical_npc_names,
     _snippet_around,
 )
 
@@ -72,16 +73,36 @@ def check_npc_name_drift(
     diff: dict[str, list[Any]],
     history: list[Any],
 ) -> list[IncoherenceAlert]:
-    """R2.npc_name_drift — proper noun ≤2 edits from a known NPC name but not exact."""
+    """R2.npc_name_drift — proper noun ≤2 edits from a known NPC name but not exact.
+
+    The "known" set includes both full registry names and the first-word
+    short forms of multi-word entries (``"Elara, la Gardienne"`` → also
+    ``"Elara"``), so short forms aren't mis-flagged as drift against
+    their own canonical parent.
+    """
     alerts: list[IncoherenceAlert] = []
-    known = list(state.npcs)
+    known_canonical = _canonical_npc_names(state)
+    # Targets the levenshtein loop walks: both full and first-word forms.
+    targets: list[str] = []
+    for n in state.npcs:
+        targets.append(n)
+        words = n.split()
+        if words:
+            head = words[0].rstrip(",.;:!?")
+            if head and head.lower() != n.lower():
+                targets.append(head)
     seen: set[str] = set()
     for match in _PROPER_NOUN_RE.finditer(narration):
         word = match.group(1)
-        if word in _PROPER_NOUN_WHITELIST or word in known or word.lower() in seen:
+        if word in _PROPER_NOUN_WHITELIST:
             continue
-        for npc_name in known:
-            if _levenshtein(word.lower(), npc_name.lower()) <= 2 and word != npc_name:
+        if word.lower() in known_canonical or word.lower() in seen:
+            continue
+        for npc_name in targets:
+            if (
+                _levenshtein(word.lower(), npc_name.lower()) <= 2
+                and word.lower() != npc_name.lower()
+            ):
                 alerts.append(
                     IncoherenceAlert(
                         severity="soft",

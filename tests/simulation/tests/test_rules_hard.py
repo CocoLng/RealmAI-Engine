@@ -25,6 +25,8 @@ class FakeState:
     combat_state: Any = None
     inventory: Any = None
     player_names: list[str] = field(default_factory=list)
+    locations_known: list[str] = field(default_factory=list)
+    factions_known: list[str] = field(default_factory=list)
     player_hp_ratio: float = 1.0
     player_max_hp: int = 15
     player_hp: int = 15
@@ -92,6 +94,39 @@ class TestR1PhantomNpc:
         narration = "Aria avance prudemment."
         alerts = check_phantom_npc(narration, state, diff={}, history=[])
         assert alerts == []
+
+    def test_location_name_not_phantom(self) -> None:
+        # "Salle" is a capitalized fragment of the known location "Salle des échos".
+        # The rule must not flag location-name fragments as phantom NPCs.
+        state = FakeState(
+            npcs={},
+            locations_known=["Salle des échos", "Cave entrance"],
+        )
+        narration = "Le héros pénètre dans la Salle des échos."
+        alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        assert alerts == []
+
+    def test_multi_word_npc_first_word_not_phantom(self) -> None:
+        # Registry stores "Elara, la Gardienne des Marbres". Narration uses the
+        # short form "Elara" — must be accepted, not flagged as phantom.
+        state = FakeState(npcs={"Elara, la Gardienne des Marbres": FakeNPC(
+            name="Elara, la Gardienne des Marbres",
+        )})
+        narration = "Elara hoche la tête et propose son aide."
+        alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        # No alert for "Elara" — it canonicalizes to the registered NPC.
+        assert all("Elara" not in a.expected for a in alerts)
+
+    def test_truly_unknown_proper_noun_still_phantom(self) -> None:
+        # Sanity check: even with locations_known and multi-word NPCs, a
+        # genuinely unknown proper noun must still trigger.
+        state = FakeState(
+            npcs={"Elara, la Gardienne": FakeNPC(name="Elara, la Gardienne")},
+            locations_known=["Salle des échos"],
+        )
+        narration = "Soudain, Khaalim surgit de l'ombre."
+        alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        assert any("Khaalim" in a.expected for a in alerts)
 
 
 @dataclass

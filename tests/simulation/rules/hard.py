@@ -75,6 +75,43 @@ _PROPER_NOUN_WHITELIST: frozenset[str] = frozenset({
 _PROPER_NOUN_RE = re.compile(r"\b([A-ZÉÈÊÀÂÔÛÎ][a-zéèêàâôûîç']{2,})\b")
 
 
+def _canonical_npc_names(state: Any) -> set[str]:
+    """Lowercase set of registered NPC names + first-word short forms.
+
+    Registry entries like ``"Elara, la Gardienne des Marbres"`` are
+    surfaced both verbatim and as ``"elara"`` so the short form the
+    narrator naturally falls back to is accepted as canonical.
+    """
+    result: set[str] = set()
+    for n in state.npcs:
+        result.add(n.lower())
+        words = n.split()
+        if words:
+            head = words[0].rstrip(",.;:!?")
+            if head:
+                result.add(head.lower())
+    return result
+
+
+def _location_name_words(state: Any) -> set[str]:
+    """Lowercase set of every word appearing in a known location name.
+
+    Locations like ``"Salle des échos"`` contribute ``salle``, ``des``,
+    ``échos``, and the full ``"salle des échos"``. The regex that drives
+    :func:`check_phantom_npc` matches individual capitalized tokens, so
+    we need each token of a multi-word location to be recognised — not
+    only the full string.
+    """
+    result: set[str] = set()
+    for loc in getattr(state, "locations_known", []) or []:
+        result.add(loc.lower())
+        for token in loc.split():
+            cleaned = token.rstrip(",.;:!?")
+            if cleaned:
+                result.add(cleaned.lower())
+    return result
+
+
 _ITEM_USE_RE = re.compile(
     r"\b(utilise|boit|consomme|brandit|d[ée]gaine|enfile|active)\s+"
     r"(le|la|les|l'|un|une|des|sa|son|ses|ma|mon|mes|la grande|le grand)\s+"
@@ -196,17 +233,24 @@ def check_phantom_npc(
     diff: dict[str, list[Any]],
     history: list[Any],
 ) -> list[IncoherenceAlert]:
-    """R1.phantom_npc — capitalized proper noun absent from NPC registry."""
+    """R1.phantom_npc — capitalized proper noun absent from known entities.
+
+    A proper noun is "known" if its lowercase form matches any of:
+    - a registered NPC name (full form or first-word short form),
+    - a player character name,
+    - a known location name or one of its individual words.
+    """
     alerts: list[IncoherenceAlert] = []
-    known_npcs = {n.lower() for n in state.npcs}
+    known_npcs = _canonical_npc_names(state)
     known_players = {p.lower() for p in getattr(state, "player_names", [])}
+    known_locations = _location_name_words(state)
     seen: set[str] = set()
     for match in _PROPER_NOUN_RE.finditer(narration):
         word = match.group(1)
         if word in _PROPER_NOUN_WHITELIST:
             continue
         lower = word.lower()
-        if lower in known_npcs or lower in known_players:
+        if lower in known_npcs or lower in known_players or lower in known_locations:
             continue
         if lower in seen:
             continue

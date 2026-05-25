@@ -65,6 +65,16 @@ class TestR2NpcNameDrift:
         alerts = check_npc_name_drift(narration, state, diff={}, history=[])
         assert alerts == []
 
+    def test_first_word_of_multi_word_name_no_drift(self) -> None:
+        # Registry holds "Elara, la Gardienne des Marbres" — narration uses the
+        # short form "Elara". Must be treated as canonical, not drift.
+        state = FakeState(npcs={"Elara, la Gardienne des Marbres": FakeNPC(
+            "Elara, la Gardienne des Marbres",
+        )})
+        narration = "Elara hoche la tête."
+        alerts = check_npc_name_drift(narration, state, diff={}, history=[])
+        assert alerts == []
+
 
 class TestR2TenseDrift:
     def test_mixed_tense_in_one_sentence_triggers(self) -> None:
