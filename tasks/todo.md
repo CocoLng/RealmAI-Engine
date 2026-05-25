@@ -20,34 +20,38 @@ remaining work.
 - [x] Verify: mock-LLM smoke 3 tours → exit_code=0, final_state.json carries
       all new keys
 
-### Wave 1 — Rule precision (cheap, no LLM cost, ~30 min total)
-- [ ] Lead 1 — R1.phantom_npc location-aware whitelist
-  - `tests/simulation/rules/hard.py:check_phantom_npc` — fold
-    `state.locations_known` into the known-name set
-  - TDD: `tests/simulation/tests/test_rules_hard.py` — case "Salle des échos"
-    appears in narration AND in `locations_known` → no alert
-- [ ] Lead 2 — Multi-word NPC name canonicalization (first-word match)
-  - `tests/simulation/rules/hard.py:check_phantom_npc` — also match
-    `npc_name.split()[0]`
-  - `tests/simulation/rules/soft.py:check_npc_name_drift` — same gate so
-    short forms of registered NPCs don't cross-fire as "drift"
-  - TDD: "Elara" must NOT alert when registry holds "Elara, la Gardienne…"
+### Wave 1 — Rule precision (cheap, no LLM cost, ~30 min total) — done 2026-05-25 (commit c91d32c)
+- [x] Lead 1 — R1.phantom_npc location-aware whitelist
+  - `tests/simulation/rules/hard.py:_location_name_words` folds every token
+    of `state.locations_known` into the rule's known set.
+  - Tests: `test_location_name_not_phantom`, `test_truly_unknown_proper_noun_still_phantom`.
+- [x] Lead 2 — Multi-word NPC name canonicalization (first-word match)
+  - `tests/simulation/rules/hard.py:_canonical_npc_names` surfaces
+    `npc_name.split()[0]` alongside the full name; reused by
+    `check_npc_name_drift` in `soft.py` so short forms aren't mis-flagged.
+  - Tests: `test_multi_word_npc_first_word_not_phantom`,
+    `test_first_word_of_multi_word_name_no_drift`.
 
-### Wave 2 — State mutation so the world comes alive (~2-3 h)
-- [ ] Lead 3 — `move(direction)` mutates session + hydrates destination
-  - `tests/scenarios/scenario_runner.py:move` — resolve direction via
-    `current_location.exit_aliases`, delegate to
-    `bot.world_navigation.change_location` (already production-tested)
-  - Budget impact: +75 s per hydrated stub. A 30-turn balanced run with 3-4
-    moves hits ~5 min more wall-time. Mention in `reference_simulator_testing.md`.
-  - TDD: scenario test in `tests/scenarios/` asserts
-    `session.current_location.name` changed AND new NPCs appeared
-- [ ] Lead 3.b — `look()` returns an updated observation from current state
-  - The mutation in 3 is what kills the loop; `look` itself probably stays
-    a stub but is now meaningful because the underlying state changed.
-- [ ] Lead 3.c — feed `runner._history` with `location_known` /
-  `moved_this_turn` keys so R1.location_mismatch can finally fire
-  - `tests/simulation/runner.py` — extend the history-append block (line ~134)
+### Wave 2 — State mutation so the world comes alive (~2-3 h) — done 2026-05-25 (commit c0461e7)
+- [x] Lead 3 — `move(direction)` mutates session + hydrates destination
+  - `tests/scenarios/scenario_runner.py:_resolve_direction` + `move` now
+    resolve via `exit_aliases` (then raw `connections`) and delegate to
+    `bot.world_navigation.change_location`. Falls back to a neutral stub
+    embed when the direction maps to nothing or the destination cannot be
+    obtained (LocationChangeError).
+  - `ScenarioRunner.start_campaign` now wires `session.ollama_client` when
+    `ai_enabled=True` so the production hydration path has a client.
+  - Tests: `tests/scenarios/test_exploration_move.py` (pre-seed happy path,
+    unknown-direction stub, graceful no-Ollama fallback).
+- [x] Lead 3.b — `look()` returns an updated observation from current state
+  - `look` now reads `session.current_location.description` /
+    `arrival_hook`, so the observation reflects mutations from `move`.
+- [x] Lead 3.c — feed `runner._history` with `location_known` /
+  `moved_this_turn` / `locked_facts` keys so R1.location_mismatch can fire
+  - `tests/simulation/runner.py` history-append now derives
+    `moved_this_turn` from the snapshot diff and accumulates
+    `location_known` across turns; `locked_facts` is a placeholder until
+    the session gets a real registry.
 
 ### Wave 3 — UX flow coverage (deferred unless flow bugs surface)
 - [ ] Lead 4 — Headless `CharacterSetupFlow` driver
