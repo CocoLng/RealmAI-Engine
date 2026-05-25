@@ -22,6 +22,9 @@ from bot.cogs.inventory import InventoryCog
 from bot.cogs.rolls import RollsCog
 from bot.cogs.session import SessionCog
 from bot.game_session import GameSession
+from ai.client import OllamaClient
+from ai.interpreter import Interpreter
+from ai.narrator import Narrator
 from engine.character import (
     Character,
     CharacterClass,
@@ -232,7 +235,13 @@ class ScenarioRunner:
     SQLite, real engine, AI disabled.
     """
 
-    def __init__(self, db_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        db_factory: sessionmaker[Session],
+        *,
+        ai_enabled: bool = False,
+        ollama_client: OllamaClient | None = None,
+    ) -> None:
         # Mock Discord context
         self.guild = MagicMock()
         self.guild.id = 999_000_001
@@ -281,6 +290,10 @@ class ScenarioRunner:
 
         # Responses history
         self.responses: list[EmbedCapture] = []
+
+        # AI flag
+        self.ai_enabled = ai_enabled
+        self.ollama_client = ollama_client
 
     # ------------------------------------------------------------------
     # Properties
@@ -392,8 +405,16 @@ class ScenarioRunner:
         finally:
             db_session.close()
 
-        # Create in-memory session (no AI)
+        # Create in-memory session (AI disabled by default)
         session = GameSession(campaign=campaign)
+        if self.ai_enabled:
+            if self.ollama_client is None:
+                raise RuntimeError(
+                    "ai_enabled=True requires an ollama_client to be passed"
+                )
+            session.interpreter = Interpreter(self.ollama_client)
+            session.narrator = Narrator(self.ollama_client)
+            session.story_director = None
         self.bot.sessions[self.channel.id] = session
 
         cap = EmbedCapture(content=f"Campagne lancee: {theme}")
