@@ -75,6 +75,48 @@ _PROPER_NOUN_WHITELIST: frozenset[str] = frozenset({
 _PROPER_NOUN_RE = re.compile(r"\b([A-ZÉÈÊÀÂÔÛÎ][a-zéèêàâôûîç']{2,})\b")
 
 
+_ITEM_USE_RE = re.compile(
+    r"\b(utilise|boit|consomme|brandit|d[ée]gaine|enfile|active)\s+"
+    r"(le|la|les|l'|un|une|des|sa|son|ses|ma|mon|mes|la grande|le grand)\s+"
+    r"([A-Za-zÀ-ÿ' -]{3,40})",
+    re.IGNORECASE,
+)
+
+
+def check_item_use_without_owning(
+    narration: str,
+    state: Any,
+    diff: dict[str, list[Any]],
+    history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.item_use_without_owning — character uses an item missing from inventory."""
+    alerts: list[IncoherenceAlert] = []
+    inv = getattr(state, "inventory", None)
+    if inv is None:
+        return alerts
+    owned = {item.lower() for item in getattr(inv, "items", [])}
+    for match in _ITEM_USE_RE.finditer(narration):
+        item_raw = match.group(3).strip().rstrip(".")
+        item_text = item_raw.lower()
+        if not item_text:
+            continue
+        # Match if any owned item name appears in the matched span.
+        matched_owned = any(o in item_text or item_text in o for o in owned)
+        if matched_owned:
+            continue
+        alerts.append(
+            IncoherenceAlert(
+                severity="hard",
+                category="item_use_without_owning",
+                turn=getattr(state, "current_turn", 0),
+                rule="R1.item_use_without_owning",
+                narration_snippet=_snippet_around(narration, match.group(0)),
+                expected=f"Item '{item_raw}' is not in inventory (owned: {sorted(owned)})",
+            )
+        )
+    return alerts
+
+
 def check_phantom_npc(
     narration: str,
     state: Any,

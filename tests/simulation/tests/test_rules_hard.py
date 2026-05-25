@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from tests.simulation.rules.hard import check_npc_status, check_phantom_npc
+from tests.simulation.rules.hard import check_item_use_without_owning, check_npc_status, check_phantom_npc
 
 
 @dataclass
@@ -91,4 +91,37 @@ class TestR1PhantomNpc:
         state = FakeState(npcs={}, player_names=["Aria"])
         narration = "Aria avance prudemment."
         alerts = check_phantom_npc(narration, state, diff={}, history=[])
+        assert alerts == []
+
+
+@dataclass
+class FakeInventory:
+    items: list[str] = field(default_factory=list)
+
+
+class TestR1ItemUseWithoutOwning:
+    def test_uses_item_not_in_inventory_triggers(self) -> None:
+        state = FakeState(inventory=FakeInventory(items=["Épée longue"]))
+        narration = "Le héros boit la Potion de soin."
+        alerts = check_item_use_without_owning(narration, state, diff={}, history=[])
+        assert len(alerts) == 1
+        assert alerts[0].rule == "R1.item_use_without_owning"
+        assert "Potion de soin" in alerts[0].expected
+
+    def test_uses_item_in_inventory_no_trigger(self) -> None:
+        state = FakeState(inventory=FakeInventory(items=["Potion de soin"]))
+        narration = "Le héros boit la Potion de soin."
+        alerts = check_item_use_without_owning(narration, state, diff={}, history=[])
+        assert alerts == []
+
+    def test_no_inventory_no_trigger(self) -> None:
+        state = FakeState(inventory=None)
+        narration = "Le héros boit la Potion de soin."
+        alerts = check_item_use_without_owning(narration, state, diff={}, history=[])
+        assert alerts == []
+
+    def test_passive_mention_no_trigger(self) -> None:
+        state = FakeState(inventory=FakeInventory(items=["Épée longue"]))
+        narration = "Une potion de soin trône sur l'étagère."
+        alerts = check_item_use_without_owning(narration, state, diff={}, history=[])
         assert alerts == []
