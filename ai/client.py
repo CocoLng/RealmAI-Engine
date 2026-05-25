@@ -56,8 +56,10 @@ class OllamaClient:
         self,
         base_url: str = DEFAULT_URL,
         timeout: float = DEFAULT_TIMEOUT,
+        simulation_mode: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._simulation_mode = simulation_mode
         self._client = httpx.Client(
             timeout=httpx.Timeout(timeout, connect=10.0),
         )
@@ -107,6 +109,9 @@ class OllamaClient:
             OllamaUnavailableError: If the Ollama server is unreachable.
             json.JSONDecodeError: If the model returns non-JSON content.
         """
+        if self._simulation_mode:
+            temperature = 0.0
+
         # When thinking is enabled and the caller didn't override
         # num_predict, cap generation to avoid runaway reasoning.
         effective_num_predict = num_predict
