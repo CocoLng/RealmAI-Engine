@@ -51,6 +51,49 @@
   cutover. Without shadow mode, Phase D would have shipped both bugs to
   prod.
 
+## 2026-05-25 — Audit P0 fixes : 7 patches isolés, suite verte d'un coup
+
+- **Helpers d'audit > corrections inline.** Trois fixes (C2 auto-crit, C7
+  mappers, C5 upsert) ont gagné en lisibilité en extrayant un helper privé
+  plutôt qu'en inlinant la logique. `_in_melee_range` + `_crit_eligible_helpless`
+  rendent la règle SRD lisible d'un coup d'œil ; `_validate_list` /
+  `_validate_dict` factorisent le `try/except ValidationError + log + skip`
+  qu'il aurait fallu copier dans 4 endroits.
+
+- **Backward compat des conditions de combat via `current_zone is None`.**
+  La fix C2 (auto-crit nécessite same-zone) cassait tous les tests legacy qui
+  ne définissaient pas de zone. Le filet : si attaquant ET défenseur ont
+  `current_zone=None`, on considère qu'on est en mêlée. Aucun test à patcher.
+
+- **`asyncio.Lock` n'est pas ré-entrant — release avant re-acquire.** Pour C3,
+  `dispatch_action` libère le lock à la fin de son `async with`, puis
+  `on_action_resolved` (appelé après) le prend à nouveau. Pas de deadlock,
+  pas de re-entrance. Le pattern marche aussi pour le free-text path qui
+  appelle `on_action_resolved` depuis `action_handler.py` après avoir
+  libéré son propre lock.
+
+- **Token-budget heuristic : `max(chars/3.5, words×1.5)` au lieu de
+  `words×1.3`.** Plus de dépendance externe (tiktoken/transformers), mais
+  on biaise vers la sur-estimation — c'est ce qu'on veut quand le risque
+  est l'overflow. Les tests de bornes (`<= 30`, `<= 250`) tenaient déjà
+  une marge, donc seuls les tests qui asseyaient une valeur exacte ont
+  dû être réécrits en propriétés (monotonicity, ≥ ancienne estimation).
+
+- **`advance_turn` doit signaler son échec via `is_active`, pas via
+  l'index courant.** Avant : si tous les combattants éligibles étaient
+  morts/fui, l'index restait sur un combattant ineligible et
+  `check_combat_end` rattrapait après. Maintenant : tracking explicite
+  `found_eligible`, sortie immédiate avec `state.is_active = False` et
+  `state.end_reason` posé. Les callers (`TurnManager.on_action_resolved`)
+  voient `is_active=False` et `_finalize()` proprement.
+
+- **`upsert()` explicite > `try update / except ValueError → save`.**
+  Le pattern exception-driven dans `bot/persistence.py` masquait les
+  vraies erreurs (si l'update échouait pour une autre raison qu'un
+  missing row). Les nouveaux `upsert()` sont un get-then-write
+  single-trip qui ne lève que sur les vraies erreurs SQLAlchemy, plus
+  un `db_session.rollback()` explicite dans le `except` du caller.
+
 ## 2026-04-27 — Native objectives generation: prompt + Python safety net
 
 - **Prompt + sanitizer is more robust than prompt-only.** Telling the LLM
