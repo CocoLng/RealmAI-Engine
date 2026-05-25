@@ -457,6 +457,7 @@ def advance_turn(state: CombatState) -> CombatState:
     start_index = state.current_turn_index
     next_index = start_index
     round_incremented = False
+    found_eligible = False
 
     for _ in range(num):
         prev_index = next_index
@@ -466,6 +467,7 @@ def advance_turn(state: CombatState) -> CombatState:
             round_incremented = True
         candidate = state.combatants[next_index]
         if candidate.is_alive and not candidate.fled:
+            found_eligible = True
             break
 
     state.current_turn_index = next_index
@@ -474,6 +476,16 @@ def advance_turn(state: CombatState) -> CombatState:
     if round_incremented:
         for c in state.combatants:
             c.action_budget.reaction_used_this_round = False
+
+    # 4a. If no eligible combatant was found, combat must end. Avoid
+    #     resetting an action budget on a dead/fled combatant and let
+    #     check_combat_end decide the reason. The caller (TurnManager)
+    #     should observe state.is_active == False and finalize.
+    if not found_eligible:
+        state.is_active = False
+        end = check_combat_end(state)
+        state.end_reason = end if end is not None else CombatEndReason.DEFEAT
+        return state
 
     # 4. Reset the incoming combatant's turn pool (Move/Action/Bonus) and
     #    refill legendary points if the incoming combatant is a boss
@@ -611,6 +623,33 @@ def _double_dice(dice_expr: str) -> str:
     return f"{count * 2}d{sides}{mod_str}"
 
 
+def _in_melee_range(attacker: "Combatant", defender: "Combatant") -> bool:
+    """Return True if ``attacker`` is within melee (5 ft) of ``defender``.
+
+    Our zone-based engine treats "same zone" as melee range. When zones
+    are not assigned to either combatant (legacy / non-zoned encounters),
+    we default to True so the SRD rules still fire.
+    """
+    if attacker.current_zone is None and defender.current_zone is None:
+        return True
+    return (
+        attacker.current_zone is not None
+        and attacker.current_zone == defender.current_zone
+    )
+
+
+def _crit_eligible_helpless(defender: "Combatant") -> bool:
+    """Return True if the defender's conditions enable melee auto-crit (SRD 5e).
+
+    Unconscious and paralyzed targets turn any hit from within 5 ft into a
+    critical hit. Out-of-range attackers only benefit from the advantage
+    those conditions already grant.
+    """
+    return has_condition(defender.conditions, ConditionType.UNCONSCIOUS) or has_condition(
+        defender.conditions, ConditionType.PARALYZED
+    )
+
+
 def resolve_attack(
     attacker: Combatant,
     defender: Combatant,
@@ -623,7 +662,10 @@ def resolve_attack(
     1. Check conditions for advantage/disadvantage.
     2. Roll d20 (advantage: best of 2, disadvantage: worst of 2).
     3. Nat 20 = crit, nat 1 = auto-miss.
-    4. Auto-crit on unconscious/paralyzed defenders.
+    4. SRD: any hit against an unconscious or paralyzed target is a critical
+       hit if the attacker is within 5 ft. Our zone-based engine treats
+       "same zone" as melee range; legacy combats with no zones assigned
+       fall back to allowing the crit (preserves old behaviour).
     5. Roll damage (double dice on crit).
     6. Apply damage to defender.
     """
@@ -658,21 +700,22 @@ def resolve_attack(
     outcome = check.outcome
     critical = outcome == RollOutcome.CRITICAL_SUCCESS
 
-    # Auto-crit on unconscious or paralyzed defenders
-    if has_condition(defender.conditions, ConditionType.UNCONSCIOUS) or has_condition(
-        defender.conditions, ConditionType.PARALYZED
-    ):
-        critical = True
-        if outcome != RollOutcome.CRITICAL_FAILURE:
-            outcome = RollOutcome.CRITICAL_SUCCESS
-
-    # Determine hit
+    # Determine hit (nat 1 always misses; nat 20 always hits; otherwise vs AC)
     if raw_roll == 1:
         hit = False
     elif critical:
         hit = True
     else:
         hit = check.margin >= 0
+
+    # SRD 5e: a hit against an unconscious or paralyzed target is a critical
+    # hit IF the attacker is within 5 ft of the target. Auto-crit applies
+    # only on hit, not on miss; out-of-melee attacks (different zones) still
+    # benefit from advantage (already added above) but do not crit.
+    if hit and _crit_eligible_helpless(defender) and _in_melee_range(attacker, defender):
+        critical = True
+        if outcome != RollOutcome.CRITICAL_FAILURE:
+            outcome = RollOutcome.CRITICAL_SUCCESS
 
     # Damage
     damage = 0

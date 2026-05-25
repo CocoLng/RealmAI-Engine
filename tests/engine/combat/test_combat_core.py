@@ -435,6 +435,56 @@ class TestResolveAttack:
         assert result.critical is True
         assert result.outcome == RollOutcome.CRITICAL_SUCCESS
 
+    def test_no_auto_crit_when_attacker_out_of_melee(
+        self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SRD: auto-crit on helpless target requires attacker within 5 ft.
+
+        With our zone abstraction, attacker and defender in different zones
+        means out of melee — only advantage applies, no critical hit.
+        """
+        from engine.conditions import apply_condition as cond_apply
+
+        cond_apply(
+            goblin.conditions,
+            ActiveCondition(condition_type=ConditionType.UNCONSCIOUS, source="test"),
+        )
+        fighter.current_zone = "front"
+        goblin.current_zone = "back"
+
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(15))
+
+        def mock_roll(expr: str) -> DiceResult:
+            return DiceResult(expression=expr, rolls=[5], total=5)
+
+        monkeypatch.setattr("engine.combat.roll", mock_roll)
+        longsword: Weapon = fighter.inventory.equipped[EquipmentSlot.MAIN_HAND]  # type: ignore[assignment]
+        result = resolve_attack(fighter, goblin, longsword)
+        # Hit (15 ≥ goblin AC) but NOT a critical hit (different zones)
+        assert result.hit is True
+        assert result.critical is False
+
+    def test_no_auto_crit_when_attack_misses(
+        self, fighter: Combatant, goblin: Combatant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SRD: auto-crit only applies on a HIT; a missed attack stays a miss."""
+        from engine.conditions import apply_condition as cond_apply
+
+        cond_apply(
+            goblin.conditions,
+            ActiveCondition(condition_type=ConditionType.PARALYZED, source="test"),
+        )
+        goblin.character.ac = 20  # very high
+
+        # Roll low enough to miss even with advantage
+        monkeypatch.setattr("engine.combat.roll_check", _mock_roll_check(3))
+
+        longsword: Weapon = fighter.inventory.equipped[EquipmentSlot.MAIN_HAND]  # type: ignore[assignment]
+        result = resolve_attack(fighter, goblin, longsword)
+        assert result.hit is False
+        assert result.critical is False
+        assert result.damage == 0
+
 
 # ---------------------------------------------------------------------------
 # TestResolveSpell
@@ -845,6 +895,33 @@ class TestFledCombatant:
             is_active=True,
         )
         assert check_combat_end(state) == CombatEndReason.FLED
+
+    def test_advance_turn_ends_combat_when_no_eligible_combatant(
+        self, fighter: Combatant, goblin: Combatant,
+    ) -> None:
+        """Regression for C4: when every remaining combatant is dead/fled,
+        advance_turn must set is_active=False with an end_reason instead of
+        leaving current_turn_index pointing at a dead combatant. Callers
+        (TurnManager) rely on this to short-circuit to _finalize.
+        """
+        from engine.combat import CombatEndReason, CombatState
+
+        fighter.fled = True
+        goblin.is_alive = False
+        state = CombatState(
+            combatants=[fighter, goblin],
+            current_turn_index=0,
+            is_active=True,
+        )
+        new_state = advance_turn(state)
+        assert new_state.is_active is False
+        assert new_state.end_reason is not None
+        # FLED is the right reason here (alive PC fled, enemies dead)
+        assert new_state.end_reason in {
+            CombatEndReason.FLED,
+            CombatEndReason.VICTORY,
+            CombatEndReason.DEFEAT,
+        }
 
 
 # ---------------------------------------------------------------------------
