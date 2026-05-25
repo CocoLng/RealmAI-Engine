@@ -43,6 +43,28 @@ from engine.inventory import (
 )
 from engine.spells import create_spellcaster_state
 from world.campaign import Campaign
+from world.location import Location
+
+
+def _resolve_direction(loc: Location, direction: str) -> str | None:
+    """Map ``direction`` to one of ``loc.connections``.
+
+    Checks aliases first (so ``"nord"`` resolves through
+    ``exit_aliases``), then falls back to a case-insensitive exact
+    match against the connection name itself. Returns ``None`` when
+    nothing matches.
+    """
+    d = (direction or "").strip().lower()
+    if not d:
+        return None
+    for conn, aliases in (loc.exit_aliases or {}).items():
+        for alias in aliases or []:
+            if alias.lower() == d:
+                return conn
+    for conn in loc.connections or []:
+        if conn.lower() == d:
+            return conn
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +435,7 @@ class ScenarioRunner:
                 raise RuntimeError(
                     "ai_enabled=True requires an ollama_client to be passed"
                 )
+            session.ollama_client = self.ollama_client
             session.interpreter = Interpreter(self.ollama_client)
             session.narrator = Narrator(self.ollama_client)
             session.story_director = None
@@ -519,14 +542,67 @@ class ScenarioRunner:
     # ------------------------------------------------------------------
 
     async def look(self, player_idx: int = 0) -> EmbedCapture:
-        """No-op exploration: emit a neutral 'look around' narration."""
+        """No-op exploration: emit a neutral 'look around' narration.
+
+        State is supposed to have been updated already by ``move`` /
+        engine paths; ``look`` itself never mutates the world.
+        """
+        session = self.session
+        if session is not None and session.current_location is not None:
+            loc = session.current_location
+            description = loc.description or loc.arrival_hook or "Vous observez votre environnement."
+            return await self._exploration_stub(description)
         return await self._exploration_stub("Vous observez votre environnement.")
 
     async def move(self, direction: str, player_idx: int = 0) -> EmbedCapture:
-        """No-op exploration: emit a neutral 'move' narration."""
-        return await self._exploration_stub(
-            f"Vous vous déplacez vers {direction}.",
+        """Resolve ``direction`` and delegate to ``change_location``.
+
+        ``direction`` is matched against the current location's
+        ``exit_aliases`` (e.g. ``"nord"`` -> ``"Salle des échos"``) and,
+        if that fails, against the raw ``connections`` list. The actual
+        mutation (DB lookup or stub hydration via Ollama, NPC reload,
+        campaign update) is owned by :func:`bot.world_navigation.change_location`
+        — production code path; the runner stays a thin wrapper so
+        scenario tests exercise the same logic the live cogs use.
+
+        Falls back to a neutral stub embed (no state mutation) when no
+        session/location is active, when the direction maps to nothing,
+        or when ``change_location`` raises :class:`LocationChangeError`
+        (e.g. mock-LLM runs without a pre-seeded destination).
+        """
+        session = self.session
+        if session is None or session.current_location is None:
+            return await self._exploration_stub(
+                f"Vous vous déplacez vers {direction}.",
+            )
+
+        destination = _resolve_direction(session.current_location, direction)
+        if destination is None:
+            return await self._exploration_stub(
+                f"Aucun passage évident vers « {direction} » depuis "
+                f"{session.current_location.name}.",
+            )
+
+        from bot.world_navigation import LocationChangeError, change_location
+
+        try:
+            new_loc = await change_location(
+                session, destination, db_factory=self.bot.db_factory,
+            )
+        except LocationChangeError as exc:
+            return await self._exploration_stub(
+                f"Vous tentez de gagner « {destination} », mais le passage "
+                f"reste hors d'atteinte ({exc.reason}).",
+            )
+
+        embed = discord.Embed(
+            title=f"Arrivée : {new_loc.name}",
+            description=new_loc.description or new_loc.arrival_hook or "",
         )
+        cap = EmbedCapture(content=None, embed=embed, view=None)
+        self.channel_capture.messages.append(cap)
+        self.responses.append(cap)
+        return cap
 
     async def talk(self, npc: str, player_idx: int = 0) -> EmbedCapture:
         """No-op exploration: emit a neutral 'talk' narration."""

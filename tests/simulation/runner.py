@@ -151,11 +151,32 @@ class SimulationRunner:
                 agent_retries=0,
             )
             self.recorder.append(record)
+
+            # Lead 3.c — surface the rule-visibility keys R1.location_mismatch
+            # and R1.locked_fact_violation read from the last history entry.
+            # ``moved_this_turn`` is derived from the snapshot diff so it
+            # works for both stub and change_location-backed moves.
+            # ``location_known`` accumulates over the run so the rule has
+            # a stable "places the player has been told about" set.
+            # ``locked_facts`` is plumbed as an empty list until the
+            # session gains a real locked-facts registry.
+            moved_this_turn = (
+                state_before.get("location") != state_after.get("location")
+            )
+            prior_known: set[str] = set()
+            if self._history:
+                prior_known = set(self._history[-1].get("location_known", []) or [])
+            current_visible = set(state_after.get("locations_known", []) or [])
+            location_known = sorted(prior_known | current_visible)
+
             self._history.append(
                 {
                     "intent_action": intent.action,
                     "intent_args": intent.args,
                     "narration": outcome.narration,
+                    "moved_this_turn": moved_this_turn,
+                    "location_known": location_known,
+                    "locked_facts": [],
                 }
             )
 
