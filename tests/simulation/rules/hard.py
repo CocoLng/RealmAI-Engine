@@ -224,6 +224,53 @@ def check_phantom_npc(
     return alerts
 
 
+_NEGATION_RE = re.compile(
+    r"\b(n['']\w*\s+(plus|pas|jamais)|n['']\s*(plus|pas|jamais)|aucun[e]?|"
+    r"sans|d[ée]truit[e]?|effondr[ée]|disparu[e]?|ras[ée]|an[ée]anti[e]?)\b",
+    re.IGNORECASE,
+)
+
+
+def _fact_subject(fact_text: str) -> str:
+    """Extract the noun-phrase subject of a locked fact (first 4 words)."""
+    words = fact_text.split()
+    return " ".join(words[:4]).rstrip(".").lower()
+
+
+def check_locked_fact_violation(
+    narration: str,
+    state: Any,
+    diff: dict[str, list[Any]],
+    history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.locked_fact_violation — narration negates a locked world fact."""
+    if not history:
+        return []
+    last = history[-1] if isinstance(history[-1], dict) else {}
+    facts = last.get("locked_facts", []) or []
+    alerts: list[IncoherenceAlert] = []
+    narration_lower = narration.lower()
+    for fact in facts:
+        subject = _fact_subject(fact["text"])
+        if not subject or subject not in narration_lower:
+            continue
+        # Look for negation in a window of 60 chars around the subject mention.
+        idx = narration_lower.find(subject)
+        window = narration[max(0, idx - 20) : idx + len(subject) + 60]
+        if _NEGATION_RE.search(window):
+            alerts.append(
+                IncoherenceAlert(
+                    severity="hard",
+                    category="locked_fact_violation",
+                    turn=getattr(state, "current_turn", 0),
+                    rule="R1.locked_fact_violation",
+                    narration_snippet=_snippet_around(narration, subject),
+                    expected=f"Locked fact: '{fact['text']}'",
+                )
+            )
+    return alerts
+
+
 _ZONE_RE = re.compile(r"\bzone\s+([a-zà-ÿ]+(?:\s+[a-zà-ÿ]+)?)\b", re.IGNORECASE)
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from tests.simulation.rules.hard import check_hp_mismatch, check_item_use_without_owning, check_location_mismatch, check_npc_status, check_phantom_npc, check_zone_violation
+from tests.simulation.rules.hard import check_hp_mismatch, check_item_use_without_owning, check_location_mismatch, check_locked_fact_violation, check_npc_status, check_phantom_npc, check_zone_violation
 
 
 @dataclass
@@ -210,4 +210,28 @@ class TestR1ZoneViolation:
         state = FakeState(combat_active=False)
         narration = "La zone flanc droit est silencieuse."
         alerts = check_zone_violation(narration, state, diff={}, history=[])
+        assert alerts == []
+
+
+class TestR1LockedFactViolation:
+    def test_negated_locked_fact_triggers(self) -> None:
+        state = FakeState()
+        # Locked facts come from history (last entry's "locked_facts" key)
+        history = [{"locked_facts": [{"text": "Le pont de bois est intact"}]}]
+        narration = "Le pont de bois n'est plus intact."
+        alerts = check_locked_fact_violation(narration, state, diff={}, history=history)
+        assert len(alerts) == 1
+        assert alerts[0].rule == "R1.locked_fact_violation"
+
+    def test_locked_fact_consistent_no_trigger(self) -> None:
+        state = FakeState()
+        history = [{"locked_facts": [{"text": "Le pont de bois est intact"}]}]
+        narration = "Le pont de bois est intact, vous le traversez."
+        alerts = check_locked_fact_violation(narration, state, diff={}, history=history)
+        assert alerts == []
+
+    def test_no_locked_facts_no_trigger(self) -> None:
+        state = FakeState()
+        narration = "Le pont s'effondre."
+        alerts = check_locked_fact_violation(narration, state, diff={}, history=[])
         assert alerts == []
