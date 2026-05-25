@@ -1,22 +1,40 @@
 """Token estimation and truncation utilities.
 
-Uses a simple word-based approximation: tokens ~ words x 1.3.
-No external tokenizer dependency needed.
+The old heuristic (``words × 1.3``) systematically undercounts on text
+containing punctuation, accents, numbers, or short words — qwen3.5
+tokenises closer to one token per 3-4 characters for French/English.
+The audit on 2026-05-25 flagged the resulting 5-10% undercount as a
+silent cause of context-window overflows.
+
+This module now uses the max of two heuristics and biases toward
+**over-estimation** so callers stay safely under their token budget.
+No external tokenizer dependency: the estimator is a fast Python
+function suitable for the hot path of context assembly.
 """
 
 import math
 
+# Empirically, qwen3.5 tokenises French/English text at roughly
+# one token per 3.5 characters and one token per ~1.5 words. We take
+# the max of both to stay conservative.
+_CHARS_PER_TOKEN = 3.5
+_TOKENS_PER_WORD = 1.5
+
 
 def estimate_tokens(text: str) -> int:
-    """Approximate token count from text.
+    """Approximate token count from text, biased toward over-estimation.
 
-    Uses the heuristic: tokens ~ words x 1.3 (rounded up).
-    Returns 0 for empty strings.
+    Returns the max of two estimates:
+    - character-based (``chars / 3.5``) — catches punctuation, accents, numbers
+    - word-based (``words × 1.5``) — catches long words that tokenise into pieces
+
+    Returns 0 for empty/whitespace-only strings.
     """
     if not text or not text.strip():
         return 0
-    word_count = len(text.split())
-    return math.ceil(word_count * 1.3)
+    char_estimate = math.ceil(len(text) / _CHARS_PER_TOKEN)
+    word_estimate = math.ceil(len(text.split()) * _TOKENS_PER_WORD)
+    return max(char_estimate, word_estimate)
 
 
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
