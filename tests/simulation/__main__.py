@@ -14,6 +14,7 @@ import random
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -69,57 +70,85 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-db", action="store_true")
     parser.add_argument("--mock-llm", action="store_true")
     parser.add_argument("--config", type=str, default=None)
+    parser.add_argument(
+        "--theme",
+        type=str,
+        default="Une grotte oubliée dans des collines venteuses, riches en mystères",
+        help="Campaign theme passed to WorldGenerator (real-LLM runs only)",
+    )
     return parser.parse_args()
 
 
-def _seed_starting_world(scenario: ScenarioRunner, player_idx: int = 0) -> None:
-    """Populate a minimal starting world so the agent has context to act on.
+def _seed_starting_world(
+    scenario: ScenarioRunner,
+    client: Any,
+    theme: str,
+    player_idx: int = 0,
+    *,
+    generate_via_llm: bool = True,
+) -> None:
+    """Populate a starting world so the agent has context to act on.
 
-    Creates a starting Location with one NPC and one connection, equips the
-    character with a starter weapon, and registers everything on the session.
+    When ``generate_via_llm`` is True (and the client supports it), the
+    starting location is produced by the real :class:`WorldGenerator` —
+    a single qwen3.5:9b call (~25 s). NPCs mentioned in the generated
+    location are turned into minimal :class:`NPC` records so the agent
+    can ``talk`` to them. Otherwise (mock-LLM or generate_via_llm=False),
+    falls back to a hardcoded location for plumbing tests.
     """
     session = scenario.session
     if session is None:
         raise RuntimeError("seed_starting_world: no active session")
 
-    # Starting location
-    start = Location(
-        name="Entrée de la grotte",
-        description=(
-            "Une vaste cavité humide s'ouvre devant vous. Des stalactites "
-            "luisent à la lueur d'une torche oubliée. Un passage étroit "
-            "s'enfonce vers le nord."
-        ),
-        arrival_hook=(
-            "Vous franchissez le seuil de la grotte, le bruit du vent "
-            "remplace soudain le calme de l'extérieur."
-        ),
-        connections=["Salle des échos"],
-        exit_aliases={"Salle des échos": ["nord", "north"]},
-        npcs_present=["Garm"],
-    )
+    if generate_via_llm:
+        try:
+            from ai.world_generator import WorldGenerator
+
+            world_gen = WorldGenerator(client)
+            campaign_context = (
+                f"Campagne sur le thème: {theme}. "
+                f"Le joueur démarre dans un lieu d'introduction calme mais riche en accroche narrative, "
+                f"avec 1-2 PNJ que le joueur peut rencontrer immédiatement."
+            )
+            logger.info("WORLD generating starting location (theme=%s)...", theme)
+            start = world_gen.generate(
+                campaign_context=campaign_context,
+                location_type="introduction",
+                language="fr",
+                npc_count_hint=2,
+                campaign_id=session.campaign.id,
+            )
+            logger.info(
+                "WORLD generated: name=%s npcs=%s exits=%s",
+                start.name, start.npcs_present, start.connections,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "WorldGenerator failed (%s) — falling back to hardcoded world",
+                exc,
+            )
+            start = _hardcoded_starting_location()
+    else:
+        start = _hardcoded_starting_location()
+
     session.current_location = start
 
-    # NPC: Garm — friendly survivor
-    garm = NPC(
-        name="Garm",
-        race=Race.HUMAN,
-        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=12, WIS=12, CHA=14),
-        hp=8,
-        max_hp=8,
-        ac=10,
-        disposition=NPCDisposition.FRIENDLY,
-        description="Un voyageur usé par la route, blessé à l'épaule.",
-        personality=(
-            "Cordial mais nerveux. Garde un œil sur l'entrée comme si "
-            "quelque chose le poursuivait."
-        ),
-        location_name="Entrée de la grotte",
-        knowledge=["Il y a des gobelins plus profond dans la grotte."],
-    )
-    session.npcs[garm.name] = garm
+    # Materialize minimal NPCs for each name the location declared.
+    for name in start.npcs_present:
+        if name in session.npcs:
+            continue
+        session.npcs[name] = NPC(
+            name=name,
+            race=Race.HUMAN,
+            ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+            hp=8,
+            max_hp=8,
+            ac=10,
+            disposition=NPCDisposition.NEUTRAL,
+            location_name=start.name,
+        )
 
-    # Equip a starter weapon
+    # Equip a starter weapon (engine path, not LLM).
     player = scenario._make_player(player_idx)
     inv = session.inventories.get(player.id)
     if inv is not None:
@@ -136,6 +165,25 @@ def _seed_starting_world(scenario: ScenarioRunner, player_idx: int = 0) -> None:
         inv = add_item(inv, sword)
         inv = equip_item(inv, sword.name, EquipmentSlot.MAIN_HAND)
         session.inventories[player.id] = inv
+
+
+def _hardcoded_starting_location() -> Location:
+    """Fallback world for mock-LLM runs or when WorldGenerator fails."""
+    return Location(
+        name="Entrée de la grotte",
+        description=(
+            "Une vaste cavité humide s'ouvre devant vous. Des stalactites "
+            "luisent à la lueur d'une torche oubliée. Un passage étroit "
+            "s'enfonce vers le nord."
+        ),
+        arrival_hook=(
+            "Vous franchissez le seuil de la grotte, le bruit du vent "
+            "remplace soudain le calme de l'extérieur."
+        ),
+        connections=["Salle des échos"],
+        exit_aliases={"Salle des échos": ["nord", "north"]},
+        npcs_present=["Garm"],
+    )
 
 
 def _snapshot_from_session(session) -> dict:
@@ -193,7 +241,13 @@ async def _run_once(args: argparse.Namespace, seed: int) -> int:
     await scenario.add_player(
         "Aria", race="Elf", class_="Wizard", player_idx=0
     )
-    _seed_starting_world(scenario, player_idx=0)
+    _seed_starting_world(
+        scenario,
+        client=client,
+        theme=args.theme,
+        player_idx=0,
+        generate_via_llm=not args.mock_llm,
+    )
 
     agent = AutonomousAgent(
         client=client,
