@@ -41,6 +41,18 @@ class StoryArcRepository:
         row.arc_json = arc.model_dump_json()
         row.current_beat_index = arc.current_beat_index
 
+    def upsert(self, arc: StoryArc) -> None:
+        """Insert or update a story arc, keyed by campaign_id."""
+        stmt = select(StoryArcRow).where(
+            StoryArcRow.campaign_id == arc.campaign_id,
+        )
+        row = self._session.execute(stmt).scalar_one_or_none()
+        if row is None:
+            self._session.add(story_arc_to_db(arc))
+            return
+        row.arc_json = arc.model_dump_json()
+        row.current_beat_index = arc.current_beat_index
+
     def update_beat_index(self, campaign_id: str, index: int) -> None:
         """Update only the current_beat_index column (efficient partial update)."""
         stmt = select(StoryArcRow).where(

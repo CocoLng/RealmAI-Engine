@@ -47,35 +47,28 @@ def persist_session(db_factory: Callable[[], Any], session: GameSession) -> None
             inv = session.inventories.get(user_id)
             spell = session.spellcasters.get(user_id)
             if inv is not None:
-                try:
-                    pc_repo.update(user_id, session.campaign.id, char, inv, spell)
-                except ValueError:
-                    pc_repo.save(user_id, session.campaign.id, char, inv, spell)
+                pc_repo.upsert(user_id, session.campaign.id, char, inv, spell)
 
         # NPCs
         npc_repo = NPCRepository(db_session)
         for npc in session.npcs.values():
-            try:
-                npc_repo.update(npc, session.campaign.id)
-            except ValueError:
-                npc_repo.save(npc, session.campaign.id)
+            npc_repo.upsert(npc, session.campaign.id)
 
         # Quests
         quest_repo = QuestRepository(db_session)
         for quest in session.quests:
-            try:
-                quest_repo.update(quest, session.campaign.id)
-            except ValueError:
-                quest_repo.save(quest, session.campaign.id)
+            quest_repo.upsert(quest, session.campaign.id)
 
         # Story arc
         if session.story_arc:
             arc_repo = StoryArcRepository(db_session)
-            try:
-                arc_repo.update(session.story_arc)
-            except ValueError:
-                arc_repo.save(session.story_arc)
+            arc_repo.upsert(session.story_arc)
 
         db_session.commit()
+    except Exception:
+        # Roll back partial writes so the next save starts from a clean
+        # session state. Re-raise so the caller surfaces the failure.
+        db_session.rollback()
+        raise
     finally:
         db_session.close()

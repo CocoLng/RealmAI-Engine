@@ -53,6 +53,23 @@ class QuestRepository:
         row.reward_gold = quest.reward_gold
         row.giver_npc = quest.giver_npc
 
+    def upsert(self, quest: Quest, campaign_id: str) -> None:
+        """Insert or update a quest, keyed by (campaign_id, title)."""
+        stmt = select(QuestRow).where(
+            QuestRow.campaign_id == campaign_id,
+            QuestRow.title == quest.title,
+        )
+        row = self._session.execute(stmt).scalar_one_or_none()
+        if row is None:
+            self._session.add(quest_to_db(quest, campaign_id))
+            return
+        row.description = quest.description
+        row.status = quest.status.value
+        row.objectives = [obj.model_dump() for obj in quest.objectives]  # type: ignore[assignment]
+        row.reward_xp = quest.reward_xp
+        row.reward_gold = quest.reward_gold
+        row.giver_npc = quest.giver_npc
+
     def delete(self, title: str, campaign_id: str) -> None:
         """Delete a quest by title within a campaign."""
         stmt = select(QuestRow).where(

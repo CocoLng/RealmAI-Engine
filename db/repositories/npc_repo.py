@@ -75,6 +75,36 @@ class NPCRepository:
             npc.stat_block.model_dump_json() if npc.stat_block else None
         )
 
+    def upsert(self, npc: NPC, campaign_id: str) -> None:
+        """Insert or update an NPC, keyed by (campaign_id, name)."""
+        stmt = select(NPCRow).where(
+            NPCRow.campaign_id == campaign_id,
+            NPCRow.name == npc.name,
+        )
+        row = self._session.execute(stmt).scalar_one_or_none()
+        if row is None:
+            self._session.add(npc_to_db(npc, campaign_id))
+            return
+        row.race = npc.race.value
+        row.char_class = npc.char_class.value if npc.char_class else None
+        row.level = npc.level
+        row.ability_scores = npc.ability_scores.model_dump()  # type: ignore[assignment]
+        row.hp = npc.hp
+        row.max_hp = npc.max_hp
+        row.ac = npc.ac
+        row.disposition = npc.disposition.value
+        row.is_alive = npc.is_alive
+        row.description = npc.description
+        row.personality = npc.personality
+        row.location_name = npc.location_name
+        row.aliases = list(npc.aliases)
+        row.secrets = list(npc.secrets)
+        row.knowledge = list(npc.knowledge)
+        row.dialogue_history = [exch.model_dump() for exch in npc.dialogue_history]
+        row.stat_block_json = (
+            npc.stat_block.model_dump_json() if npc.stat_block else None
+        )
+
     def delete(self, name: str, campaign_id: str) -> None:
         """Delete an NPC by name within a campaign."""
         stmt = select(NPCRow).where(

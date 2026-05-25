@@ -760,3 +760,140 @@ class TestCascadeDeletes:
         assert NPCRepository(db_session).list_by_campaign(sample_campaign.id) == []
         assert LocationRepository(db_session).list_by_campaign(sample_campaign.id) == []
         assert QuestRepository(db_session).list_by_campaign(sample_campaign.id) == []
+
+
+# ---------------------------------------------------------------------------
+# C5 — Idempotent upsert on PC/NPC/Quest/StoryArc
+# ---------------------------------------------------------------------------
+
+
+class TestUpsertIdempotent:
+    """Each new upsert() method must insert when missing and update when present,
+    without the exception-driven control flow that bot/persistence.py used to rely on.
+    """
+
+    def test_npc_upsert_inserts_then_updates(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+        sample_npc: NPC,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = NPCRepository(db_session)
+
+        repo.upsert(sample_npc, sample_campaign.id)
+        db_session.commit()
+
+        # Mutate and upsert again — same name, should update in place.
+        sample_npc.hp = 1
+        repo.upsert(sample_npc, sample_campaign.id)
+        db_session.commit()
+
+        loaded = repo.get_by_name(sample_npc.name, sample_campaign.id)
+        assert loaded is not None
+        assert loaded.hp == 1
+        assert len(repo.list_by_campaign(sample_campaign.id)) == 1
+
+    def test_quest_upsert_inserts_then_updates(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+        sample_quest: Quest,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = QuestRepository(db_session)
+
+        repo.upsert(sample_quest, sample_campaign.id)
+        db_session.commit()
+
+        sample_quest.status = QuestStatus.COMPLETED
+        repo.upsert(sample_quest, sample_campaign.id)
+        db_session.commit()
+
+        loaded = repo.get_by_title(sample_quest.title, sample_campaign.id)
+        assert loaded is not None
+        assert loaded.status == QuestStatus.COMPLETED
+        assert len(repo.list_by_campaign(sample_campaign.id)) == 1
+
+    def test_player_character_upsert_inserts_then_updates(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+    ) -> None:
+        from engine.character import (
+            AbilityScores,
+            CharacterClass,
+            Race,
+            create_character,
+        )
+        from engine.inventory import create_inventory
+
+        from db.repositories.player_character_repo import (
+            PlayerCharacterRepository,
+        )
+
+        CampaignRepository(db_session).save(sample_campaign)
+        scores = AbilityScores(STR=16, DEX=14, CON=13, INT=10, WIS=12, CHA=8)
+        char = create_character("Thorin", Race.DWARF, CharacterClass.FIGHTER, scores)
+        inv = create_inventory()
+        repo = PlayerCharacterRepository(db_session)
+
+        repo.upsert(123, sample_campaign.id, char, inv, None)
+        db_session.commit()
+
+        # Same user_id + campaign_id → update in place (no IntegrityError)
+        char.hp = 1
+        repo.upsert(123, sample_campaign.id, char, inv, None)
+        db_session.commit()
+
+        loaded = repo.get(123, sample_campaign.id)
+        assert loaded is not None
+        loaded_char, _, _ = loaded
+        assert loaded_char.hp == 1
+        assert len(repo.get_all_for_campaign(sample_campaign.id)) == 1
+
+    def test_story_arc_upsert_inserts_then_updates(
+        self,
+        db_session: Session,
+        sample_campaign: Campaign,
+    ) -> None:
+        from world.story_arc import StoryArc, StoryBeat
+
+        from db.repositories.story_arc_repo import StoryArcRepository
+
+        CampaignRepository(db_session).save(sample_campaign)
+        types = ["social", "combat", "exploration", "puzzle", "boss"]
+        beats = [
+            StoryBeat(
+                beat_number=i + 1,
+                title=f"Beat {i + 1}",
+                description="A meaningful beat description.",
+                location_hint=f"Place {i + 1}",
+                encounter_type=types[i % len(types)],
+            )
+            for i in range(8)
+        ]
+        arc = StoryArc(
+            campaign_id=sample_campaign.id,
+            theme="mystery",
+            premise="A long-buried evil has stirred and the heroes must investigate.",
+            beats=beats,
+            villain_name="The Hollow King",
+            villain_motivation="Restore his sundered realm",
+            current_beat_index=0,
+        )
+        repo = StoryArcRepository(db_session)
+
+        # Insert path
+        repo.upsert(arc)
+        db_session.commit()
+
+        # Update path: change theme + advance beat
+        arc2 = arc.model_copy(update={"current_beat_index": 1, "theme": "horror"})
+        repo.upsert(arc2)
+        db_session.commit()
+
+        loaded = repo.get_by_campaign(sample_campaign.id)
+        assert loaded is not None
+        assert loaded.theme == "horror"
+        assert loaded.current_beat_index == 1

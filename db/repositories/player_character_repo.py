@@ -65,6 +65,25 @@ class PlayerCharacterRepository:
         row.inventory_json = inventory.model_dump_json()
         row.spellcaster_json = spellcaster.model_dump_json() if spellcaster else None
 
+    def upsert(
+        self,
+        user_id: int,
+        campaign_id: str,
+        character: Character,
+        inventory: Inventory,
+        spellcaster: SpellcasterState | None,
+    ) -> None:
+        """Insert or update a player character. Single-trip get-then-write."""
+        row = self._session.get(PlayerCharacterRow, (user_id, campaign_id))
+        if row is None:
+            self._session.add(
+                player_character_to_db(user_id, campaign_id, character, inventory, spellcaster),
+            )
+            return
+        row.character_json = character.model_dump_json()
+        row.inventory_json = inventory.model_dump_json()
+        row.spellcaster_json = spellcaster.model_dump_json() if spellcaster else None
+
     def delete(self, user_id: int, campaign_id: str) -> None:
         """Delete a player character. No-op if not found."""
         row = self._session.get(PlayerCharacterRow, (user_id, campaign_id))
