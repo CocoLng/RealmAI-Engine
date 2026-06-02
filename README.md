@@ -1,5 +1,13 @@
 # RealmAI Engine
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![discord.py 2.7+](https://img.shields.io/badge/discord.py-2.7+-5865F2.svg)](https://github.com/Rapptz/discord.py)
+[![Pydantic v2](https://img.shields.io/badge/pydantic-v2-e92063.svg)](https://docs.pydantic.dev/latest/)
+[![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
+[![Types: mypy](https://img.shields.io/badge/types-mypy-2a6db2.svg)](https://mypy-lang.org/)
+[![Tests](https://img.shields.io/badge/tests-2200+-brightgreen.svg)](#run-the-test-suite)
+
 An AI-powered RPG Game Master that runs as a Discord bot. A deterministic
 Python engine handles all game mechanics (dice, combat, inventory, rules).
 Local LLMs via Ollama handle narration only. The engine is also exposed as
@@ -7,10 +15,10 @@ an MCP server for live-testing the bot from Claude Code.
 
 **The LLM narrates. The code arbitrates. No exceptions.**
 
-> **Status — May 2026:** Phase 3 (Discord multiplayer) is functional end-to-end.
-> Engine + AI + memory + persistence are stable; ~2 200 tests pass. Phase 4
-> (CI, docs polish, real play sessions) is the remaining gap. See
-> [`docs/internal/STATE.md`](docs/internal/STATE.md) for the exact
+> **Status — June 2026:** Phase 3 (Discord multiplayer) is functional end-to-end.
+> Engine + AI + memory + persistence are stable; ~2 200 tests pass. Remaining
+> Phase 4 gaps: CI/CD, a schema-migration story, and real multi-session play.
+> See [`docs/internal/STATE.md`](docs/internal/STATE.md) for the exact
 > implementation status.
 
 ## Why this project
@@ -21,6 +29,53 @@ RealmAI Engine takes a different approach: a strict Python engine enforces
 all mechanics, and the LLM is a blind narrator that describes what happened.
 No other open-source project combines a deterministic engine + LLM narration
 + MCP server + Discord multiplayer.
+
+## Demo
+
+> _Screenshots / GIFs coming soon._ Drop real captures into `docs/assets/`
+> and uncomment the lines below.
+
+<!-- Suggested shots:
+     1. /start_campaign lobby + character creation
+     2. A free-form @mention action → narrative embed with raw mechanics
+     3. A combat turn with the Attack/Cast/Defend/Flee buttons
+     4. The arc tracker pinned message -->
+<!-- ![Campaign lobby](docs/assets/demo-lobby.png) -->
+<!-- ![Combat turn](docs/assets/demo-combat.gif) -->
+
+## Features
+
+- **Deterministic 5e-style engine** — dice, 6 classes × 7 races, a 26-item
+  catalogue, 21 spells, 17 conditions, and multi-enemy combat with initiative,
+  surprise, death saves, and tiered NPC AI (minion → elite → boss).
+- **Blind LLM narration** — the narrator only turns an `ActionResult` into
+  prose; it never decides an outcome. Discord shows the narrative **and** the
+  raw mechanics side by side.
+- **Free-form play** — `@mention` the bot in plain language ("je fouille
+  l'autel", "j'attaque le gobelin"); a 4B interpreter maps it to a structured
+  action the engine validates and resolves.
+- **Story that remembers** — 4-layer memory (SQLite state, sliding window,
+  auto summaries, ChromaDB RAG) keeps each ~2 500-token prompt grounded; a
+  Story Director and beat-progression engine keep the arc coherent.
+- **Multiplayer campaigns** — one dedicated channel per campaign, a join/leave
+  lobby, per-guild language (FR/EN/ES/DE/PT), save/resume, and channel
+  archival on `/end_campaign`.
+- **Built to be tested** — ~2 200 unit tests, 13 end-to-end scenarios, and an
+  autonomous LLM playthrough simulator that hunts for narrative incoherence.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `/start_campaign` | Open a lobby; players join, build characters, then launch |
+| `@RealmAI <action>` | Free-form action in natural language (the main game loop) |
+| `/character` · `/level_up` | View your sheet · spend XP to level up |
+| `/inventory` · `/equip` · `/unequip` · `/use_item` | Manage gear (recomputes AC) |
+| `/roll 2d6+3` | Ad-hoc dice with a full breakdown |
+| `/hint` | Three escalating hint tiers (vague → objectives → concrete) |
+| `/story_catch_up` | Story Director recap of the current objective + hooks |
+| `/save` · `/resume` · `/end_campaign` | Persist · reload · archive a campaign |
+| `/settings` · `/add_member` | Guild category & language · add a player/viewer |
 
 ## Architecture (one-screen view)
 
@@ -174,8 +229,21 @@ uv run python main.py
 ```bash
 uv run pytest                  # full suite (~2 200 tests)
 uv run pytest tests/engine -q  # engine only
-uv run pytest -m scenario      # end-to-end scenarios via ScenarioRunner
+uv run pytest tests/scenarios  # end-to-end scenarios via ScenarioRunner
 ```
+
+### Autonomous playthrough simulator
+
+Drive an LLM agent through a whole campaign and check for narrative-coherence
+violations — it catches regressions a unit test can't see:
+
+```bash
+uv run python -m tests.simulation --mock-llm --max-turns 20   # fast, deterministic
+uv run python -m tests.simulation --max-turns 30              # real Ollama
+```
+
+Each run lands in `tests/simulation/runs/<timestamp>/` (turn records, state
+diffs, coherence alerts, exit code).
 
 ### Quality gates
 
@@ -203,9 +271,18 @@ uv run python scripts/reset_dev_data.py
 - **Anti-cheat by design** — `ActionValidator` checks every action before
   the engine processes it. Discord shows both the narrative *and* the raw
   mechanics (dice, modifiers, outcomes).
-- **Migrations are forward-only** — incremental `ALTER TABLE`s versioned by
-  `schema_version`. No Alembic; the schema is small enough that hand-rolled
-  is simpler and safer.
+- **Disposable dev database** — the schema is created with SQLAlchemy
+  `create_all()` and `data/` is gitignored; reset it any time with
+  `scripts/reset_dev_data.py`. A proper migration story is a Phase 4 item,
+  before persistence has to survive a schema change.
+
+## Contributing
+
+Contributions are welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the
+dev setup, the quality gates, and the engine invariants to respect (most
+importantly: no LLM calls in `engine/`). By participating you agree to the
+[Code of Conduct](CODE_OF_CONDUCT.md). Found a security issue? See
+[SECURITY.md](SECURITY.md) — please don't open a public issue for it.
 
 ## License
 

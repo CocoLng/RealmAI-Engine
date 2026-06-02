@@ -2,6 +2,12 @@
 
 Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou non commencé**. Basé sur le code présent au commit `7c0f9a0`.
 
+> **Mise à jour 2026-06-02 :** Phase 3 (bot Discord) est désormais fonctionnelle
+> de bout en bout (combat 5e, beat progression, simulateur de playthrough
+> autonome). README + ARCHITECTURE remis à niveau et fichiers OSS ajoutés
+> (LICENSE, CONTRIBUTING). Reste en Phase 4 : CI/CD, une vraie stratégie de
+> migration de schéma, et des sessions de jeu réelles.
+
 ## Phases du projet
 
 | Phase | État | Contenu |
@@ -10,8 +16,8 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 | **Phase 2a — World + DB** | 🟢 Terminée | `world/`, `db/`, 11 repos, mappers |
 | **Phase 2b — Memory 4 couches** | 🟢 Terminée | `memory/`, ChromaDB, context assembler |
 | **Phase 2c — AI Core** | 🟢 Terminée | `ai/` (8 services), prompts, entity resolver |
-| **Phase 3 — Discord Bot** | 🟡 En cours | Cogs, pipeline, views, embeds, launcher — fonctionnel |
-| **Phase 4 — Polish + ship** | 🔴 Non commencé | Pas de CI, pas de README final, pas de blog post |
+| **Phase 3 — Discord Bot** | 🟢 Fonctionnelle | Cogs, pipeline, views, embeds, launcher, combat 5e, beat progression — bout en bout |
+| **Phase 4 — Polish + ship** | 🟡 En cours | README/ARCHITECTURE à jour + LICENSE/CONTRIBUTING ; reste CI, migrations, blog post |
 
 ## Chantier combat D&D 5e (tasks/combat/)
 

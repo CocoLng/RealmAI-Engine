@@ -1,9 +1,36 @@
 [project]
 name = "realmai-engine"
 version = "0.1.0"
-description = "Add your description here"
+description = "An AI-powered RPG Game Master Discord bot — a deterministic Python engine arbitrates D&D-style mechanics while local LLMs (Ollama) handle narration."
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "CocoLng" }]
+keywords = [
+    "discord-bot",
+    "rpg",
+    "game-master",
+    "dungeons-and-dragons",
+    "dnd-5e",
+    "llm",
+    "ollama",
+    "ai",
+    "pydantic",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: Pydantic :: 2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Natural Language :: French",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Games/Entertainment :: Role-Playing",
+]
 dependencies = [
     "chromadb>=1.5.5",
     "discord-py>=2.7.1",
@@ -12,6 +39,11 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "sqlalchemy>=2.0.49",
 ]
+
+[project.urls]
+Homepage = "https://github.com/CocoLng/RealmAI-Engine"
+Repository = "https://github.com/CocoLng/RealmAI-Engine"
+Issues = "https://github.com/CocoLng/RealmAI-Engine/issues"
 
 [dependency-groups]
 dev = [

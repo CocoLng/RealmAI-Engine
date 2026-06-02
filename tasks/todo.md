@@ -2,6 +2,57 @@
 
 Commit at the end of a phase, do not co author claude.
 
+## Chantier en cours : README + Architecture OSS modernization (2026-06-02)
+
+Goal: bring README.md + ARCHITECTURE.md up to date with reality and to
+open-source project norms. Scope confirmed with user: **Full OSS treatment**,
+**no CI workflow for now** (static badges only), **placeholder Demo section**.
+
+### Plan
+- [x] Accuracy audit of README + ARCHITECTURE claims vs code (6 parallel agents, 14 drifts)
+- [x] Fix drift in README.md + ARCHITECTURE.md
+  - status line May → June 2026; Phase 3 functional / Phase 4 in progress
+  - test count verified (2 219 test functions; "~2 200" kept, accurate)
+  - documented the autonomous playthrough simulator (`tests/simulation/`)
+- [x] README badges (License · Python 3.12+ · discord.py · Pydantic v2 · Ruff · mypy · tests) — no CI badge
+- [x] README Demo section with image placeholders
+- [x] README Features / "what you can do" highlight + Commands table (verified vs cogs)
+- [x] LICENSE (MIT, 2026 CocoLng) — fixes the broken README link
+- [x] CONTRIBUTING.md (uv setup, quality gates, engine invariants, test/sim how-to)
+- [~] CODE_OF_CONDUCT.md — **user will create** (links pre-wired in README + CONTRIBUTING)
+- [~] SECURITY.md — **user will create** (links pre-wired in README)
+- [x] pyproject.toml metadata polish (description, authors, license, urls, classifiers)
+- [x] Light refresh of docs/internal/STATE.md (update banner + Phase 3/4 status)
+- [x] Verify: test count, `uv lock --check` (111 pkgs OK), doc link/consistency pass
+- [ ] Commit (conventional commits, no AI attribution)
+
+### Review
+
+**Audit (6 Explore agents) surfaced 14 drifts — all fixed in docs:**
+- engine: `combat_trigger` enum names (PLAYERS/NPCS/BOTH_READY), starter kits 15→14
+- ai: npc_generator & npc_tactician are **4b** not 9b; prompts 12→10 system; models 14→8
+- db: tables 10→11; **no `schema_version`/ALTER TABLE migrations exist** — `create_all()` only
+- bot: views 10→9 (base.py is a base class), embeds 12→13
+- the `grep "from ai" engine/` invariant was literally false → rewritten to the accurate one
+
+**Two findings flagged to the user as real code (not just doc) issues:**
+1. **No migration system.** `db/database.py` uses `Base.metadata.create_all()` only — adding a
+   column to an existing DB silently breaks it. Docs now say so; recommend a real migration story
+   for Phase 4 before persisting data that must survive schema changes.
+2. **`engine/` imports `ai.models`** (Pydantic contracts) + `boss_brain` type-hints `NPCTactician`.
+   No LLM *call* happens in engine (tactician is injected), so the spirit holds — but the literal
+   grep-test was wrong. Tech-debt: relocate those contracts to `world/`.
+
+**Added for OSS norms:** LICENSE, CONTRIBUTING.md, README badges + Demo + Features/Commands,
+pyproject metadata (license/authors/urls/classifiers/keywords). User owns CoC + SECURITY.
+
+**Did NOT run pytest:** only Markdown + pyproject *metadata* changed (pytest config untouched).
+Verified pyproject via `uv lock --check`.
+
+**Follow-ups for the user:** (a) create CODE_OF_CONDUCT.md + SECURITY.md; (b) add `docs/assets/`
+GIFs and uncomment the README Demo lines; (c) decide on CI workflow (deferred this round);
+(d) consider the two code-level findings above.
+
 ## Chantier clos : Simulator hardening (2026-05-25)
 
 Context: first end-to-end tests of `tests/simulation/` surfaced 5 improvement leads

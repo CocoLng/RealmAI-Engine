@@ -49,9 +49,14 @@ authoritative French-language reference, kept in lockstep with the code).
                        └──────────────────────────────────────────┘
 ```
 
-Dependency rule: arrows above are downward only. `engine/` never imports from
-`ai/`, `bot/`, `memory/`, or `db/`. `ai/` never imports from `bot/`. The bot
-orchestrates everything else.
+Dependency rule: arrows above are downward only. `engine/` makes **no LLM
+calls** and constructs no `ai/` service — it imports only the Pydantic I/O
+contracts in `ai.models` (`InterpretedAction`, `MechanicsOutcome`,
+`TacticalDecision`) as type hints; the boss brain receives its `NPCTactician`
+by injection (a `TYPE_CHECKING`-only import). `engine/` never imports from
+`bot/`, `memory/`, or `db/`; `ai/` never imports from `bot/`. The bot
+orchestrates everything else. (The `ai.models` coupling is a candidate for
+relocating those contracts into `world/`.)
 
 ---
 
@@ -68,16 +73,21 @@ orchestrates everything else.
 | `conditions.py` | 17 SRD conditions + advantage/disadvantage effects, `consume_surprise_if_present`, `check_concentration_save` |
 | `combat.py` | Initiative (3 cases), attacks, saves, death saves, `apply_damage`, `advance_turn`, `check_combat_end`, `record_combat_event` |
 | `combat_phases.py` | Boss HP thresholds → `check_phase_transition` |
-| `combat_trigger.py` | `CombatTrigger` (PLAYER_SURPRISE / NPC_SURPRISE / BOTH_READY) |
+| `combat_trigger.py` | `CombatTriggerKind`, `InitiativeSide` (PLAYERS / NPCS / BOTH_READY), `CombatTrigger` model |
 | `npc_ai/` | Tier-based brains: `scripted.py` (minion BFS), `elite.py` (4 behavior profiles), `legendary.py` (off-turn actions), `boss_brain.py` (LLM tactician fallback) |
 | `npc_stat_block.py`, `npc_library.py` | NPC stat blocks + combat archetype builders |
 | `validators.py` | `validate_combat_action`, `validate_exploration_action`, `validate_truce_attempt` — every player action passes through here |
 | `beat_progression.py` | `BeatProgressionEngine.evaluate()` → `{ADVANCE, STAY, NEEDS_JUDGE}` |
 | `objective_matchers.py` | Deterministic gate matchers (DEFEAT, MIN_REVEALS, HAS_ITEM, FLAG_SET, …) |
 | `skill_check.py` | `IMPROVISE` contested checks (D&D 5e) |
-| `starter_gear.py` | 15 starter kits across 6 classes |
+| `starter_gear.py` | 14 starter kits across 6 classes |
 
-**Invariant**: `grep -r "from ai" engine/` must always return empty.
+**Invariant**: `engine/` makes no LLM calls. No `ai` service is constructed or
+invoked here — the only `from ai` imports are the Pydantic data contracts in
+`ai.models` (`InterpretedAction`, `MechanicsOutcome`, `TacticalDecision`), used
+purely as type hints. The boss brain's `NPCTactician` is injected at runtime (a
+`TYPE_CHECKING`-only import). *Tech-debt note:* those contracts would ideally
+live in `world/` so `engine/` had no `from ai` line at all.
 
 ### `ai/` — LLM I/O, JSON-mode only
 
@@ -88,8 +98,8 @@ orchestrates everything else.
 | `narrator.py` | qwen3.5:9b | `MechanicsOutcome` → `{narrative, tone}` |
 | `narrator_phase.py` | qwen3.5:9b | Phase transition cinematics (3-5 sentences) |
 | `npc_agent.py` | qwen3.5:4b | NPC dialogue + `disposition_change` + `revealed_info` |
-| `npc_generator.py` | qwen3.5:9b | Lazy NPC sheet on first encounter |
-| `npc_tactician.py` | qwen3.5:9b | Boss combat decisions (`TacticalDecision`) |
+| `npc_generator.py` | qwen3.5:4b | Lazy NPC sheet on first encounter |
+| `npc_tactician.py` | qwen3.5:4b | Boss combat decisions (`TacticalDecision`) |
 | `world_generator.py` | qwen3.5:9b | Locations, NPCs, items, combat zones + triggers |
 | `arc_generator.py` | qwen3.5:9b | 10-15 beats with calibrated `objectives[]`, boss villain stat block |
 | `beat_judge.py` | qwen3.5:4b | Per-beat `judge_rubric` → confidence + reasoning |
@@ -98,8 +108,8 @@ orchestrates everything else.
 | `objective_recipes.py` | — | Recipe table + `scaffold_objectives()` (pure Python safety net) |
 | `scene_context.py` | — | Snapshot of what the acting character perceives |
 | `language.py` | — | Inject language directive into prompts |
-| `models.py` | — | All Pydantic I/O contracts (14 models) |
-| `prompts/*.txt` | — | 12 system prompts + 1 brainstorm prompt |
+| `models.py` | — | All Pydantic I/O contracts (8 models) |
+| `prompts/*.txt` | — | 10 system prompts + 1 brainstorm prompt |
 
 **Invariant**: every Ollama call sets `format: "json"`. Ollama's native
 tool-calling is broken with Qwen 3.5 (closed issues #14493, #14745). JSON
@@ -131,9 +141,11 @@ In-memory game state, no DB awareness:
 
 ### `db/` — persistence
 
-- `database.py` — engine factory + incremental migrations (`ALTER TABLE`,
-  versioned via `schema_version` table).
-- `models.py` — 10 SQLAlchemy tables (`campaigns`, `npcs`, `locations`,
+- `database.py` — engine factory + schema creation via
+  `Base.metadata.create_all()` on startup. No Alembic and no incremental
+  migration system yet — `data/` is dev-only and disposable
+  (`scripts/reset_dev_data.py`).
+- `models.py` — 11 SQLAlchemy tables (`campaigns`, `npcs`, `locations`,
   `quests`, `exchanges`, `summaries`, `story_arcs`, `player_characters`,
   `campaign_channels`, `guild_configs`, `hint_usage`).
 - `mappers.py` — bidirectional `to_db` / `from_db` per entity with JSON
@@ -153,8 +165,8 @@ Entry point: `main.py` → `bot.bot.run_bot()`.
 | `cogs/` | `session`, `character`, `inventory`, `combat`, `rolls`, `hint`, `action_handler` (the `@mention` entry), `test_bridge` (gated on `TEST_MODE`) |
 | `pipeline/` | `orchestrator.PipelineRunner` (6 phases), `interpret`, `resolve`, `narrate`, `drift_tracker` |
 | `action_pipeline.py` | Backward-compat facade re-exporting `pipeline/` |
-| `views/` | 10 Discord views (lobby, character setup, combat actions, target/spell/zone/equip/potion select, clarification) |
-| `embeds/` | 12 embed builders (narrative, scene, combat start/state/end, dice, character, inventory, lobby, arc tracker, beat, action progress, character setup recap) |
+| `views/` | 9 Discord views (lobby, character setup, combat actions, target/spell/zone/equip/potion select, clarification) over a `LoggedView` base |
+| `embeds/` | 13 embed builders (narrative, scene, combat start/state/end, dice, character, inventory, lobby, arc tracker, beat, action progress, character setup recap) |
 | `combat_entry.py`, `combat_turn_manager.py`, `combat_end.py`, `combat_truce.py` | Combat lifecycle helpers — orchestrate the engine from the bot side |
 | `game_session.py` | In-memory container for an active campaign (characters, NPCs, arc, `action_lock: asyncio.Lock`) |
 | `lobby_state.py` | Pre-launch lobby (join/leave/start/cancel) before `GameSession` is born |
@@ -278,7 +290,7 @@ PhaseTransitionEvent has consumed: bool so we never re-narrate.
 
 ### SQLite (relational source of truth)
 
-10 tables, all under one SQLite file at `data/realmai.db`:
+11 tables, all under one SQLite file at `data/realmai.db`:
 
 | Table | Purpose |
 |---|---|
@@ -294,9 +306,12 @@ PhaseTransitionEvent has consumed: bool so we never re-narrate.
 | `guild_configs` | Per-guild category override |
 | `hint_usage` | `/hint` cooldown tracking |
 
-Migrations are **incremental ALTER TABLEs**, applied by `database.py` on
-startup. No Alembic — the schema is small and the migrations have been
-straightforward (versioned via `schema_version` row).
+The schema is created by `Base.metadata.create_all()` in `database.py` on
+startup — this creates any **missing** tables but does **not** alter existing
+ones. There is no Alembic and no incremental-migration system yet: `data/` is
+dev-only and disposable (`scripts/reset_dev_data.py`). A real migration story
+is a Phase 4 prerequisite before persisting data that has to survive a schema
+change.
 
 ### ChromaDB (semantic memory)
 
@@ -322,7 +337,10 @@ The codebase is built around five non-negotiable rules. Each has CI-friendly
 enforcement (test or grep) noted in parentheses.
 
 1. **No LLM in `engine/`** — every dice roll, damage calculation, validator
-   check is pure Python. (Test: `grep -r "from ai" engine/` is empty.)
+   check is pure Python; no `ai` service is constructed or called here, and the
+   boss brain receives its LLM tactician by injection. (Enforcement: the only
+   `from ai` imports in `engine/` are Pydantic data contracts in `ai.models`;
+   nothing in `engine/` imports `ai.client` or an LLM service class.)
 
 2. **JSON mode always** — every Ollama call sets `format: "json"` (handled
    centrally in `ai/client.py`). Native tool calling is never used.
@@ -360,7 +378,7 @@ Plus one safety invariant specific to combat:
   deliberately. No tiktoken dependency.
 - **Combat turn loop**: per-turn LLM cost is `1× interpreter (4b)`
   + `1× narrator (9b)` for PC actions, `0× LLM` for minion turns,
-  `0–1× tactician (9b)` for boss turns. Most turns cost 2 calls.
+  `0–1× tactician (4b)` for boss turns. Most turns cost 2 calls.
 - **Beat advancement**: `BeatProgressionEngine.evaluate()` returns
   `{ADVANCE, STAY, NEEDS_JUDGE}`. The judge (`beat_judge.py`, 4b model)
   fires only on `NEEDS_JUDGE` — empirically ~20% of turns.
@@ -378,16 +396,22 @@ Plus one safety invariant specific to combat:
 | New NPC archetype | `engine/npc_library.py` builder entry | Tactician prompt (it's tier-agnostic) |
 | New slash command | `bot/cogs/<existing-or-new>.py` (one cog per domain) | `bot/bot.py` (cogs auto-load by filename) |
 | New combat action button | `bot/views/combat_action_view.py` + select view in `bot/views/` + `ActionPipeline.process_interpreted_action` route | Free-text path (already handled by interpreter) |
-| New persisted entity | `world/<entity>.py` (Pydantic) + `db/models.py` (SQLAlchemy) + `db/mappers.py` + `db/repositories/<entity>_repo.py` + migration in `db/database.py` | The pipeline (read through repos, mutate through `persist_session()`) |
+| New persisted entity | `world/<entity>.py` (Pydantic) + `db/models.py` (SQLAlchemy) + `db/mappers.py` + `db/repositories/<entity>_repo.py` — a fresh DB picks up new tables via `create_all`; adding a **column** to an existing table needs a manual reset until a migration story lands | The pipeline (read through repos, mutate through `persist_session()`) |
 
 ---
 
 ## 9. Testing topology
 
 - ~2 200 unit tests across `tests/{engine, ai, bot, memory, db, world}/`
-- 8+ end-to-end scenarios via `tests/scenarios/scenario_runner.py`
-  (campaign lifecycle, combat e2e, character creation lobby, beat
-  progression, persistence integrity, edge cases…)
+- 13 end-to-end scenario files (60+ tests) via
+  `tests/scenarios/scenario_runner.py` (campaign lifecycle, combat e2e,
+  character creation lobby, beat progression, persistence integrity, edge
+  cases…) — run with `uv run pytest tests/scenarios`
+- **Autonomous playthrough simulator** (`tests/simulation/`) — drives an LLM
+  `AutonomousAgent` through a full campaign via a headless `GameDriver` and
+  flags narrative-coherence violations. Mock-LLM mode for fast deterministic
+  smoke runs, real-Ollama mode for fidelity. Run:
+  `uv run python -m tests.simulation [--mock-llm] [--max-turns N]`
 - Live Discord smoke testing via `mcp_discord/` driving a tester bot
 - Coverage targets: engine ≥98%, matchers ≥95%, everywhere else best-effort
 - Quality gates: `uv run pytest`, `uv run ruff check .`, `uv run mypy .`
