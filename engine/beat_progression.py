@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from ai.models import InterpretedAction
+from engine.contracts import InterpretedAction
 from world.story_arc import (
     GateKind,
     ObjectiveKind,
@@ -28,7 +28,7 @@ from world.story_arc import (
 )
 
 if TYPE_CHECKING:
-    from ai.models import MechanicsOutcome
+    from engine.contracts import MechanicsOutcome
     from world.location import Location
     from world.story_arc import StoryArc
 

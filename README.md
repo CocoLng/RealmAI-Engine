@@ -17,8 +17,8 @@ an MCP server for live-testing the bot from Claude Code.
 
 > **Status — June 2026:** Phase 3 (Discord multiplayer) is functional end-to-end.
 > Engine + AI + memory + persistence are stable; ~2 200 tests pass. Remaining
-> Phase 4 gaps: CI/CD, a schema-migration story, and real multi-session play.
-> See [`docs/internal/STATE.md`](docs/internal/STATE.md) for the exact
+> Phase 4 gaps: CI/CD and real multi-session play. See
+> [`docs/internal/STATE.md`](docs/internal/STATE.md) for the exact
 > implementation status.
 
 ## Why this project
@@ -271,10 +271,12 @@ uv run python scripts/reset_dev_data.py
 - **Anti-cheat by design** — `ActionValidator` checks every action before
   the engine processes it. Discord shows both the narrative *and* the raw
   mechanics (dice, modifiers, outcomes).
-- **Disposable dev database** — the schema is created with SQLAlchemy
-  `create_all()` and `data/` is gitignored; reset it any time with
-  `scripts/reset_dev_data.py`. A proper migration story is a Phase 4 item,
-  before persistence has to survive a schema change.
+- **Self-reconciling schema** — on startup `init_db` runs `create_all()` and
+  then adds any model column an existing table is missing
+  ([`db/migrations.py`](db/migrations.py)), tracked by a `schema_version`. So a
+  new column is safe on an existing DB. `data/` is gitignored and resettable
+  with `scripts/reset_dev_data.py`; complex migrations (renames, backfills)
+  remain a Phase 4 item.
 
 ## Contributing
 

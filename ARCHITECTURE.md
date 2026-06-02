@@ -50,13 +50,14 @@ authoritative French-language reference, kept in lockstep with the code).
 ```
 
 Dependency rule: arrows above are downward only. `engine/` makes **no LLM
-calls** and constructs no `ai/` service — it imports only the Pydantic I/O
-contracts in `ai.models` (`InterpretedAction`, `MechanicsOutcome`,
-`TacticalDecision`) as type hints; the boss brain receives its `NPCTactician`
-by injection (a `TYPE_CHECKING`-only import). `engine/` never imports from
-`bot/`, `memory/`, or `db/`; `ai/` never imports from `bot/`. The bot
-orchestrates everything else. (The `ai.models` coupling is a candidate for
-relocating those contracts into `world/`.)
+calls** and never imports from `ai/`, `bot/`, `memory/`, or `db/`. The shared
+I/O contracts (`InterpretedAction`, `MechanicsOutcome`, `PublicEffects`,
+`TacticalDecision`) live in `engine/contracts.py` so the engine owns them; `ai/`
+imports them downward and re-exports from `ai.models` for compatibility. The
+boss brain takes its LLM tactician as an injected `Tactician` Protocol — no
+`ai` import, even under `TYPE_CHECKING`. `ai/` never imports from `bot/`. The
+bot orchestrates everything else. (Guard test:
+`tests/engine/test_no_ai_imports.py`.)
 
 ---
 
@@ -77,17 +78,17 @@ relocating those contracts into `world/`.)
 | `npc_ai/` | Tier-based brains: `scripted.py` (minion BFS), `elite.py` (4 behavior profiles), `legendary.py` (off-turn actions), `boss_brain.py` (LLM tactician fallback) |
 | `npc_stat_block.py`, `npc_library.py` | NPC stat blocks + combat archetype builders |
 | `validators.py` | `validate_combat_action`, `validate_exploration_action`, `validate_truce_attempt` — every player action passes through here |
+| `contracts.py` | Shared I/O contracts: `InterpretedAction`, `MechanicsOutcome`, `PublicEffects`, `TacticalDecision` (here, not in `ai/`, so `engine/` never imports `ai/`) |
 | `beat_progression.py` | `BeatProgressionEngine.evaluate()` → `{ADVANCE, STAY, NEEDS_JUDGE}` |
 | `objective_matchers.py` | Deterministic gate matchers (DEFEAT, MIN_REVEALS, HAS_ITEM, FLAG_SET, …) |
 | `skill_check.py` | `IMPROVISE` contested checks (D&D 5e) |
 | `starter_gear.py` | 14 starter kits across 6 classes |
 
-**Invariant**: `engine/` makes no LLM calls. No `ai` service is constructed or
-invoked here — the only `from ai` imports are the Pydantic data contracts in
-`ai.models` (`InterpretedAction`, `MechanicsOutcome`, `TacticalDecision`), used
-purely as type hints. The boss brain's `NPCTactician` is injected at runtime (a
-`TYPE_CHECKING`-only import). *Tech-debt note:* those contracts would ideally
-live in `world/` so `engine/` had no `from ai` line at all.
+**Invariant**: `engine/` makes no LLM calls and has **zero** `from ai` imports.
+The shared I/O contracts live in `engine/contracts.py`; the boss brain takes its
+tactician as an injected `Tactician` Protocol. Enforced by
+`tests/engine/test_no_ai_imports.py` (an AST scan that catches `TYPE_CHECKING`
+imports too).
 
 ### `ai/` — LLM I/O, JSON-mode only
 
@@ -108,7 +109,7 @@ live in `world/` so `engine/` had no `from ai` line at all.
 | `objective_recipes.py` | — | Recipe table + `scaffold_objectives()` (pure Python safety net) |
 | `scene_context.py` | — | Snapshot of what the acting character perceives |
 | `language.py` | — | Inject language directive into prompts |
-| `models.py` | — | All Pydantic I/O contracts (8 models) |
+| `models.py` | — | 4 ai-only models (`NarrativeResult`, `DirectorNote`, `NPCResponse`, `NPCSheet`) + re-exports the 4 `engine.contracts` models |
 | `prompts/*.txt` | — | 10 system prompts + 1 brainstorm prompt |
 
 **Invariant**: every Ollama call sets `format: "json"`. Ollama's native
@@ -141,10 +142,12 @@ In-memory game state, no DB awareness:
 
 ### `db/` — persistence
 
-- `database.py` — engine factory + schema creation via
-  `Base.metadata.create_all()` on startup. No Alembic and no incremental
-  migration system yet — `data/` is dev-only and disposable
-  (`scripts/reset_dev_data.py`).
+- `database.py` — engine + session factory; `init_db` delegates to
+  `migrations.ensure_schema`.
+- `migrations.py` — forward schema reconciliation: `create_all()` for missing
+  tables, then auto `ALTER TABLE ADD COLUMN` for any model column an existing
+  table lacks (safe `DEFAULT` for NOT NULL), plus a `schema_version` stamp. No
+  Alembic; `data/` stays dev-only and disposable (`scripts/reset_dev_data.py`).
 - `models.py` — 11 SQLAlchemy tables (`campaigns`, `npcs`, `locations`,
   `quests`, `exchanges`, `summaries`, `story_arcs`, `player_characters`,
   `campaign_channels`, `guild_configs`, `hint_usage`).
@@ -306,12 +309,15 @@ PhaseTransitionEvent has consumed: bool so we never re-narrate.
 | `guild_configs` | Per-guild category override |
 | `hint_usage` | `/hint` cooldown tracking |
 
-The schema is created by `Base.metadata.create_all()` in `database.py` on
-startup — this creates any **missing** tables but does **not** alter existing
-ones. There is no Alembic and no incremental-migration system yet: `data/` is
-dev-only and disposable (`scripts/reset_dev_data.py`). A real migration story
-is a Phase 4 prerequisite before persisting data that has to survive a schema
-change.
+Schema management lives in `db/migrations.py::ensure_schema` (called by
+`init_db`): it runs `Base.metadata.create_all()` for missing tables, then adds
+any model-defined column an existing table is missing (`ALTER TABLE ADD
+COLUMN`, with a safe `DEFAULT` for NOT NULL columns), and records a
+`schema_version`. This makes the common forward change — a new column — safe on
+an existing DB, which bare `create_all()` could not do. Structural changes
+(renames, type changes, backfills) still warrant an explicit migration
+sequenced by `schema_version`. No Alembic; `data/` remains dev-only and
+disposable (`scripts/reset_dev_data.py`).
 
 ### ChromaDB (semantic memory)
 
@@ -337,10 +343,9 @@ The codebase is built around five non-negotiable rules. Each has CI-friendly
 enforcement (test or grep) noted in parentheses.
 
 1. **No LLM in `engine/`** — every dice roll, damage calculation, validator
-   check is pure Python; no `ai` service is constructed or called here, and the
-   boss brain receives its LLM tactician by injection. (Enforcement: the only
-   `from ai` imports in `engine/` are Pydantic data contracts in `ai.models`;
-   nothing in `engine/` imports `ai.client` or an LLM service class.)
+   check is pure Python; `engine/` has **zero** `from ai` imports (the shared
+   contracts live in `engine/contracts.py`, the boss tactician is an injected
+   Protocol). (Enforcement: `tests/engine/test_no_ai_imports.py`, an AST scan.)
 
 2. **JSON mode always** — every Ollama call sets `format: "json"` (handled
    centrally in `ai/client.py`). Native tool calling is never used.
@@ -396,7 +401,7 @@ Plus one safety invariant specific to combat:
 | New NPC archetype | `engine/npc_library.py` builder entry | Tactician prompt (it's tier-agnostic) |
 | New slash command | `bot/cogs/<existing-or-new>.py` (one cog per domain) | `bot/bot.py` (cogs auto-load by filename) |
 | New combat action button | `bot/views/combat_action_view.py` + select view in `bot/views/` + `ActionPipeline.process_interpreted_action` route | Free-text path (already handled by interpreter) |
-| New persisted entity | `world/<entity>.py` (Pydantic) + `db/models.py` (SQLAlchemy) + `db/mappers.py` + `db/repositories/<entity>_repo.py` — a fresh DB picks up new tables via `create_all`; adding a **column** to an existing table needs a manual reset until a migration story lands | The pipeline (read through repos, mutate through `persist_session()`) |
+| New persisted entity | `world/<entity>.py` (Pydantic) + `db/models.py` (SQLAlchemy) + `db/mappers.py` + `db/repositories/<entity>_repo.py` — new tables **and** new columns are picked up automatically on startup by `migrations.ensure_schema` | The pipeline (read through repos, mutate through `persist_session()`) |
 
 ---
 

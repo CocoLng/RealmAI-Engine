@@ -5,8 +5,15 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 > **Mise à jour 2026-06-02 :** Phase 3 (bot Discord) est désormais fonctionnelle
 > de bout en bout (combat 5e, beat progression, simulateur de playthrough
 > autonome). README + ARCHITECTURE remis à niveau et fichiers OSS ajoutés
-> (LICENSE, CONTRIBUTING). Reste en Phase 4 : CI/CD, une vraie stratégie de
-> migration de schéma, et des sessions de jeu réelles.
+> (LICENSE, CONTRIBUTING). Reste en Phase 4 : CI/CD, et des sessions de jeu réelles.
+>
+> **Mise à jour 2026-06-03 :** Deux corrections d'archi. (1) `engine/` n'importe
+> plus rien de `ai/` — les contrats d'I/O partagés vivent dans
+> `engine/contracts.py`, le tactician boss est un Protocol injecté (garde-fou :
+> `tests/engine/test_no_ai_imports.py`). (2) Réconciliation de schéma forward :
+> `db/migrations.py::ensure_schema` ajoute automatiquement les colonnes
+> manquantes (`ALTER TABLE ADD COLUMN`) + `schema_version` ; `create_all()` seul
+> ne le faisait pas.
 
 ## Phases du projet
 

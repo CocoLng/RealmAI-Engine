@@ -44,10 +44,19 @@ def get_session_factory(engine: Engine | None = None) -> sessionmaker[Session]:
 
 
 def init_db(engine: Engine | None = None) -> None:
-    """Create all tables. Creates data/ directory if needed."""
+    """Create all tables and reconcile any missing columns. Creates data/ if needed.
+
+    Delegates to :func:`db.migrations.ensure_schema`, which runs
+    ``create_all()`` and then adds any model column an existing table is missing
+    (``create_all`` alone never alters an existing table). Imported locally to
+    avoid an import cycle (``db.migrations`` imports ``Base`` from this module).
+    """
     if engine is None:
         engine = get_engine()
     url_str = str(engine.url)
     if ":memory:" not in url_str:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(engine)
+
+    from db.migrations import ensure_schema
+
+    ensure_schema(engine)

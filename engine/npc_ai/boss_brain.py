@@ -11,16 +11,15 @@ dumb for a turn.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from ai.models import TacticalDecision
 from engine.combat import Combatant, CombatState
+from engine.contracts import TacticalDecision
 from engine.npc_ai.elite import decide_elite_action
 from engine.npc_ai.scripted import NPCActionPlan
 from engine.validators import ActionType
 
 if TYPE_CHECKING:
-    from ai.npc_tactician import NPCTactician
     from world.location import Location
 
 logger = logging.getLogger(__name__)
@@ -29,11 +28,29 @@ logger = logging.getLogger(__name__)
 _RETRY_LIMIT = 2
 
 
+class Tactician(Protocol):
+    """Structural type for the LLM boss tactician injected by the bot.
+
+    The concrete implementation lives in ``ai.npc_tactician.NPCTactician``.
+    Typing the parameter as a Protocol keeps ``engine/`` free of any ``ai``
+    import while still type-checking the ``.decide(...)`` call below.
+    """
+
+    def decide(
+        self,
+        boss: Combatant,
+        state: CombatState,
+        party_context: str,
+        recent_events: list[str],
+        language: str = "fr",
+    ) -> TacticalDecision: ...
+
+
 def decide_boss_action(
     combatant: Combatant,
     state: CombatState,
     location: "Location | None",
-    tactician: "NPCTactician",
+    tactician: Tactician,
     party_context: str = "",
     recent_events: list[str] | None = None,
     language: str = "fr",

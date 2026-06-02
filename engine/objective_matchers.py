@@ -19,7 +19,7 @@ import re
 import unicodedata
 from typing import Any
 
-from ai.models import InterpretedAction, MechanicsOutcome
+from engine.contracts import InterpretedAction, MechanicsOutcome
 from engine.validators import ActionType
 from world.location import Location
 from world.story_arc import BeatObjective, GateKind, ObjectiveGate, ObjectiveKind

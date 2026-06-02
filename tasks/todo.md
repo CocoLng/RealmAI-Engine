@@ -50,8 +50,28 @@ pyproject metadata (license/authors/urls/classifiers/keywords). User owns CoC + 
 Verified pyproject via `uv lock --check`.
 
 **Follow-ups for the user:** (a) create CODE_OF_CONDUCT.md + SECURITY.md; (b) add `docs/assets/`
-GIFs and uncomment the README Demo lines; (c) decide on CI workflow (deferred this round);
-(d) consider the two code-level findings above.
+GIFs and uncomment the README Demo lines; (c) decide on CI workflow (deferred this round).
+
+## Chantier clos : code-level fixes from the audit (2026-06-03)
+
+The two findings flagged above are now **fixed** (TDD, full suite green).
+
+### Issue #2 — engine/ no longer imports ai/
+- New `engine/contracts.py` owns the shared I/O contracts (`InterpretedAction`,
+  `MechanicsOutcome`, `PublicEffects`, `TacticalDecision`); they referenced engine's
+  `ActionType`, so engine — not `world/` — is their correct home.
+- `ai/models.py` re-exports them (39 call sites unchanged); only the 3 engine files were rewired.
+- `boss_brain` types its tactician as a local `Tactician` Protocol → zero `from ai`, even under TYPE_CHECKING.
+- Guard: `tests/engine/test_no_ai_imports.py` (AST scan, RED→GREEN).
+
+### Issue #1 — real forward-migration story
+- New `db/migrations.py::ensure_schema`: `create_all()` + auto `ALTER TABLE ADD COLUMN`
+  for any model column an existing table lacks (safe `DEFAULT` for NOT NULL) + `schema_version` stamp.
+- `init_db` delegates to it. Tests: `tests/db/test_migrations.py` (6 cases incl. populated-table column add).
+
+### Verification
+- `uv run pytest` → 2459 passed, 1 skipped. `ruff check .` → clean. `mypy` on all changed files → clean
+  (repo's 362 pre-existing test-typing errors unchanged — none added).
 
 ## Chantier clos : Simulator hardening (2026-05-25)
 
