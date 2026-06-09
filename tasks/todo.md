@@ -52,13 +52,23 @@ Two confirmed concurrency bugs in combat turn handling, fixed TDD-style
   disarm). Verify: full pytest 2465 passed, 1 skipped; ruff clean; mypy
   362 errors (pre-existing baseline, 0 new).
 
-**Known residual (tiny window, pre-existing, NOT fixed):** if the watcher
-has already fired and detached but not yet acquired `action_lock` (it is
-mid `_safe_send` of the announcement) when a free-text action arrives,
-there is nothing left to pause and both resolutions still race FIFO on the
-lock. A stale-turn guard inside `dispatch_action` (re-check the current
-combatant after acquiring the lock) would close it — out of scope of this
-finding.
+- [x] **Bug 4 (the former "Known residual", fixed 2026-06-10).** If the
+  watcher had already fired and detached but not yet acquired `action_lock`
+  (mid `_safe_send` of the announcement) when a free-text action arrived,
+  there was nothing left to pause and both resolutions raced FIFO on the
+  lock — the same turn resolved twice. Same shape via a stale button click
+  on a hub whose delete failed. Fix (TDD, staged red): stale-turn guard
+  inside `dispatch_action` — after acquiring `action_lock`, re-check that
+  combat is still active and that `get_current_combatant(state).name ==
+  action.actor_name`; drop the action without advancing the turn otherwise.
+  `_cancel_timeout` moved AFTER the guard (and inside the lock) so a stale
+  dispatch cannot disarm the watcher protecting the new current turn.
+  Regression tests: 3 new in `tests/bot/test_combat_concurrency.py`
+  (detached watcher loses the race against a concurrent free-text action,
+  deterministic via an event-gated announcement send; stale button click
+  dropped without disarming the new turn's watcher; dispatch after combat
+  end dropped). Verify: full pytest 2468 passed, 1 skipped; ruff clean;
+  mypy 362 errors (pre-existing baseline, 0 new).
 
 ## Chantier en cours : README + Architecture OSS modernization (2026-06-02)
 

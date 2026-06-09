@@ -190,13 +190,37 @@ class TurnManager:
         auto-Dodge timeout watcher. Free-text actions come in through
         :class:`ActionHandlerCog` and bypass this method — the cog handles
         them directly and then calls :meth:`on_action_resolved`.
-        """
-        self._cancel_timeout()
 
+        The turn can advance between this coroutine being scheduled and it
+        acquiring ``action_lock``: a detached watcher races a free-text
+        action FIFO on the lock, and a button click can outlive its turn
+        when the old hub's delete failed. The guard below re-checks, under
+        the lock, that combat is still live and that the action's actor is
+        still the current combatant — and drops the action WITHOUT
+        advancing the turn otherwise. ``_cancel_timeout`` deliberately runs
+        after the guard: a stale dispatch must not disarm the watcher
+        protecting the new current turn.
+        """
         if self.session.combat_state is None:
             return
 
         async with self.session.action_lock:
+            state = self.session.combat_state
+            if (
+                state is None
+                or not state.is_active
+                or get_current_combatant(state).name != action.actor_name
+            ):
+                logger.info(
+                    "dispatch_action: dropping stale %s for %s — turn "
+                    "advanced or combat ended before the lock was acquired",
+                    action.action_type.value,
+                    action.actor_name,
+                )
+                return
+
+            self._cancel_timeout()
+
             pipeline = self._build_pipeline()
             try:
                 result = await pipeline.process_interpreted_action(action)
