@@ -159,10 +159,36 @@ class ActionHandlerCog(commands.Cog):
         """
         start = time.monotonic()
 
-        async with session.action_lock:
-            result = await self._process_and_render(
-                message, session, raw_text, start,
-            )
+        # Pause the combat auto-dodge watcher while the CURRENT combatant's
+        # own free-text action runs through the pipeline — an LLM run slower
+        # than the watcher timeout must not fire a spurious "Défense
+        # automatique" that queues a second resolution of the same turn on
+        # action_lock. pause_timeout_for is a no-op for off-turn authors.
+        turn_manager = session.combat_turn_manager
+        watcher_paused = False
+        if (
+            turn_manager is not None
+            and session.combat_state is not None
+            and session.combat_state.is_active
+        ):
+            actor = session.characters.get(message.author.id)
+            if actor is not None:
+                watcher_paused = turn_manager.pause_timeout_for(actor.name)
+
+        result: PipelineOutput | None = None
+        try:
+            async with session.action_lock:
+                result = await self._process_and_render(
+                    message, session, raw_text, start,
+                )
+        finally:
+            # The action did not resolve the turn (pipeline error, dropped
+            # progress message, or an exception escaping the render) — put
+            # the auto-dodge safety net back or combat soft-stalls forever.
+            # Every non-None result advances the turn via on_action_resolved
+            # below, which arms a fresh watcher for the next PC turn.
+            if watcher_paused and result is None:
+                turn_manager.rearm_timeout()
         if result is None:
             return
 

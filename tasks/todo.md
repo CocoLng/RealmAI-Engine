@@ -31,13 +31,34 @@ Two confirmed concurrency bugs in combat turn handling, fixed TDD-style
 - [x] Verify: `uv run pytest` → 2462 passed, 1 skipped; `ruff check .`
   clean; `mypy .` at pre-existing baseline (362 errors, 0 new).
 
-**Open follow-up (separate audit finding, NOT fixed):** a free-text action
-whose LLM pipeline takes >300 s does not pause the combat timeout watcher —
-the watcher fires mid-pipeline, posts a spurious "Défense automatique", and
-its dispatch then queues on `action_lock` behind the in-flight action
-(double resolution). Pausing/cancelling the timer when a free-text action
-for the current combatant enters the pipeline needs a re-arm path on
-pipeline failure — design before coding.
+- [x] **Bug 3 (follow-up audit finding) — watcher fires mid-pipeline on slow
+  free-text actions (fixed 2026-06-10).** A free-text action for the
+  CURRENT combatant whose LLM pipeline ran longer than `_TIMEOUT_SECONDS`
+  left the auto-dodge watcher ticking: it fired mid-pipeline, posted a
+  spurious "Défense automatique", and its `dispatch_action` queued on
+  `action_lock` behind the in-flight action → double resolution of the
+  same turn. Fix (TDD, staged red): `TurnManager.pause_timeout_for(name)`
+  cancels the watcher only when the author IS the current combatant and a
+  live watcher exists; `ActionHandlerCog._run_pipeline` pauses before
+  taking `action_lock` and re-arms via `TurnManager.rearm_timeout()` in a
+  `finally` whenever the result is `None` (pipeline exception, dropped
+  progress message, exception escaping the render) — every non-None result
+  advances the turn through `on_action_resolved`, which arms the next
+  watcher itself. `rearm_timeout` is guarded (not finalized, combat active,
+  no live watcher, current combatant is a PC) and grants a fresh full
+  window. Regression tests: 3 new in `tests/bot/test_combat_concurrency.py`
+  (slow pipeline → no spurious dodge + single turn advance; pipeline
+  failure → re-armed watcher that actually fires; off-turn author does not
+  disarm). Verify: full pytest 2465 passed, 1 skipped; ruff clean; mypy
+  362 errors (pre-existing baseline, 0 new).
+
+**Known residual (tiny window, pre-existing, NOT fixed):** if the watcher
+has already fired and detached but not yet acquired `action_lock` (it is
+mid `_safe_send` of the announcement) when a free-text action arrives,
+there is nothing left to pause and both resolutions still race FIFO on the
+lock. A stale-turn guard inside `dispatch_action` (re-check the current
+combatant after acquiring the lock) would close it — out of scope of this
+finding.
 
 ## Chantier en cours : README + Architecture OSS modernization (2026-06-02)
 

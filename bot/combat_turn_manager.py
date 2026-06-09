@@ -671,6 +671,55 @@ class TurnManager:
             self.pending_timeout.cancel()
         self.pending_timeout = None
 
+    def pause_timeout_for(self, actor_name: str) -> bool:
+        """Pause the auto-dodge watcher while ``actor_name`` acts via free text.
+
+        Called by ``ActionHandlerCog._run_pipeline`` before it enters the
+        LLM pipeline: a run slower than ``_TIMEOUT_SECONDS`` must not let
+        the watcher fire mid-pipeline and queue a second resolution of the
+        same turn on ``action_lock``. Only pauses when ``actor_name`` IS
+        the current combatant and a live watcher exists — an off-turn
+        player's message must not disarm the current player's timeout.
+
+        Returns ``True`` when a watcher was cancelled. The caller then owns
+        the safety net: it MUST call :meth:`rearm_timeout` on every path
+        where the action does not resolve the turn, otherwise combat
+        soft-stalls with no auto-dodge.
+        """
+        state = self.session.combat_state
+        if state is None or not state.is_active:
+            return False
+        if get_current_combatant(state).name != actor_name:
+            return False
+        if self.pending_timeout is None or self.pending_timeout.done():
+            return False
+        self._cancel_timeout()
+        return True
+
+    def rearm_timeout(self) -> None:
+        """Re-arm the auto-dodge watcher after a paused action failed to resolve.
+
+        Counterpart of :meth:`pause_timeout_for`. The turn did not advance,
+        so the current combatant is still the player whose watcher was
+        paused — they get a fresh full ``_TIMEOUT_SECONDS`` window. No-ops
+        when combat is over, when a watcher is already armed (e.g. the turn
+        DID advance and ``_prompt_pc_turn`` armed the next one), or on NPC
+        turns (which never have a watcher).
+        """
+        if self._finalized:
+            return
+        state = self.session.combat_state
+        if state is None or not state.is_active:
+            return
+        if self.pending_timeout is not None and not self.pending_timeout.done():
+            return
+        current = get_current_combatant(state)
+        if current.side != CombatSide.PLAYER:
+            return
+        self.pending_timeout = asyncio.create_task(
+            self._timeout_watcher(current.name),
+        )
+
     # ------------------------------------------------------------------
     # Finalize
     # ------------------------------------------------------------------

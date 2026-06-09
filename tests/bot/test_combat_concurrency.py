@@ -16,6 +16,17 @@ fired at the first real suspension inside the pipeline, so the bot announced
 "Défense automatique" but the DEFEND never resolved and the turn never
 advanced. Synchronous mocks hide this — the fake pipeline below suspends for
 real.
+
+Bug 3 — auto-dodge watcher fires mid-pipeline on slow free-text actions:
+a free-text action for the CURRENT combatant whose LLM pipeline runs longer
+than ``_TIMEOUT_SECONDS`` did not pause the watcher. It fired mid-pipeline,
+posted a spurious "Défense automatique", and its ``dispatch_action`` queued
+on ``session.action_lock`` behind the in-flight action — double resolution
+of the same turn. Fix: ``_run_pipeline`` pauses the watcher via
+``TurnManager.pause_timeout_for`` before entering the pipeline and re-arms
+it via ``TurnManager.rearm_timeout`` on every path where the action does not
+resolve the turn (pipeline failure, dropped progress message) — otherwise
+combat would soft-stall with no auto-dodge safety net.
 """
 
 from __future__ import annotations
@@ -162,9 +173,15 @@ class _FakePipeline:
     real so task-level cancellation/deadlock behaviour is not masked.
     """
 
-    def __init__(self, result: ActionPipelineResult, session: Any) -> None:
+    def __init__(
+        self,
+        result: ActionPipelineResult,
+        session: Any,
+        delay: float = 0.0,
+    ) -> None:
         self._result = result
         self._session = session
+        self._delay = delay
         self._pending_dice_embeds: list[Any] = []
         self._pending_combat_start_embed = None
         self.lock_held_during_process: bool | None = None
@@ -174,8 +191,29 @@ class _FakePipeline:
     ) -> ActionPipelineResult:
         del player_text, progress_callback
         self.lock_held_during_process = self._session.action_lock.locked()
-        await asyncio.sleep(0)  # real suspension, like the actual pipeline
+        # Real suspension, like the actual pipeline. ``delay`` simulates a
+        # slow LLM run (Bug 3 needs the pipeline to outlive the watcher).
+        await asyncio.sleep(self._delay)
         return self._result
+
+
+def _defend_pipeline() -> MagicMock:
+    """TurnManager-side fake pipeline resolving any action, with a real
+    suspension point like the actual pipeline."""
+    fake = MagicMock()
+    fake._pending_dice_embeds = []
+
+    async def _process(action: InterpretedAction) -> ActionPipelineResult:
+        await asyncio.sleep(0)
+        return ActionPipelineResult(
+            narrative="Esquive.",
+            tone="tense",
+            mechanics_text="DEFEND",
+            interpreted_action=action,
+        )
+
+    fake.process_interpreted_action = AsyncMock(side_effect=_process)
+    return fake
 
 
 def _combat_setup() -> tuple[MagicMock, MagicMock, TurnManager, Combatant]:
@@ -331,3 +369,162 @@ class TestTimeoutWatcherAutoDodge:
             for call in channel.send.await_args_list
         ]
         assert any("Défense automatique" in c for c in contents)
+
+
+# ---------------------------------------------------------------------------
+# Bug 3 — slow free-text pipeline must pause the auto-dodge watcher
+# ---------------------------------------------------------------------------
+
+
+def _sent_contents(channel: MagicMock) -> list[str]:
+    return [
+        call.kwargs.get("content") or ""
+        for call in channel.send.await_args_list
+    ]
+
+
+class TestFreeTextPausesAutoDodgeWatcher:
+    @pytest.mark.asyncio
+    async def test_slow_pipeline_does_not_trigger_spurious_auto_dodge(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A free-text action slower than the timeout must not double-resolve.
+
+        Regression: the watcher armed by _prompt_pc_turn kept ticking while
+        the current combatant's free-text action ran through the pipeline
+        under action_lock. Past _TIMEOUT_SECONDS it posted "Défense
+        automatique" and queued a DEFEND on the lock behind the in-flight
+        action — the same turn resolved twice.
+        """
+        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0.05)
+
+        session, channel, tm, pc = _combat_setup()
+        tm_pipeline = _defend_pipeline()
+        tm.pipeline_factory = MagicMock(return_value=tm_pipeline)
+        # Stop the lifecycle after the turn advance — NPC turns are out of
+        # scope here.
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        # Pipeline outlives the watcher: 0.2s run vs 0.05s timeout.
+        pipeline = _FakePipeline(_attack_result(pc.name), session, delay=0.2)
+        cog._pipeline_factory = MagicMock(return_value=pipeline)
+
+        message = _make_message(channel, bot)
+
+        await tm._prompt_pc_turn(pc, session.combat_state)
+        assert tm.pending_timeout is not None, "PC prompt did not arm watcher"
+
+        await asyncio.wait_for(cog.on_message(message), timeout=5.0)
+        # Let any queued auto-dodge (the bug) surface before asserting.
+        await asyncio.sleep(0.1)
+
+        assert not any(
+            "Défense automatique" in c for c in _sent_contents(channel)
+        ), "watcher fired mid-pipeline despite the in-flight action"
+        # No second resolution went through the TurnManager pipeline…
+        tm_pipeline.process_interpreted_action.assert_not_awaited()
+        # …and the turn advanced exactly once (PC → goblin).
+        assert session.combat_state.current_turn_index == 1
+        assert not session.action_lock.locked()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_failure_rearms_auto_dodge_watcher(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A paused watcher must be re-armed when the action never resolves.
+
+        The pause must not remove the safety net: if the pipeline raises,
+        the turn did not advance and nobody re-prompts — without a re-arm,
+        combat soft-stalls forever on an AFK player.
+        """
+        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0.05)
+
+        session, channel, tm, pc = _combat_setup()
+        tm_pipeline = _defend_pipeline()
+        tm.pipeline_factory = MagicMock(return_value=tm_pipeline)
+        # Stop the lifecycle after the auto-dodge dispatch — asserting the
+        # handoff is enough; advance/re-prompt is covered elsewhere.
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        failing = MagicMock()
+        failing._pending_dice_embeds = []
+        failing._pending_combat_start_embed = None
+        failing.process = AsyncMock(side_effect=RuntimeError("interpreter down"))
+        cog._pipeline_factory = MagicMock(return_value=failing)
+
+        message = _make_message(channel, bot)
+
+        await tm._prompt_pc_turn(pc, session.combat_state)
+
+        await asyncio.wait_for(
+            cog._run_pipeline(message, session, "j'attaque le gobelin"),
+            timeout=5.0,
+        )
+
+        # The action dropped — the safety net must be armed again.
+        watcher = tm.pending_timeout
+        assert watcher is not None and not watcher.done(), (
+            "watcher not re-armed after pipeline failure — combat would "
+            "soft-stall with no auto-dodge"
+        )
+
+        # And it is a working safety net: it fires and resolves the DEFEND.
+        done, _ = await asyncio.wait({watcher}, timeout=2.0)
+        assert watcher in done, "re-armed watcher never fired"
+        tm_pipeline.process_interpreted_action.assert_awaited_once()
+        (auto_action,) = tm_pipeline.process_interpreted_action.await_args.args
+        assert auto_action.action_type == ActionType.DEFEND
+        assert auto_action.actor_name == pc.name
+        assert any(
+            "Défense automatique" in c for c in _sent_contents(channel)
+        )
+
+    @pytest.mark.asyncio
+    async def test_off_turn_free_text_keeps_watcher_armed(self) -> None:
+        """Another player's action must not disarm the current PC's watcher.
+
+        Only the CURRENT combatant's own free-text action pauses the
+        timeout — chatter from an off-turn party member leaves the AFK
+        protection in place.
+        """
+        current_pc = _pc("Bryn")
+        author_pc = _pc("Aldric")
+        goblin = _enemy()
+        session = _fake_session([current_pc, author_pc, goblin])
+        session.characters = {
+            _PLAYER_ID: author_pc.character,
+            777: current_pc.character,
+        }
+        channel = _fake_channel()
+        tm = TurnManager(
+            channel=channel, session=session, pipeline_factory=MagicMock(),
+        )
+        session.combat_turn_manager = tm
+        # The real handoff starts with _cancel_timeout + advance — mock it
+        # to isolate the pause decision made on the way INTO the pipeline.
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        pipeline = _FakePipeline(_attack_result(author_pc.name), session)
+        cog._pipeline_factory = MagicMock(return_value=pipeline)
+
+        message = _make_message(channel, bot)
+
+        await tm._prompt_pc_turn(current_pc, session.combat_state)
+        watcher = tm.pending_timeout
+        assert watcher is not None
+
+        await asyncio.wait_for(
+            cog._run_pipeline(message, session, "j'attaque le gobelin"),
+            timeout=5.0,
+        )
+
+        assert tm.pending_timeout is watcher
+        assert not watcher.done(), "off-turn action disarmed the watcher"
+
+        tm._cancel_timeout()  # cleanup the still-armed 300s task
