@@ -2,6 +2,43 @@
 
 Commit at the end of a phase, do not co author claude.
 
+## Chantier clos : combat concurrency bugs (audit) — 2026-06-10
+
+Two confirmed concurrency bugs in combat turn handling, fixed TDD-style
+(regression tests written and watched fail first).
+
+- [x] **Bug 1 — same-task deadlock on free-text actions in combat.**
+  `ActionHandlerCog.on_message` held `session.action_lock` across all of
+  `_run_pipeline`, while `TurnManager.on_action_resolved` (called at the end
+  of the pipeline) re-acquires the same non-reentrant `asyncio.Lock` →
+  every @bot action during active combat hung forever. Same deadlock via
+  `test_bridge._handle_narrate`. Fix: `_run_pipeline` now owns the lock
+  itself (pipeline + render section extracted to `_process_and_render`)
+  and releases it BEFORE the TurnManager handoff; both callers dropped
+  their own `async with`.
+- [x] **Bug 2 — auto-dodge timeout watcher cancelled itself.**
+  `_timeout_watcher` → `dispatch_action` → `_cancel_timeout()` cancelled
+  `pending_timeout`, which at that moment IS the running watcher task; the
+  CancelledError fired at the first real suspension inside the pipeline
+  (not caught by `except Exception`) → "Défense automatique" announced but
+  DEFEND never resolved, turn never advanced. Fix: the watcher detaches
+  itself (`pending_timeout = None` when it is the current task) before
+  dispatching.
+- [x] Regression tests: `tests/bot/test_combat_concurrency.py` (3 tests —
+  on_message during combat, direct `_run_pipeline` à la test_bridge, and
+  watcher end-to-end with short `_TIMEOUT_SECONDS` + a fake pipeline that
+  really suspends).
+- [x] Verify: `uv run pytest` → 2462 passed, 1 skipped; `ruff check .`
+  clean; `mypy .` at pre-existing baseline (362 errors, 0 new).
+
+**Open follow-up (separate audit finding, NOT fixed):** a free-text action
+whose LLM pipeline takes >300 s does not pause the combat timeout watcher —
+the watcher fires mid-pipeline, posts a spurious "Défense automatique", and
+its dispatch then queues on `action_lock` behind the in-flight action
+(double resolution). Pausing/cancelling the timer when a free-text action
+for the current combatant enters the pipeline needs a re-arm path on
+pipeline failure — design before coding.
+
 ## Chantier en cours : README + Architecture OSS modernization (2026-06-02)
 
 Goal: bring README.md + ARCHITECTURE.md up to date with reality and to

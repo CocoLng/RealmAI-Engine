@@ -1,5 +1,35 @@
 # Lessons Learned
 
+## 2026-06-10 — Combat concurrency: locks, self-cancel, and honest async tests
+
+- **`asyncio.Lock` is non-reentrant — enumerate ALL call paths before adding
+  an acquisition to a shared helper.** Commit e73af43 added
+  `async with session.action_lock` inside `TurnManager.on_action_resolved`
+  with a commit message claiming "both callers release the lock first" —
+  true for the button path, false for `ActionHandlerCog._run_pipeline` and
+  `test_bridge`, which held the lock around the whole pipeline → same-task
+  deadlock on every free-text action in combat. Before locking inside a
+  helper, `grep` every caller and state the invariant ("callers must NOT
+  hold the lock") in the docstring.
+
+- **A task that cancels a shared task-handle may be cancelling itself.**
+  The timeout watcher called `dispatch_action`, whose `_cancel_timeout()`
+  cancelled `pending_timeout` — which WAS the running watcher. Self-cancel
+  is silent at first: `_must_cancel` only detonates at the next real
+  suspension point, and `except Exception` does NOT catch `CancelledError`
+  (BaseException since 3.8). Any "fire-then-call-back-into-the-manager"
+  task must detach its own handle first (`if handle is
+  asyncio.current_task(): handle = None`).
+
+- **Concurrency tests need real suspension points and deadline guards.**
+  AsyncMock-only fakes never yield to the event loop, so pending
+  cancellations and deadlocks are invisible — the old tests covered
+  `_cancel_timeout` in isolation and stayed green through both bugs. Put
+  `await asyncio.sleep(0)` inside fake pipeline bodies, drive the real
+  entry points (`on_message`, the armed watcher with a shortened
+  `_TIMEOUT_SECONDS`), and wrap in `asyncio.wait_for` so a hang fails the
+  test instead of freezing the suite.
+
 ## 2026-04-26 — Beat progression: single decision point
 
 - **One source of truth beats three "smart" paths.** Three concurrent decision paths

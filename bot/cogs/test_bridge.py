@@ -774,8 +774,9 @@ class TestBridge(commands.Cog):
             author=inter.user,
         )
 
-        async with session.action_lock:
-            await cog._run_pipeline(fake_message, session, text)  # type: ignore[attr-defined]
+        # _run_pipeline owns action_lock itself (and releases it before the
+        # combat turn handoff) — holding it here would deadlock the task.
+        await cog._run_pipeline(fake_message, session, text)  # type: ignore[attr-defined]
 
     async def _handle_game_state(self, channel: discord.TextChannel) -> None:
         """Serialize and post the active game session state."""

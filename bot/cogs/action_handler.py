@@ -19,6 +19,7 @@ from bot.action_pipeline import (
     ActionPipeline,
     ActionPipelineResult,
     AmbiguityResult,
+    PipelineOutput,
     PipelinePhase,
     UnknownEntityResult,
 )
@@ -137,8 +138,7 @@ class ActionHandlerCog(commands.Cog):
             )
             return
 
-        async with session.action_lock:
-            await self._run_pipeline(message, session, raw_text)
+        await self._run_pipeline(message, session, raw_text)
 
     # ------------------------------------------------------------------
     # Pipeline orchestration
@@ -150,9 +150,59 @@ class ActionHandlerCog(commands.Cog):
         session: Any,
         raw_text: str,
     ) -> None:
+        """Run one free-text action end to end.
+
+        Owns ``session.action_lock`` for the pipeline + render section and
+        releases it BEFORE the TurnManager handoff — ``on_action_resolved``
+        re-acquires the same non-reentrant lock to serialize turn
+        advancement, so callers must NOT hold the lock when calling this.
+        """
+        start = time.monotonic()
+
+        async with session.action_lock:
+            result = await self._process_and_render(
+                message, session, raw_text, start,
+            )
+        if result is None:
+            return
+
+        # Hand control back to the TurnManager if combat is live. The
+        # pipeline does not advance the turn itself — the TurnManager does
+        # so inside on_action_resolved, under action_lock (released above).
+        if (
+            session.combat_turn_manager is not None
+            and session.combat_state is not None
+            and session.combat_state.is_active
+        ):
+            try:
+                await session.combat_turn_manager.on_action_resolved(
+                    result if isinstance(result, ActionPipelineResult) else None,
+                )
+            except Exception:
+                logger.exception(
+                    "ACTION turn_manager.on_action_resolved failed campaign=%s",
+                    session.campaign.id,
+                )
+
+        logger.info(
+            "ACTION done campaign=%s elapsed=%.1fs",
+            session.campaign.id, time.monotonic() - start,
+        )
+
+    async def _process_and_render(
+        self,
+        message: discord.Message,
+        session: Any,
+        raw_text: str,
+        start: float,
+    ) -> PipelineOutput | None:
+        """Pipeline run + result rendering, under ``action_lock``.
+
+        Returns the pipeline output for the combat handoff, or ``None``
+        when the action was dropped (progress send failed, pipeline error).
+        """
         actor = session.characters[message.author.id]
         actor_name = actor.name
-        start = time.monotonic()
 
         # 1. Post the initial progress embed.
         progress_embed = build_action_progress_embed(
@@ -168,7 +218,7 @@ class ActionHandlerCog(commands.Cog):
                 "ACTION progress send failed campaign=%s reason=%s — dropping action",
                 session.campaign.id, exc,
             )
-            return
+            return None
 
         async def update_progress(phase: PipelinePhase) -> None:
             try:
@@ -244,7 +294,7 @@ class ActionHandlerCog(commands.Cog):
                     "ACTION error notice send dropped campaign=%s",
                     session.campaign.id,
                 )
-            return
+            return None
 
         # 3b. Combat bootstrap handoff (task 64) — if the pipeline just
         # set up a fresh combat state, create a TurnManager and post the
@@ -356,28 +406,7 @@ class ActionHandlerCog(commands.Cog):
         elif isinstance(result, UnknownEntityResult):
             await self._render_unknown(progress_msg, result)
 
-        # 5. Hand control back to the TurnManager if combat is live.
-        # The pipeline does not advance the turn itself — the TurnManager
-        # does so inside on_action_resolved.
-        if (
-            session.combat_turn_manager is not None
-            and session.combat_state is not None
-            and session.combat_state.is_active
-        ):
-            try:
-                await session.combat_turn_manager.on_action_resolved(
-                    result if isinstance(result, ActionPipelineResult) else None,
-                )
-            except Exception:
-                logger.exception(
-                    "ACTION turn_manager.on_action_resolved failed campaign=%s",
-                    session.campaign.id,
-                )
-
-        logger.info(
-            "ACTION done campaign=%s elapsed=%.1fs",
-            session.campaign.id, time.monotonic() - start,
-        )
+        return result
 
     async def _render_success(
         self,

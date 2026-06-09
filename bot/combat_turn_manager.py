@@ -150,9 +150,10 @@ class TurnManager:
         Holds ``session.action_lock`` for the entire turn-advance sequence
         so two concurrent callers (e.g. a button click and a free-text
         action that finished within ms of each other) cannot both run
-        ``advance_turn`` and corrupt ``current_turn_index``. Both callers
-        already release the lock after the pipeline runs, so re-acquiring
-        here is safe and not re-entrant.
+        ``advance_turn`` and corrupt ``current_turn_index``. The lock is
+        non-reentrant, so callers MUST have released it before calling —
+        :meth:`dispatch_action` and ``ActionHandlerCog._run_pipeline`` both
+        release it after the pipeline runs and before handing off here.
         """
         del result  # Only used by callers for diagnostics; we read state directly.
         self._cancel_timeout()
@@ -644,6 +645,13 @@ class TurnManager:
             await asyncio.sleep(_TIMEOUT_SECONDS)
         except asyncio.CancelledError:
             return
+
+        # The timeout has fired — this task IS pending_timeout. Detach it
+        # before dispatching, otherwise dispatch_action's _cancel_timeout
+        # cancels the running watcher itself and the CancelledError kills
+        # the auto-dodge at the next suspension point inside the pipeline.
+        if self.pending_timeout is asyncio.current_task():
+            self.pending_timeout = None
 
         await self._safe_send(
             f"⏱️ **{actor_name}** n'a pas agi à temps — Défense automatique.",
