@@ -408,3 +408,29 @@ Verification:
 - `uv run pytest tests/ -q` → **2221 passed, 1 skipped** (+57 new tests)
 - `uv run ruff check .` → clean
 - `uv run mypy ai/ engine/ world/` → clean (0 errors)
+
+## Audit système complet (2026-06-10 — findings, non corrigés)
+
+Audit multi-agents (run/contexte/génération/cohérence) : **65 findings confirmés**
+(5 critiques, ~22 élevés), chacun vérifié adversarialement contre le code.
+Rapport complet : `docs/audits/2026-06-10-system-audit.md`.
+
+**Critiques (à traiter en premier, aucun corrigé pour l'instant) :**
+- [ ] C1 Deadlock `action_lock` : action texte-libre en combat → campagne briquée
+      (`action_handler.py:140` ré-acquiert via `combat_turn_manager.py:160`)
+- [ ] C2 CAST_SPELL/DEFEND/DISENGAGE jamais résolus mécaniquement (`resolve.py:327`)
+- [ ] C3 Le tour avance sur toute sortie de pipeline, même refusée/hors-tour
+      (`combat_turn_manager.py:166`)
+- [ ] C4 NPCs tués en combat complet jamais marqués morts (`combat_end.py:113`)
+- [ ] C5 /resume ne reconstruit pas le TurnManager → combat repris mort (`session.py:993`)
+
+**Quick wins identifiés :** M1 `interaction_count` lu sur GameSession au lieu de
+`session.campaign` (réactive Story Director + /hint niv 3) ; H20 clamp de `engine/dice`
+(DoS /roll) ; H13 placeholder `[nom]` dans `system_narrator.txt:50`.
+
+**Constat architectural majeur :** la mémoire 4 couches (ContextAssembler/SlidingWindow/
+Summarizer/RAG) n'est PAS branchée dans le pipeline de prod (`narrate.py:75`) — ChromaDB
+est write-only. Les « locked facts » n'existent pas. mypy : 362 erreurs, pas de config.
+
+**Prochaine étape :** suivre l'ordre de réparation du rapport (section finale) ;
+commencer par C1 (déplacer l'étape 5 hors du `async with`) + H1 (watcher auto-annulé).
