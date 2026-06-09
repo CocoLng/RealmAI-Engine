@@ -465,3 +465,31 @@ est write-only. Les « locked facts » n'existent pas. mypy : 362 erreurs, pas d
 
 **Prochaine étape :** suivre l'ordre de réparation du rapport (section finale) ;
 commencer par C1 (déplacer l'étape 5 hors du `async with`) + H1 (watcher auto-annulé).
+
+## Plan de correction de l'audit — 9 chantiers spawnés (2026-06-10)
+
+Les 65 findings de `docs/audits/2026-06-10-system-audit.md` ont été regroupés en
+9 chantiers à périmètre de fichiers disjoint, chacun lancé comme session dédiée
+(worktree isolé). Chaque chantier NE touche PAS tasks/todo.md (conflits) — cocher
+ici au merge.
+
+- [ ] A. Deadlock & intégrité des tours (C1, C3, H1, H14, M9, M5) —
+      combat_turn_manager, action_handler, test_bridge, npc_ai/elite
+- [ ] B. Sorts/objets effectifs & morts NPC (C2, C4, H15, H18, H21, H22) —
+      pipeline/resolve, pipeline/interpret, combat_end/entry, scene_hydration, cogs/inventory
+- [ ] C. /resume, /settings & persistence (C5, H3-H7, M2, M3, M4p, M5b + lows) —
+      cogs/session, persistence, db/mappers, location_repo, database, migrations
+- [ ] D. Async pipeline & Story Director (H2, M1, M11, H16, M4p) —
+      pipeline/orchestrator, cogs/hint, beat_judge, story_director, beat_progression
+- [ ] E. Robustesse génération (H10-H13, M6-M8, M10, M13) —
+      ai/narrator, ai/interpreter, ai/client, prompts, narrative_embed
+- [ ] F. Clamps anti-triche (H20, H19, M12 + skill DC) —
+      engine/dice, cogs/rolls, npc_tactician, npc_ai/scripted+boss, npc_stat_block, skill_check
+- [ ] G. Mémoire 4 couches & locked facts (H9, H17 + lows) —
+      memory/*, pipeline/narrate, story_bible_logger, game_session
+- [ ] I. Latence (H8) — ai/arc_generator, world_generator, npc_generator, embeds progression
+- [ ] H. Porte mypy + qualité (M14 + lows) — EN DERNIER, après merge des autres
+      (touche tout le repo)
+
+Ordre de merge recommandé : A → B → C → D → E → F → G → I → H
+(chaque chantier rebase sur main avant finalisation).
