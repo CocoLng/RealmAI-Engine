@@ -98,6 +98,15 @@ class GameSession:
     Story Director unconditionally. Set by /story_catch_up and consumed
     exactly once by the next action handler call."""
 
+    memory_context: str | None = None
+    """Rendered memory block (summaries + sliding window [+ lore]) that
+    ``narrate.assemble_context`` prepends to the scene snapshot (audit H9).
+
+    Precomputed off the event loop by ``narrate.update_memory_after_turn``
+    at the end of each turn, so the read path stays synchronous and
+    I/O-free. ``None`` until the first turn completes (e.g. right after
+    /resume — the next turn rebuilds it from the persisted exchanges)."""
+
 
 def create_ai_services(session: GameSession) -> None:
     """Attempt to initialize AI services on a session.

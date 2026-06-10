@@ -102,6 +102,31 @@ class ContextAssembler:
             layer1_text, layer2_text, layer3_text, layer4_text,
         )
 
+    def assemble_memory_prefix(self, campaign_id: str, query_text: str = "") -> str:
+        """Render the memory layers WITHOUT the structured-state layer.
+
+        Production prefixes the narrator's scene snapshot (which already
+        plays the Layer 1 role) with this block. Reading order is
+        chronological: compressed history first, fresh window last.
+        Each layer is rendered under its own budget, so the total stays
+        within ``layer2_max + layer3_max + layer4_max``.
+
+        ``query_text`` seeds the semantic (RAG) query; when empty, the
+        freshest window content is used instead.
+        """
+        window = self._sliding_window.get_window(campaign_id)
+        layer2_text = self._sliding_window.render(
+            window, self._budget.layer2_max,
+        )
+
+        summaries = self._summarizer.get_recent_summaries(campaign_id)
+        layer3_text = self._summarizer.render(
+            summaries, self._budget.layer3_max,
+        )
+
+        sections = [s for s in [layer3_text, layer2_text] if s]
+        return "\n\n".join(sections)
+
     @staticmethod
     def _build_rag_query(
         player_input: str,

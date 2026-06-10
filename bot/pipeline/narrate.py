@@ -79,12 +79,19 @@ def assemble_context(
     """
     if session is not None:
         from bot.scene_hydration import describe_scene_for_narrator
-        return describe_scene_for_narrator(
+        scene = describe_scene_for_narrator(
             session,
             actor_name=action.actor_name,
             current_outcome_summary=current_outcome_summary,
             ongoing_dialogue_with=ongoing_dialogue_with,
         )
+        # Memory layers (summaries + sliding window [+ lore]) precomputed
+        # by update_memory_after_turn at the end of the previous turn —
+        # the scene snapshot plays the Layer 1 (structured state) role.
+        memory_block = getattr(session, "memory_context", None)
+        if memory_block:
+            return f"{memory_block}\n\n{scene}"
+        return scene
 
     loc = location
     lines: list[str] = []
@@ -101,11 +108,12 @@ async def update_memory_after_turn(
     player_input: str,
     narration: str,
 ) -> None:
-    """Record this turn's exchanges in the Layer 2 sliding window.
+    """Record this turn's exchanges and refresh the cached memory context.
 
-    Called once per resolved action, after narration (audit H9a). The
+    Called once per resolved action, after narration (audit H9). The
     player input and the narrator's prose are persisted as two
-    consecutive exchanges so the next turn's context can include them.
+    consecutive exchanges, then the memory prefix used by the NEXT
+    turn's ``assemble_context`` is re-rendered and cached on the session.
 
     All I/O runs in ``asyncio.to_thread`` — never on the event loop.
     Failures are swallowed and logged: memory must never break gameplay.
@@ -116,7 +124,8 @@ async def update_memory_after_turn(
         return
     campaign_id = session.campaign.id
 
-    def _record() -> None:
+    def _record_and_render() -> str:
+        from memory.context_assembler import ContextAssembler
         from memory.models import ExchangeRole
         from memory.sliding_window import SlidingWindow
 
@@ -134,11 +143,20 @@ async def update_memory_after_turn(
                     campaign_id, ExchangeRole.NARRATOR, narration, number,
                 )
             db.commit()
+
+            assembler = ContextAssembler(
+                db,
+                getattr(session, "semantic_memory", None),
+                getattr(session, "ollama_client", None),
+            )
+            return assembler.assemble_memory_prefix(
+                campaign_id, query_text=player_input,
+            )
         finally:
             db.close()
 
     try:
-        await asyncio.to_thread(_record)
+        session.memory_context = await asyncio.to_thread(_record_and_render)
     except Exception:
         logger.warning(
             "MEMORY record failed campaign=%s", campaign_id, exc_info=True,

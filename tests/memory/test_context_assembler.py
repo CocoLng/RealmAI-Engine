@@ -275,6 +275,78 @@ class TestContextAssembler:
         assert "[SESSION HISTORY]" not in result
 
 
+class TestAssembleMemoryPrefix:
+    """assemble_memory_prefix renders layers 2-3 (window + summaries)
+    WITHOUT the structured-state layer — production prefixes the scene
+    snapshot (which plays the Layer 1 role) with this block."""
+
+    def test_prefix_contains_window_and_summaries(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        from db.repositories.summary_repo import SummaryRepository
+        from memory.models import CompressedSummary
+        SummaryRepository(db_session).save(CompressedSummary(
+            campaign_id=sample_campaign.id,
+            summary_text="The party crossed the marshes.",
+            start_interaction=1, end_interaction=20,
+        ))
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.NARRATOR,
+            content="A wolf howls in the distance.", interaction_number=21,
+        ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, semantic_memory, mock_ollama_client)
+        prefix = assembler.assemble_memory_prefix(sample_campaign.id)
+
+        assert "[SESSION HISTORY]" in prefix
+        assert "crossed the marshes" in prefix
+        assert "[RECENT NARRATIVE]" in prefix
+        assert "wolf howls" in prefix
+        assert "[GAME STATE]" not in prefix
+        # Chronological reading order: history before the fresh window
+        assert prefix.index("[SESSION HISTORY]") < prefix.index("[RECENT NARRATIVE]")
+
+    def test_prefix_empty_campaign_returns_empty(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        assembler = ContextAssembler(db_session, semantic_memory, mock_ollama_client)
+        assert assembler.assemble_memory_prefix(sample_campaign.id) == ""
+
+    def test_prefix_respects_layer_budgets(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        for i in range(1, 13):
+            ExchangeRepository(db_session).save(NarrativeExchange(
+                campaign_id=sample_campaign.id, role=ExchangeRole.NARRATOR,
+                content=f"Narration {i}: " + "endless detail " * 5,
+                interaction_number=i,
+            ))
+        db_session.commit()
+
+        budget = ContextBudget(
+            layer1_max=100, layer2_max=80, layer3_max=50, layer4_max=50,
+            total_max=300,
+        )
+        assembler = ContextAssembler(
+            db_session, semantic_memory, mock_ollama_client, budget=budget,
+        )
+        prefix = assembler.assemble_memory_prefix(sample_campaign.id)
+        assert estimate_tokens(prefix) <= 80 + 50 + 50
+        # Most recent exchange survives the cut; the oldest is dropped
+        assert "Narration 12" in prefix
+        assert "Narration 1:" not in prefix
+
+
 class TestRagQueryUsesRollingWindow:
     """The RAG query must include the last 2-3 narrative exchanges, not just the current input."""
 

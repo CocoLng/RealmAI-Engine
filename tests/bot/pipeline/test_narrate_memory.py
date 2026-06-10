@@ -128,6 +128,121 @@ class TestUpdateMemoryAfterTurn:
         )
 
 
+class TestMemoryContextCache:
+    """update_memory_after_turn refreshes the cached memory prefix that
+    assemble_context prepends to the scene snapshot (audit H9b)."""
+
+    @pytest.mark.asyncio
+    async def test_hook_caches_memory_prefix_on_session(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        await narrate.update_memory_after_turn(
+            session=game_session,
+            db_factory=thread_safe_db_factory,
+            player_input="je fouille le coffre",
+            narration="Le coffre grince et révèle une carte jaunie.",
+        )
+
+        assert game_session.memory_context is not None
+        assert "[RECENT NARRATIVE]" in game_session.memory_context
+        assert "carte jaunie" in game_session.memory_context
+
+    @pytest.mark.asyncio
+    async def test_assemble_context_prefixes_cached_memory(
+        self, game_session: GameSession,
+    ) -> None:
+        game_session.memory_context = (
+            "[RECENT NARRATIVE]\nNarrator: Le coffre grince."
+        )
+        game_session.current_location = Location(
+            name="Crypte", description="Une crypte sombre.",
+        )
+        action = InterpretedAction(
+            action_type=ActionType.LOOK, actor_name="Aldric",
+            raw_input="je regarde", confidence=0.9,
+        )
+        context = narrate.assemble_context(
+            action,
+            actor_name="Aldric",
+            location=game_session.current_location,
+            npcs=None,
+            session=game_session,
+            combat_state=None,
+            inventory=None,
+            campaign_id="camp-mem-1",
+        )
+        assert context.startswith("[RECENT NARRATIVE]")
+        assert "Le coffre grince." in context
+        assert "Crypte" in context
+        # The memory block comes BEFORE the scene snapshot
+        assert context.index("[RECENT NARRATIVE]") < context.index("Crypte")
+
+    @pytest.mark.asyncio
+    async def test_assemble_context_without_cache_is_unchanged(
+        self, game_session: GameSession,
+    ) -> None:
+        game_session.current_location = Location(
+            name="Crypte", description="Une crypte sombre.",
+        )
+        action = InterpretedAction(
+            action_type=ActionType.LOOK, actor_name="Aldric",
+            raw_input="je regarde", confidence=0.9,
+        )
+        context = narrate.assemble_context(
+            action,
+            actor_name="Aldric",
+            location=game_session.current_location,
+            npcs=None,
+            session=game_session,
+            combat_state=None,
+            inventory=None,
+            campaign_id="camp-mem-1",
+        )
+        assert "[RECENT NARRATIVE]" not in context
+        assert "Crypte" in context
+
+    @pytest.mark.asyncio
+    async def test_second_turn_narrator_sees_first_turn_narration(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        """End-to-end continuity: turn 2's narrator context includes
+        turn 1's narration — the narrator is no longer amnesic."""
+        location = Location(name="Crypte", description="Une crypte sombre.")
+        game_session.current_location = location
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.LOOK, actor_name="Aldric",
+                raw_input="je regarde", confidence=0.95,
+            ),
+        )
+        narrator = FakeNarrator(responses=[
+            NarrativeResult(
+                narrative="Une statue de marbre noir pleure des larmes de sang.",
+                tone="tense",
+            ),
+            NarrativeResult(narrative="Le silence retombe.", tone="somber"),
+        ])
+
+        def _make() -> ActionPipeline:
+            return ActionPipeline(
+                interpreter=interp,  # type: ignore[arg-type]
+                narrator=narrator,  # type: ignore[arg-type]
+                location=location,
+                npcs={},
+                actor_name="Aldric",
+                campaign_id="camp-mem-1",
+                session=game_session,
+                db_factory=thread_safe_db_factory,
+            )
+
+        await _make().process(player_text="je regarde")
+        await _make().process(player_text="je regarde encore")
+
+        assert len(narrator.calls) == 2
+        second_context = narrator.calls[1]["context_prompt"]
+        assert "larmes de sang" in second_context
+
+
 class TestPipelineRecordsExchanges:
     """The orchestrator hook: a full pipeline run records the turn."""
 
