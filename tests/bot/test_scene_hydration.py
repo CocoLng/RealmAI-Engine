@@ -663,6 +663,51 @@ def test_describe_scene_includes_present_npcs_with_disposition():
     assert "Vieil ermite" in out
 
 
+def test_describe_scene_excludes_dead_npcs():
+    """Corpses must not be listed as present (audit H15)."""
+    loc = Location(name="Église", description="…", npcs_present=["Élie l'Ermite"])
+    npc = _npc("Élie l'Ermite", location="Église")
+    npc.kill()
+    session = MagicMock()
+    session.current_location = loc
+    session.npcs = {"Élie l'Ermite": npc}
+
+    out = describe_scene_for_narrator(session, actor_name="Xavier")
+    assert "Élie l'Ermite" not in out
+
+
+def test_hydrate_does_not_resurrect_dead_npc(db_factory) -> None:
+    """A stale npcs_present entry must not rebind or recreate a dead NPC
+    (audit H15) — and the reload must not surface it in session.npcs."""
+    location = Location(name="Place", npcs_present=["Jeanne"])
+    session = _make_session(location=location)
+    _persist_campaign_and_location(db_factory, session)
+
+    # Persist Jeanne already dead, unbound from any location (as
+    # handle_npc_death leaves her).
+    dead = _npc("Jeanne", location="Place")
+    dead.kill()
+    dead.location_name = None
+    db = db_factory()
+    try:
+        NPCRepository(db).save(dead, session.campaign.id)
+        db.commit()
+    finally:
+        db.close()
+
+    hydrate_scene(session, db_factory=db_factory)
+
+    assert "Jeanne" not in session.npcs
+    db = db_factory()
+    try:
+        row = NPCRepository(db).get_by_name("Jeanne", session.campaign.id)
+    finally:
+        db.close()
+    assert row is not None
+    assert row.is_alive is False
+    assert row.location_name is None  # not rebound to "Place"
+
+
 def test_describe_scene_no_location():
     session = MagicMock()
     session.current_location = None

@@ -257,6 +257,10 @@ def hydrate_scene(
                     campaign_id,
                 )
                 created += 1
+            elif not existing.is_alive:
+                # Dead NPC lingering in a stale npcs_present list — never
+                # rebind, upgrade, or recreate it (audit H15).
+                continue
             elif _should_upgrade_npc(existing, arc=arc):
                 # Idempotent upgrade: an NPC created by the legacy code path
                 # matches the villain name or a combat beat but has no stat
@@ -479,7 +483,7 @@ def describe_scene_for_narrator(
         if ongoing_npc is None:
             present = [
                 npc for npc in (session.npcs or {}).values()
-                if npc.location_name == location.name
+                if npc.is_alive and npc.location_name == location.name
             ]
             if present:
                 npc_lines = []

@@ -136,6 +136,20 @@ class TestBuildSceneContextExploration:
         assert ctx.visible_npcs == ["Père Aldric"]
         assert distant_npc.name not in ctx.visible_npcs
 
+    def test_filters_dead_npcs(
+        self,
+        cathedral: Location,
+        aldric: NPC,
+        corin: NPC,
+    ) -> None:
+        """Dead NPCs must not reappear in the scene (audit H15)."""
+        corin.kill()
+        ctx = build_scene_context(
+            location=cathedral,
+            npcs={aldric.name: aldric, corin.name: corin},
+        )
+        assert ctx.visible_npcs == ["Père Aldric"]
+
     def test_none_location_returns_empty_scene(self) -> None:
         ctx = build_scene_context(location=None, npcs={})
         assert ctx.location_name == ""

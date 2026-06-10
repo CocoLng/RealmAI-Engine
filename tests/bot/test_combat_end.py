@@ -558,6 +558,7 @@ class TestFinalizeCombatDeathPropagation:
 
         assert npc.is_alive is False
         assert npc.hp == 0
+        assert npc.location_name is None  # audit H15 — no ghost rebinding
         assert "Goblin" not in session.current_location.npcs_present
         assert "Goblin" not in session.npcs
 

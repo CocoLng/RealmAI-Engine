@@ -129,6 +129,38 @@ class TestNPCRepository:
         assert len(results) == 1
         assert results[0].name == "Gundren Rockseeker"
 
+    def test_list_by_location_excludes_dead_npcs(
+        self, db_session: Session, sample_campaign: Campaign, sample_npc: NPC,
+    ) -> None:
+        """Dead NPCs must not be rehydrated into the scene (audit H15)."""
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = NPCRepository(db_session)
+        repo.save(sample_npc, sample_campaign.id)  # location: Neverwinter
+        corpse = sample_npc.model_copy(
+            update={"name": "Bandit mort", "is_alive": False, "hp": 0},
+        )
+        repo.save(corpse, sample_campaign.id)
+        db_session.commit()
+
+        results = repo.list_by_location("Neverwinter", sample_campaign.id)
+        assert [n.name for n in results] == ["Gundren Rockseeker"]
+
+    def test_list_by_location_alive_only_false_includes_dead(
+        self, db_session: Session, sample_campaign: Campaign, sample_npc: NPC,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = NPCRepository(db_session)
+        corpse = sample_npc.model_copy(
+            update={"name": "Bandit mort", "is_alive": False, "hp": 0},
+        )
+        repo.save(corpse, sample_campaign.id)
+        db_session.commit()
+
+        results = repo.list_by_location(
+            "Neverwinter", sample_campaign.id, alive_only=False,
+        )
+        assert [n.name for n in results] == ["Bandit mort"]
+
     def test_update(self, db_session: Session, sample_campaign: Campaign, sample_npc: NPC) -> None:
         CampaignRepository(db_session).save(sample_campaign)
         repo = NPCRepository(db_session)

@@ -182,6 +182,22 @@ class TestResolveTalk:
         assert res.status == "resolved"
         assert res.resolved_entity == "Père Aldric"
 
+    def test_dead_npc_is_not_resolvable(
+        self, cathedral: Location, present_npcs: dict[str, NPC],
+    ) -> None:
+        """A corpse must not answer TALK (audit H15)."""
+        present_npcs["Père Aldric"].kill()
+        action = InterpretedAction(
+            action_type=ActionType.TALK,
+            actor_name="Arden",
+            target_name="Père Aldric",
+            raw_input="je parle à Père Aldric",
+        )
+        res = EntityResolver.resolve(
+            action, location=cathedral, npcs=present_npcs,
+        )
+        assert res.status == "unknown"
+
     def test_ambiguous_on_multiple_matches(
         self, cathedral: Location, ability_scores: AbilityScores,
     ) -> None:

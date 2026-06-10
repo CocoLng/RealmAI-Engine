@@ -1407,8 +1407,10 @@ def handle_npc_death(
     ``witnesses_turn_hostile=False`` — bystanders don't blame the party
     for defending itself).
     """
-    # 1. Idempotent kill (trivial_resolve already did it).
+    # 1. Idempotent kill (trivial_resolve already did it). Unbind the
+    #    corpse from its location so no scene query rebinds it (audit H15).
     npc.kill()
+    npc.location_name = None
 
     # 2. Remove from the live location's npcs_present and from the
     #    in-memory NPC dict so the next scene context doesn't list them.
