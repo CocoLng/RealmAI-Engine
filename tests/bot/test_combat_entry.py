@@ -275,6 +275,27 @@ def test_detect_interact_without_trigger_returns_none() -> None:
     assert detect_combat_trigger(action, session) is None  # type: ignore[arg-type]
 
 
+def test_detect_interact_skips_consumed_trigger() -> None:
+    """A fired trigger must not spawn the same ambush twice (audit bonus)."""
+    from world.combat_trigger_def import CombatTriggerDef
+
+    npc = _make_hostile_npc("Skeleton")
+    location = Location(
+        name="Crypt",
+        combat_triggers={
+            "sarcophagus": CombatTriggerDef(
+                item_name="sarcophagus",
+                spawn_npcs=["Skeleton"],
+                consumed=True,
+            ),
+        },
+    )
+    session = _session_with_pc(pcs=[_make_fighter()], npcs=[npc], location=location)
+    action = _make_action(ActionType.INTERACT, target_name="sarcophagus")
+
+    assert detect_combat_trigger(action, session) is None  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # detect_combat_trigger — neutral actions
 # ---------------------------------------------------------------------------

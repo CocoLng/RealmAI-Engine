@@ -21,7 +21,13 @@ from typing import TYPE_CHECKING, Any
 from ai.interpreter import Interpreter
 from ai.models import InterpretedAction
 from ai.scene_context import SceneContext
-from bot.combat_entry import CombatTrigger, detect_combat_trigger, enter_combat
+from bot.combat_entry import (
+    CombatTrigger,
+    CombatTriggerKind,
+    consume_trigger_def,
+    detect_combat_trigger,
+    enter_combat,
+)
 from bot.llm_retry import retry_llm_call
 from engine.combat import (
     CombatSide,
@@ -324,6 +330,10 @@ def validate(
             combat_state = new_state
             session.combat_state = combat_state  # type: ignore[union-attr]
             side.pending_combat_start_embed = (combat_state, trigger)
+            if trigger.kind == CombatTriggerKind.AMBUSH:
+                # The mechanism fired — flag it so the same trigger can't
+                # spawn the ambush twice (persists with the location).
+                consume_trigger_def(location, eng_action.target_name)
             # Fall through to combat dispatch below
 
     # --- 3. Dispatch to the right validator ---

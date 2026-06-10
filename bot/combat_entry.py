@@ -48,6 +48,7 @@ from world.npc import NPC, NPCDisposition
 
 if TYPE_CHECKING:
     from bot.game_session import GameSession
+    from world.location import Location
 
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "InitiativeSide",
     "build_npc_combatant",
     "build_pc_combatants",
+    "consume_trigger_def",
     "detect_combat_trigger",
     "enter_combat",
 ]
@@ -117,6 +119,9 @@ def detect_combat_trigger(
         trigger_def = combat_triggers.get(action.target_name or "")
         if trigger_def is None:
             return None
+        if getattr(trigger_def, "consumed", False):
+            # Already fired — the mechanism is spent, no second ambush.
+            return None
         spawn_npcs = list(getattr(trigger_def, "spawn_npcs", []))
         if not spawn_npcs:
             return None
@@ -130,6 +135,25 @@ def detect_combat_trigger(
 
     # CASE 3 — social provocation (task 81). No-op for now.
     return None
+
+
+def consume_trigger_def(
+    location: "Location | None",
+    item_name: str | None,
+) -> None:
+    """Mark the location's fired combat trigger as consumed.
+
+    Called by the pipeline when an AMBUSH trigger actually commits a
+    combat. ``CombatTriggerDef.consumed`` persists with the location, so
+    the mechanism cannot spawn the same ambush twice. Tolerates legacy
+    trigger stand-ins without the field (``hasattr`` guard).
+    """
+    if location is None or not item_name:
+        return
+    triggers = getattr(location, "combat_triggers", None) or {}
+    trigger_def = triggers.get(item_name)
+    if trigger_def is not None and hasattr(trigger_def, "consumed"):
+        trigger_def.consumed = True
 
 
 # ---------------------------------------------------------------------------

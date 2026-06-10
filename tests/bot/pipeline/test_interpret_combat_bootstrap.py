@@ -201,6 +201,69 @@ class TestRefusedBootstrapRollback:
         assert state.combatants[state.current_turn_index].name == "Arden"
 
 
+class TestAmbushTriggerConsumption:
+    """Bonus: a fired combat trigger is marked consumed at commit time."""
+
+    def _ambush_setup(self):
+        from world.combat_trigger_def import CombatTriggerDef
+
+        char, inv = _pc_with_weapon("Longsword")
+        npc = NPC(
+            name="Squelette",
+            race=Race.HUMAN,
+            ability_scores=AbilityScores(
+                STR=10, DEX=14, CON=15, INT=6, WIS=8, CHA=5,
+            ),
+            hp=13,
+            max_hp=13,
+            ac=13,
+            disposition=NPCDisposition.HOSTILE,
+            location_name="Crypte",
+            stat_block=get_archetype("guard"),
+        )
+        location = Location(
+            name="Crypte",
+            npcs_present=["Squelette"],
+            combat_triggers={
+                "sarcophage": CombatTriggerDef(
+                    item_name="sarcophage",
+                    spawn_npcs=["Squelette"],
+                    reveal_narration="Le couvercle glisse…",
+                ),
+            },
+        )
+        session = _session(npc, location, char, inv)
+        action = InterpretedAction(
+            action_type=ActionType.INTERACT,
+            actor_name="Arden",
+            target_name="sarcophage",
+            raw_input="j'ouvre le sarcophage",
+        )
+        return session, location, action
+
+    def test_ambush_commit_marks_trigger_consumed(self) -> None:
+        session, location, action = self._ambush_setup()
+
+        _result, side = _validate(session, action)
+
+        assert session.combat_state is not None
+        assert session.combat_state.is_active
+        assert side.pending_combat_start_embed is not None
+        assert location.combat_triggers["sarcophage"].consumed is True
+
+    def test_second_interact_does_not_retrigger(self) -> None:
+        session, location, action = self._ambush_setup()
+        _validate(session, action)
+        # The first ambush eventually ends…
+        session.combat_state.is_active = False
+
+        result, side = _validate(session, action)
+
+        assert result.is_valid  # plain exploration INTERACT now
+        assert side.pending_combat_start_embed is None
+        assert session.combat_state.is_active is False  # no new combat
+
+
 class TestEnemyWinsInitiative:
     def test_face_off_commits_combat_even_when_not_actors_turn(
         self, monkeypatch: pytest.MonkeyPatch,
