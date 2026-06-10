@@ -542,7 +542,11 @@ class PipelineRunner:
                 judge = self.beat_judge
                 if judge is not None and beat_eval.judge_request is not None:
                     judge.begin_turn(turn_id=str(id(interpreted)))
-                    judge_resp = judge.evaluate(beat_eval.judge_request)
+                    # evaluate() wraps a blocking httpx POST — keep it off
+                    # the event loop (H2).
+                    judge_resp = await asyncio.to_thread(
+                        judge.evaluate, beat_eval.judge_request,
+                    )
                     if judge_resp.passed and judge_resp.confidence >= 0.7:
                         should_advance = True
                         logger.info(

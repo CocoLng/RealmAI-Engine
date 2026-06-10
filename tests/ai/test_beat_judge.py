@@ -116,6 +116,39 @@ def test_judge_handles_timeout():
     assert resp.reasoning == "judge_timeout"
 
 
+def test_judge_handles_ollama_unavailable_as_timeout():
+    """H2 regression: httpx timeouts surface as OllamaUnavailableError
+    (ai/client.py converts httpx.TimeoutException) — the bare
+    ``except TimeoutError`` was dead code and unavailability degraded to
+    the generic ``judge_error`` path with a full traceback."""
+    from ai.client import OllamaUnavailableError
+
+    client = MagicMock()
+    client.chat_json.side_effect = OllamaUnavailableError("Ollama request timed out")
+    judge = BeatJudge(client)
+    judge.begin_turn(turn_id="t1")
+    resp = judge.evaluate(_request(["talk_kaelen"]))
+    assert resp.passed is False
+    assert resp.reasoning == "judge_timeout"
+
+
+def test_judge_passes_per_request_timeout_to_client():
+    """H2 regression: TIMEOUT_SECONDS must reach chat_json — otherwise the
+    judge inherits the client-wide 120 s default and a slow generation
+    blocks the whole turn."""
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "passed": False, "confidence": 0.0,
+        "objectives_satisfied": [], "reasoning": "no",
+        "suggested_next_action": None,
+    }
+    judge = BeatJudge(client)
+    judge.begin_turn(turn_id="t1")
+    judge.evaluate(_request(["talk_kaelen"]))
+    kwargs = client.chat_json.call_args.kwargs
+    assert kwargs.get("timeout") == BeatJudge.TIMEOUT_SECONDS
+
+
 def test_judge_cooldown_returns_cached_or_skip():
     """Two evaluate() calls in the same turn should only fire ONE LLM call."""
     client = MagicMock()

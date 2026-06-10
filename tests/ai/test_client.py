@@ -160,6 +160,25 @@ def test_chat_json_caller_can_override_num_predict(
     assert payload["options"]["num_predict"] == 300
 
 
+def test_chat_json_caller_can_override_request_timeout(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    """H2: callers (e.g. BeatJudge) may pass a per-request timeout so a
+    single call can fail fast instead of inheriting the 120 s default."""
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": True}))
+
+    ollama_client.chat_json(
+        model="qwen3.5:4b",
+        messages=[{"role": "user", "content": "test"}],
+        timeout=5.0,
+    )
+
+    chat_request = httpx_mock.get_requests()[-1]
+    timeout_ext = chat_request.extensions["timeout"]
+    assert timeout_ext["read"] == 5.0
+    assert timeout_ext["connect"] == 10.0
+
+
 def test_chat_json_raises_on_empty_content_with_think(
     httpx_mock: HTTPXMock, ollama_client: OllamaClient,
 ) -> None:

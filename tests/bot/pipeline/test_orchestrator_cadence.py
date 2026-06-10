@@ -4,18 +4,31 @@ Covers:
 - M1: turn counter must be read from ``session.campaign.interaction_count``
   (GameSession itself has no ``interaction_count`` field → the %6 Story
   Director cadence never fired).
+- H2: BeatJudge.evaluate (blocking httpx) must run off the event loop.
 """
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock
 
+from ai.beat_judge import JudgeResponse
 from ai.models import InterpretedAction, NarrativeResult
 from bot.pipeline.orchestrator import PipelineRunner, get_drift_tracker
+from engine.character import AbilityScores, Race
 from engine.validators import ActionType
 from world.location import Location
+from world.npc import NPC
+from world.story_arc import (
+    BeatObjective,
+    GateKind,
+    ObjectiveGate,
+    ObjectiveKind,
+    StoryArc,
+    StoryBeat,
+)
 
 
 @dataclass
@@ -120,3 +133,119 @@ class TestDirectorCadenceM1:
         await runner.process("je regarde autour de moi")
 
         assert scheduled == []
+
+
+# ---------------------------------------------------------------------------
+# H2 — BeatJudge must run off the event loop
+# ---------------------------------------------------------------------------
+
+
+def _stonewall_judge_scenario() -> tuple[PipelineRunner, MagicMock]:
+    """TALK to the right NPC but with zero reveals → MIN_REVEALS gate fails
+    → BeatProgressionEngine returns NEEDS_JUDGE."""
+    loc = Location(
+        name="Poste de garde",
+        description="Un poste ruiné.",
+        connections=[],
+        npcs_present=["Kaelen"],
+    )
+    arc = StoryArc(
+        campaign_id="camp-h2-judge",
+        theme="dungeon",
+        premise="A dungeon adventure with many challenges ahead.",
+        beats=[
+            StoryBeat(
+                beat_number=1,
+                title="L'Interrogation",
+                description="Questionner Kaelen.",
+                location_hint="Poste de garde",
+                encounter_type="social",
+                objectives=[
+                    BeatObjective(
+                        id="talk_kaelen",
+                        kind=ObjectiveKind.TALK,
+                        target="Kaelen",
+                        description="Faire parler Kaelen",
+                        required=True,
+                        gate=ObjectiveGate(kind=GateKind.MIN_REVEALS, value=1),
+                    ),
+                ],
+            ),
+            *[
+                StoryBeat(
+                    beat_number=i + 2,
+                    title=f"Beat {i + 2}",
+                    description=f"Desc {i + 2}",
+                    location_hint=f"Area {i + 2}",
+                    encounter_type="exploration",
+                )
+                for i in range(9)
+            ],
+        ],
+        villain_name="X",
+        villain_motivation="Y.",
+    )
+    scores = AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10)
+    npcs = {
+        "Kaelen": NPC(
+            name="Kaelen", race=Race.HUMAN, ability_scores=scores,
+            hp=10, max_hp=10, ac=10,
+            description="Un garde blessé.", personality="Méfiant.",
+            location_name="Poste de garde",
+        ),
+    }
+    session = _make_session(campaign_turn_count=1)
+    session.story_arc = arc
+    session.current_location = loc
+    session.npcs = npcs
+
+    talk = InterpretedAction(
+        action_type=ActionType.TALK,
+        actor_name="Hero",
+        target_name="Kaelen",
+        raw_input="bonjour",
+        confidence=0.95,
+    )
+    runner = PipelineRunner(
+        interpreter=_StubInterpreter(response=talk),  # type: ignore[arg-type]
+        narrator=_StubNarrator(),  # type: ignore[arg-type]
+        location=loc,
+        npcs=npcs,
+        actor_name="Hero",
+        campaign_id="camp-h2-judge",
+        session=session,
+    )
+    return runner, session
+
+
+class TestJudgeOffEventLoopH2:
+    async def test_judge_evaluate_runs_in_worker_thread(self) -> None:
+        """H2 regression: judge.evaluate wraps a blocking httpx POST (up to
+        120 s) — it must NOT execute on the event-loop thread."""
+        campaign_id = "camp-h2-judge"
+        get_drift_tracker().reset(campaign_id)
+        runner, _session = _stonewall_judge_scenario()
+
+        recorded: dict[str, int] = {}
+
+        class _RecordingJudge:
+            def begin_turn(self, *, turn_id: str) -> None:
+                pass
+
+            def evaluate(self, request: Any) -> JudgeResponse:
+                recorded["thread"] = threading.get_ident()
+                return JudgeResponse(
+                    passed=True, confidence=0.9, reasoning="creative success",
+                )
+
+        runner.beat_judge = _RecordingJudge()
+
+        result = await runner.process("bonjour")
+
+        assert "thread" in recorded, "NEEDS_JUDGE path did not fire the judge"
+        assert recorded["thread"] != threading.get_ident(), (
+            "judge.evaluate must run via asyncio.to_thread, "
+            "not on the event loop"
+        )
+        # A passing judge (confidence >= 0.7) advances the beat.
+        assert getattr(result, "new_beat", None) is not None

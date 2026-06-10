@@ -163,6 +163,96 @@ async def test_level3_unlocks_when_campaign_cooldown_expired(
     )
 
 
+async def test_level3_judge_runs_off_event_loop(
+    cog: HintCog, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H2 regression: judge.evaluate wraps a blocking httpx POST — it must
+    run via asyncio.to_thread, not on the Discord event loop."""
+    import threading
+    from types import SimpleNamespace
+
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    interaction.channel_id = 123
+
+    fake_beat = MagicMock(
+        player_visible_hint="vague", description="...", beat_number=1,
+        title="Beat", judge_rubric=None,
+    )
+    fake_beat.objectives = []
+    fake_session = MagicMock()
+    fake_session.story_arc.beats = [fake_beat] * 5
+    fake_session.story_arc.current_beat_index = 0
+    fake_session.campaign.id = "c1"
+    fake_session.campaign.interaction_count = 20
+    fake_session.current_location.name = "Forge"
+
+    monkeypatch.setattr(cog, "_get_session", lambda channel_id: fake_session)
+
+    fake_repo = MagicMock()
+    fake_repo.get_or_create.return_value = MagicMock(
+        level1_uses=1, level2_used=True, level3_last_used_turn=None,
+    )
+    monkeypatch.setattr(cog, "_get_repo", lambda: fake_repo)
+
+    recorded: dict[str, int] = {}
+
+    class _RecordingJudge:
+        def begin_turn(self, *, turn_id: str) -> None:
+            pass
+
+        def evaluate(self, request) -> SimpleNamespace:
+            recorded["thread"] = threading.get_ident()
+            return SimpleNamespace(
+                suggested_next_action="Examine l'autel", reasoning="...",
+            )
+
+    monkeypatch.setattr(cog, "_build_judge", lambda session: _RecordingJudge())
+
+    await cog.hint.callback(cog, interaction)
+
+    assert "thread" in recorded
+    assert recorded["thread"] != threading.get_ident(), (
+        "judge.evaluate must run via asyncio.to_thread"
+    )
+
+
+async def test_hint_closes_db_session(
+    cog: HintCog, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H2 regression: each /hint invocation opened a DB session via
+    db_factory and never closed it — one leaked session per command."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.channel_id = 123
+
+    fake_beat = MagicMock()
+    fake_beat.player_visible_hint = "Un indice vague."
+    fake_beat.description = "..."
+    fake_beat.beat_number = 1
+    fake_beat.objectives = []
+
+    fake_session = MagicMock()
+    fake_session.story_arc.beats = [fake_beat] * 5
+    fake_session.story_arc.current_beat_index = 0
+    fake_session.campaign.id = "c1"
+
+    monkeypatch.setattr(cog, "_get_session", lambda channel_id: fake_session)
+
+    # Real _get_repo path: db_factory builds the session the repo wraps.
+    db_session = MagicMock()
+    db_session.get.return_value = MagicMock(
+        level1_uses=0, level2_used=False, level3_last_used_turn=None,
+    )
+    cog.bot.db_factory = lambda: db_session
+
+    await cog.hint.callback(cog, interaction)
+
+    db_session.close.assert_called_once()
+
+
 async def test_no_active_session_returns_friendly_error(cog: HintCog, monkeypatch: pytest.MonkeyPatch) -> None:
     """When no session is active, returns a human-readable error."""
     interaction = MagicMock()

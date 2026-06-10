@@ -91,6 +91,7 @@ class OllamaClient:
         num_ctx: int = 16384,
         thinking_budget: int | None = None,
         keep_alive: str | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Call the model in JSON mode and return the parsed response dict.
 
@@ -118,6 +119,9 @@ class OllamaClient:
                 does not stay loaded alongside the 9b — the documented
                 budget is 18 GB and the models must not be resident
                 simultaneously (M8).
+            timeout: Per-request read timeout in seconds.  Overrides both
+                the client default and the thinking-mode timeout — callers
+                that must fail fast (e.g. BeatJudge) pass a small value.
 
         Returns:
             Parsed JSON dict from the model response.
@@ -153,12 +157,14 @@ class OllamaClient:
 
         # Thinking mode needs a much longer timeout (model reasons before
         # generating content).  Override per-request instead of raising the
-        # global default so non-thinking calls still fail fast.
-        request_timeout = (
-            httpx.Timeout(self.THINKING_TIMEOUT, connect=10.0)
-            if think
-            else None  # use client default
-        )
+        # global default so non-thinking calls still fail fast.  An explicit
+        # caller timeout beats both.
+        if timeout is not None:
+            request_timeout = httpx.Timeout(timeout, connect=10.0)
+        elif think:
+            request_timeout = httpx.Timeout(self.THINKING_TIMEOUT, connect=10.0)
+        else:
+            request_timeout = None  # use client default
 
         start = time.monotonic()
         try:
