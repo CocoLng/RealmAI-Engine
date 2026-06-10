@@ -1,8 +1,26 @@
-"""Tests for db/database.py — engine configuration (M5b)."""
+"""Tests for db/database.py — engine configuration (M5b) and DB path."""
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-from db.database import Base, get_engine
+from db.database import DB_PATH, Base, get_engine
+
+
+class TestDBPath:
+    """Low — the default DB path must not depend on the CWD.
+
+    Launching the bot from another directory used to silently create a
+    fresh empty database wherever the shell happened to be.
+    """
+
+    def test_db_path_is_absolute(self) -> None:
+        assert DB_PATH.is_absolute()
+
+    def test_db_path_anchored_to_project_root(self) -> None:
+        import db
+
+        project_root = Path(db.__file__).resolve().parent.parent
+        assert DB_PATH == project_root / "data" / "realmai.db"
 
 
 class TestSQLitePragmas:

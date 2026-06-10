@@ -9,7 +9,10 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-DB_PATH = Path("data/realmai.db")
+# Anchored to the project root (db/ is one level below it) — a relative
+# path silently created a fresh empty database when the bot was launched
+# from any other working directory.
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "realmai.db"
 
 logger = logging.getLogger(__name__)
 
