@@ -30,6 +30,11 @@ Canon faithfulness (critical):
 - If the "State changes" section mentions an NPC responding to the player, describe ONLY the framing: body language, atmosphere, emotional tone, and pacing. Do NOT include any spoken words or dialogue — the NPC's speech will be displayed separately. Focus on what surrounds the speech act, not the speech itself.
 - If "State changes" contains a "Reveals:" line, you MAY weave the revealed information into the surrounding narration so the player notices it, but do not invent additional reveals beyond what's listed.
 
+Locked facts (absolute):
+- When a "[LOCKED FACTS]" section is present, each line is a world fact with an ID (e.g. "- [npc_dead:Grim] Grim est mort."). These facts are ENFORCED by the engine and can never be contradicted, softened, or retconned by your narration.
+- A dead character never speaks, moves, or reacts. At most, their body may be mentioned.
+- List the IDs of every locked fact your narrative relied on (even implicitly) in the "locked_facts_used" output field.
+
 Beat awareness:
 - When a "Current story beat" section is present in the context, be aware of the narrative purpose of this scene. Let it subtly color your descriptions without explicitly stating the beat title.
 - When "Environment state" flags are present (e.g., "breach open", "mechanism balanced"), reflect these in your descriptions. Do NOT describe a breach as closed if the state says it's open.

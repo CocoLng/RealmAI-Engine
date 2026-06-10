@@ -113,6 +113,18 @@ class StoryBeat(BaseModel):
     on_complete: BeatEffects = Field(default_factory=BeatEffects)
 
 
+class LockedFact(BaseModel):
+    """A world fact the narrator must never contradict (audit H17).
+
+    Stored on the StoryArc so it rides the existing ``arc_json`` blob —
+    no dedicated DB table. The ``id`` is injected into the narrator
+    context and echoed back via ``NarrativeResult.locked_facts_used``.
+    """
+
+    id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
 class StoryArc(BaseModel):
     """Complete narrative arc for a campaign."""
 
@@ -137,6 +149,10 @@ class StoryArc(BaseModel):
     ``None`` for legacy arcs — the hydration layer (task 43) falls back
     to ``engine.npc_library.get_archetype('generic_boss')`` in that case.
     """
+    locked_facts: list[LockedFact] = Field(default_factory=list)
+    """World facts the narrator must never contradict (audit H17).
+    Populated at runtime (e.g. NPC deaths) by the memory hook; empty on
+    legacy arcs. Serialized inside the existing arc_json blob."""
 
     @model_validator(mode="after")
     def _migrate_legacy_completion_triggers(self) -> "StoryArc":

@@ -243,6 +243,207 @@ class TestMemoryContextCache:
         assert "larmes de sang" in second_context
 
 
+def _minimal_arc(campaign_id: str = "camp-mem-1"):
+    from world.story_arc import StoryArc, StoryBeat
+
+    beats = [
+        StoryBeat(
+            beat_number=i + 1, title=f"Beat {i + 1}",
+            description="desc", location_hint="here",
+            encounter_type="social",
+        )
+        for i in range(8)
+    ]
+    return StoryArc(
+        campaign_id=campaign_id, theme="t",
+        premise="A premise long enough.", beats=beats,
+        villain_name="Nezznar", villain_motivation="m",
+    )
+
+
+def _make_npc(name: str, *, alive: bool):
+    from engine.character import AbilityScores, Race
+    from world.npc import NPC
+
+    npc = NPC(
+        name=name, race=Race.HUMAN,
+        ability_scores=AbilityScores(STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10),
+        hp=10 if alive else 0, max_hp=10, ac=10,
+    )
+    if not alive:
+        npc.kill()
+    return npc
+
+
+class TestLockedFactsFlow:
+    """H17 — NPC deaths become locked facts, injected with IDs into the
+    narrator context, and enforced by a deterministic post-narration
+    check with a single retry."""
+
+    @pytest.mark.asyncio
+    async def test_hook_registers_dead_npcs_as_locked_facts(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        from memory import narration_guard
+
+        narration_guard.reset("camp-mem-1")
+        game_session.story_arc = _minimal_arc()
+        game_session.npcs = {
+            "Grim": _make_npc("Grim", alive=False),
+            "Mira": _make_npc("Mira", alive=True),
+        }
+
+        await narrate.update_memory_after_turn(
+            session=game_session,
+            db_factory=thread_safe_db_factory,
+            player_input="je regarde",
+            narration="Le silence règne.",
+        )
+
+        fact_ids = [f.id for f in game_session.story_arc.locked_facts]
+        assert "npc_dead:Grim" in fact_ids
+        assert all("Mira" not in fid for fid in fact_ids)
+        # The guard registry now knows Grim is dead
+        violations = narration_guard.find_dead_npc_violations(
+            "camp-mem-1", narrative="Grim sourit.", npcs_mentioned=[],
+        )
+        assert violations == ["Grim"]
+        narration_guard.reset("camp-mem-1")
+
+    @pytest.mark.asyncio
+    async def test_hook_does_not_duplicate_facts(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        from memory import narration_guard
+
+        narration_guard.reset("camp-mem-1")
+        game_session.story_arc = _minimal_arc()
+        game_session.npcs = {"Grim": _make_npc("Grim", alive=False)}
+
+        for _ in range(2):
+            await narrate.update_memory_after_turn(
+                session=game_session,
+                db_factory=thread_safe_db_factory,
+                player_input="encore",
+                narration="Toujours rien.",
+            )
+
+        fact_ids = [f.id for f in game_session.story_arc.locked_facts]
+        assert fact_ids.count("npc_dead:Grim") == 1
+        narration_guard.reset("camp-mem-1")
+
+    @pytest.mark.asyncio
+    async def test_assemble_context_injects_locked_facts_with_ids(
+        self, game_session: GameSession,
+    ) -> None:
+        from world.story_arc import LockedFact
+
+        arc = _minimal_arc()
+        game_session.story_arc = arc.model_copy(update={"locked_facts": [
+            LockedFact(id="npc_dead:Grim", text="Grim est mort."),
+        ]})
+        game_session.current_location = Location(
+            name="Crypte", description="Une crypte sombre.",
+        )
+        action = InterpretedAction(
+            action_type=ActionType.LOOK, actor_name="Aldric",
+            raw_input="je regarde", confidence=0.9,
+        )
+        context = narrate.assemble_context(
+            action,
+            actor_name="Aldric",
+            location=game_session.current_location,
+            npcs=None,
+            session=game_session,
+            combat_state=None,
+            inventory=None,
+            campaign_id="camp-mem-1",
+        )
+        assert "[LOCKED FACTS]" in context
+        assert "npc_dead:Grim" in context
+        assert "Grim est mort." in context
+
+    @pytest.mark.asyncio
+    async def test_call_narrator_retries_on_dead_npc_violation(self) -> None:
+        from ai.models import MechanicsOutcome
+        from memory import narration_guard
+
+        narration_guard.reset("camp-guard-retry")
+        narration_guard.set_dead_npcs("camp-guard-retry", ["Grim"])
+        narrator = FakeNarrator(responses=[
+            NarrativeResult(
+                narrative="Grim vous accueille avec un sourire chaleureux.",
+                tone="humorous", npcs_mentioned=["Grim"],
+            ),
+            NarrativeResult(
+                narrative="Le cadavre de Grim gît toujours derrière le comptoir.",
+                tone="somber",
+            ),
+        ])
+
+        result = await narrate.call_narrator(
+            narrator=narrator,  # type: ignore[arg-type]
+            outcome=MechanicsOutcome(summary="Le joueur entre dans la taverne."),
+            context_prompt="## Location\nTaverne",
+            language="fr",
+            campaign_id="camp-guard-retry",
+        )
+
+        assert len(narrator.calls) == 2
+        assert "MORT" in narrator.calls[1]["action_result_text"]
+        assert "Grim" in narrator.calls[1]["action_result_text"]
+        assert "cadavre" in result.narrative
+        narration_guard.reset("camp-guard-retry")
+
+    @pytest.mark.asyncio
+    async def test_call_narrator_single_call_when_clean(self) -> None:
+        from ai.models import MechanicsOutcome
+        from memory import narration_guard
+
+        narration_guard.reset("camp-guard-clean")
+        narration_guard.set_dead_npcs("camp-guard-clean", ["Grim"])
+        narrator = FakeNarrator(responses=[
+            NarrativeResult(narrative="La taverne est vide.", tone="somber"),
+        ])
+
+        result = await narrate.call_narrator(
+            narrator=narrator,  # type: ignore[arg-type]
+            outcome=MechanicsOutcome(summary="Le joueur entre."),
+            context_prompt="## Location\nTaverne",
+            language="fr",
+            campaign_id="camp-guard-clean",
+        )
+
+        assert len(narrator.calls) == 1
+        assert result.narrative == "La taverne est vide."
+        narration_guard.reset("camp-guard-clean")
+
+    @pytest.mark.asyncio
+    async def test_retry_result_accepted_even_if_still_violating(self) -> None:
+        """One retry only — no loops, the second result is final."""
+        from ai.models import MechanicsOutcome
+        from memory import narration_guard
+
+        narration_guard.reset("camp-guard-loop")
+        narration_guard.set_dead_npcs("camp-guard-loop", ["Grim"])
+        narrator = FakeNarrator(responses=[
+            NarrativeResult(narrative="Grim vous parle.", tone="tense"),
+            NarrativeResult(narrative="Grim continue de parler.", tone="tense"),
+        ])
+
+        result = await narrate.call_narrator(
+            narrator=narrator,  # type: ignore[arg-type]
+            outcome=MechanicsOutcome(summary="Le joueur écoute."),
+            context_prompt="## Location\nTaverne",
+            language="fr",
+            campaign_id="camp-guard-loop",
+        )
+
+        assert len(narrator.calls) == 2
+        assert result.narrative == "Grim continue de parler."
+        narration_guard.reset("camp-guard-loop")
+
+
 class TestRagReadPath:
     """The hook queries semantic memory with the turn's text and the
     cached context surfaces the relevant lore (audit H9d)."""

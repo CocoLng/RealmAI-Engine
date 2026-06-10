@@ -88,10 +88,15 @@ def assemble_context(
         # Memory layers (summaries + sliding window [+ lore]) precomputed
         # by update_memory_after_turn at the end of the previous turn —
         # the scene snapshot plays the Layer 1 (structured state) role.
+        blocks: list[str] = []
         memory_block = getattr(session, "memory_context", None)
-        if memory_block:
-            return f"{memory_block}\n\n{scene}"
-        return scene
+        if isinstance(memory_block, str) and memory_block:
+            blocks.append(memory_block)
+        facts_block = _render_locked_facts(session)
+        if facts_block:
+            blocks.append(facts_block)
+        blocks.append(scene)
+        return "\n\n".join(blocks)
 
     loc = location
     lines: list[str] = []
@@ -99,6 +104,22 @@ def assemble_context(
         lines.append(f"## Location\n{loc.name}\n{loc.description}")
     lines.append(f"## Acting character\n{action.actor_name}")
     return "\n\n".join(lines)
+
+
+def _render_locked_facts(session: "GameSession") -> str:
+    """Render the [LOCKED FACTS] block from the arc's locked facts (H17).
+
+    Pure in-memory read — safe on the event loop. Empty string when the
+    session has no arc or no facts.
+    """
+    arc = getattr(session, "story_arc", None)
+    facts = getattr(arc, "locked_facts", None) if arc is not None else None
+    # isinstance guard: tests drive the pipeline with MagicMock sessions
+    if not isinstance(facts, list) or not facts:
+        return ""
+    lines = ["[LOCKED FACTS]"]
+    lines += [f"- [{fact.id}] {fact.text}" for fact in facts]
+    return "\n".join(lines)
 
 
 async def update_memory_after_turn(
@@ -118,7 +139,10 @@ async def update_memory_after_turn(
     All I/O runs in ``asyncio.to_thread`` — never on the event loop.
     Failures are swallowed and logged: memory must never break gameplay.
     """
-    if session is None or db_factory is None:
+    if session is None:
+        return
+    _sync_locked_facts(session)
+    if db_factory is None:
         return
     if not player_input and not narration:
         return
@@ -171,6 +195,37 @@ async def update_memory_after_turn(
         _schedule_summarization(session, db_factory)
 
 
+def _sync_locked_facts(session: "GameSession") -> None:
+    """Refresh the narration guard and the arc's locked facts (H17).
+
+    Pure in-memory pass, called at the END of each turn: an NPC killed
+    this turn becomes a locked fact and enters the guard's dead set only
+    for FUTURE turns — its death narration is never flagged.
+    """
+    from memory import narration_guard
+    from world.story_arc import LockedFact
+
+    # isinstance guards: tests drive the pipeline with MagicMock sessions
+    npcs = getattr(session, "npcs", None)
+    if not isinstance(npcs, dict):
+        return
+    dead = [npc.name for npc in npcs.values() if not npc.is_alive]
+    narration_guard.set_dead_npcs(session.campaign.id, dead)
+
+    arc = getattr(session, "story_arc", None)
+    facts = getattr(arc, "locked_facts", None) if arc is not None else None
+    if not isinstance(facts, list):
+        return
+    existing = {fact.id for fact in facts}
+    for name in dead:
+        fact_id = f"npc_dead:{name}"
+        if fact_id not in existing:
+            facts.append(LockedFact(
+                id=fact_id,
+                text=f"{name} est mort(e). Ce personnage ne peut plus parler ni agir.",
+            ))
+
+
 def _schedule_summarization(
     session: "GameSession",
     db_factory: Callable[[], Any],
@@ -219,11 +274,18 @@ async def call_narrator(
     campaign_id: str,
     has_npc_dialogue: bool = False,
     director_note: "DirectorNote | None" = None,
+    guard: bool = True,
 ) -> NarrativeResult:
-    """Call the Narrator LLM with retry logic and return the narrative result."""
-    def _do() -> NarrativeResult:
+    """Call the Narrator LLM with retry logic and return the narrative result.
+
+    When ``guard`` is True (the main action path), the result goes
+    through the deterministic narration guard: a narration that brings a
+    dead NPC back to life triggers ONE corrective retry with an explicit
+    constraint (audit H17). The second result is final — no loops.
+    """
+    def _do(action_text: str) -> NarrativeResult:
         return narrator.narrate(
-            action_result_text=outcome.summary,
+            action_result_text=action_text,
             context_prompt=context_prompt,
             language=language,
             player_intent=outcome.player_intent,
@@ -232,9 +294,41 @@ async def call_narrator(
             director_note=director_note,
         )
 
-    return await retry_llm_call(
-        _do,
+    result = await retry_llm_call(
+        lambda: _do(outcome.summary),
         log_label=f"ACTION campaign={campaign_id} narrate",
+    )
+    if not guard:
+        return result
+
+    from memory import narration_guard
+    violations = narration_guard.find_dead_npc_violations(
+        campaign_id,
+        narrative=result.narrative,
+        npcs_mentioned=result.npcs_mentioned,
+    )
+    if not violations:
+        if result.locked_facts_used:
+            logger.info(
+                "NARRATE locked_facts_used campaign=%s ids=%s",
+                campaign_id, result.locked_facts_used,
+            )
+        return result
+
+    names = ", ".join(violations)
+    logger.warning(
+        "NARRATION guard: dead NPC(s) %s resurrected campaign=%s — retrying once",
+        names, campaign_id,
+    )
+    constraint = (
+        f"CONTRAINTE ABSOLUE (faits verrouillés) : {names} — MORT(S). "
+        "Un personnage mort ne peut ni parler, ni bouger, ni réagir. "
+        "Réécris la narration sans le(s) faire agir ; tu peux au mieux "
+        "mentionner leur cadavre."
+    )
+    return await retry_llm_call(
+        lambda: _do(f"{outcome.summary}\n\n{constraint}"),
+        log_label=f"ACTION campaign={campaign_id} narrate-guard-retry",
     )
 
 
@@ -304,6 +398,7 @@ async def narrate_unknown(
         context_prompt=context,
         language=language,
         campaign_id=campaign_id,
+        guard=False,
     )
 
 
@@ -363,4 +458,5 @@ async def narrate_rule_failure(
         context_prompt=context,
         language=language,
         campaign_id=campaign_id,
+        guard=False,
     )
