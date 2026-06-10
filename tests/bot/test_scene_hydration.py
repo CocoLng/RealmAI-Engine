@@ -434,6 +434,50 @@ def test_hydrate_commoner_in_social_beat_stays_commoner(db_factory) -> None:
     assert barman.stat_block.tier == "minion"
 
 
+def test_hydrate_schedules_npc_prefetch(db_factory, monkeypatch) -> None:
+    """Hydration hands freshly-created NPCs to the background sheet
+    prefetcher (chantier I / H8) so the first TALK doesn't pay the lazy
+    18-27 s generation."""
+    calls = []
+    monkeypatch.setattr(
+        "bot.scene_hydration.schedule_npc_prefetch",
+        lambda session, *, db_factory: calls.append(session),
+    )
+    location = Location(name="Place", npcs_present=["Jeanne"])
+    session = _make_session(location=location)
+    _persist_campaign_and_location(db_factory, session)
+
+    hydrate_scene(session, db_factory=db_factory)
+
+    assert calls == [session]
+
+
+def test_hydrate_schedules_prefetch_even_on_db_failure(monkeypatch) -> None:
+    """The fallback path (DB down) still schedules the prefetch — it
+    degrades on its own if persistence is unavailable."""
+    calls = []
+    monkeypatch.setattr(
+        "bot.scene_hydration.schedule_npc_prefetch",
+        lambda session, *, db_factory: calls.append(session),
+    )
+
+    class _BrokenDB:
+        def close(self) -> None:
+            pass
+
+        def __getattr__(self, name):
+            raise RuntimeError("db down")
+
+    location = Location(name="Place", npcs_present=["Jeanne"])
+    session = _make_session(location=location)
+
+    hydrate_scene(session, db_factory=_BrokenDB)
+
+    assert calls == [session]
+    # The fallback path populated in-memory NPCs — prefetch can still help.
+    assert "Jeanne" in session.npcs
+
+
 # ---------------------------------------------------------------------------
 # take_scene_item
 # ---------------------------------------------------------------------------
