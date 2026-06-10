@@ -531,13 +531,39 @@ class TestSave:
 
         await cog.save.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
 
-        interaction.response.send_message.assert_called_once()
-        assert "sauvegardee" in interaction.response.send_message.call_args[0][0]
+        # M4 — /save defers, persists off-loop, then confirms via followup.
+        interaction.response.defer.assert_called_once()
+        interaction.followup.send.assert_called_once()
+        assert "sauvegardee" in interaction.followup.send.call_args[0][0]
 
         # Verify DB was updated
         reloaded = CampaignRepository(db_session).get_by_id(persisted_campaign.id)
         assert reloaded is not None
         assert reloaded.interaction_count == 42
+
+    @pytest.mark.asyncio
+    async def test_save_persists_off_event_loop(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M4 — synchronous SQLAlchemy must not run on the event loop."""
+        import threading
+
+        session = GameSession(campaign=persisted_campaign)
+        cog.bot.sessions[CHANNEL_ID] = session
+        seen: dict[str, bool] = {}
+
+        def spy(db_factory: object, sess: object) -> None:
+            seen["on_main_thread"] = (
+                threading.current_thread() is threading.main_thread()
+            )
+
+        with patch("bot.cogs.session.persist_session", side_effect=spy):
+            await cog.save.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert seen["on_main_thread"] is False
 
     @pytest.mark.asyncio
     async def test_save_persists_characters(
@@ -670,6 +696,32 @@ class TestEndCampaign:
         assert turn_manager._finalized is True
         assert session.combat_turn_manager is None
         assert CHANNEL_ID not in cog.bot.sessions
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_persists_off_event_loop(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M4 — /end_campaign's persist must not block the event loop."""
+        import threading
+
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+        seen: dict[str, bool] = {}
+
+        def spy(db_factory: object, sess: object) -> None:
+            seen["on_main_thread"] = (
+                threading.current_thread() is threading.main_thread()
+            )
+
+        with patch("bot.cogs.session.persist_session", side_effect=spy):
+            await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert seen["on_main_thread"] is False
 
     @pytest.mark.asyncio
     @patch("bot.cogs.session.archive_channel")

@@ -1248,10 +1248,19 @@ class SessionCog(commands.Cog):
             )
             return
 
-        self._persist_session(session)
+        # M4 — persist_session is synchronous SQLAlchemy and documents
+        # itself as to_thread-only; defer first so the interaction
+        # survives a slow disk.
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            logger.warning("save: interaction expired before defer()")
+            return
+
+        await asyncio.to_thread(self._persist_session, session)
         logger.info("SESSION save campaign=%s", session.campaign.id)
 
-        await interaction.response.send_message("Partie sauvegardee !", ephemeral=True)
+        await interaction.followup.send("Partie sauvegardee !", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /end_campaign
@@ -1316,8 +1325,8 @@ class SessionCog(commands.Cog):
                     )
                 session.combat_turn_manager = None
 
-            # Persist before archiving
-            self._persist_session(session)
+            # Persist before archiving (M4 — off the event loop).
+            await asyncio.to_thread(self._persist_session, session)
 
             # Clean up ChromaDB collection for this campaign (L5).
             if session.semantic_memory is not None:
