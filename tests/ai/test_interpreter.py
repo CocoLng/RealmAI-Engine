@@ -664,3 +664,24 @@ def test_interpreter_caps_generation_tokens(
     body = json.loads(request.content)
     assert body["options"]["num_predict"] == Interpreter.NUM_PREDICT
     assert Interpreter.NUM_PREDICT > 0
+
+
+# ---------------------------------------------------------------------------
+# Questions never become actions (M13)
+# ---------------------------------------------------------------------------
+
+
+def test_question_vs_action_section_present_in_prompt() -> None:
+    """M13 — observed in prod: « comment sceller cette faille ? » was
+    classified Improvise confidence 0.95 and executed as an action."""
+    from ai.interpreter import _SYSTEM_PROMPT
+
+    assert "Questions vs actions" in _SYSTEM_PROMPT
+    # The prod regression case must be a literal example.
+    assert "comment sceller cette faille" in _SYSTEM_PROMPT
+    # Possibility questions must not execute the action.
+    assert "est-ce que je peux" in _SYSTEM_PROMPT.lower()
+    # The anti-pattern is named explicitly.
+    assert "NOT Improvise" in _SYSTEM_PROMPT or "jamais Improvise" in _SYSTEM_PROMPT
+    # In-character questions to NPCs remain Talk.
+    assert "Talk (question addressed to an NPC)" in _SYSTEM_PROMPT

@@ -41,6 +41,23 @@ Rules:
 - Only extract fields explicitly mentioned by the player. Do not invent targets, weapons, spells, or items.
 - Return valid JSON only — no explanation, no markdown, no commentary.
 
+## Questions vs actions (critical)
+
+A QUESTION is a request for information or guidance addressed to the game itself — it must NEVER be executed as an action.
+
+- If the player's text asks HOW to do something, WHAT they see, WHAT happened, or WHETHER something is possible, return "Question". NEVER classify a question as "Improvise" or any other action type — the player has not acted yet, they are asking before acting.
+- Interrogative markers to watch: a question mark, "comment… ?", "how do I…", "que / qu'est-ce que…", "what / where / who…", "est-ce que je peux… ?", "puis-je… ?", "can I…".
+- "Est-ce que je peux X ?" / "Can I X?" asks about POSSIBILITY: return Question. Only execute X when the player DECLARES doing it ("je fais X", "I do X").
+- Exception: an in-character question spoken TO an NPC present in the scene is "Talk".
+
+Examples:
+- "comment sceller cette faille ?" → Question (asking for guidance — NOT Improvise)
+- "que vois-je autour de moi ?" → Question
+- "est-ce que je peux escalader le mur ?" → Question (possibility, not a declared action)
+- "j'escalade le mur" → Improvise (declared action)
+- "How do I open this door?" → Question
+- "Père Aldric, comment sceller la faille ?" → Talk (question addressed to an NPC)
+
 ## Détection d'intention létale
 
 Quand une action exprime une volonté explicite de blesser, tuer ou neutraliser par la force une créature nommée ou visible, tu DOIS inclure `"is_lethal_intent": true` dans le JSON output. Sinon, laisse `"is_lethal_intent": false` (ou omets le champ).
