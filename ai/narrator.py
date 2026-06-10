@@ -3,13 +3,57 @@
 import logging
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from ai.client import LLMParseError, OllamaClient, OllamaUnavailableError
 from ai.language import language_instruction
-from ai.models import DirectorNote, NarrativeResult
+from ai.models import DirectorNote, NarrativeResult, Tone
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system_narrator.txt").read_text()
+
+_DEFAULT_TONE: Tone = "dramatic"
+
+_TONE_ALIASES: dict[str, Tone] = {
+    # Canonical values
+    "dramatic": "dramatic",
+    "tense": "tense",
+    "humorous": "humorous",
+    "somber": "somber",
+    # French — the 9b writing French routinely localizes the enum
+    "dramatique": "dramatic",
+    "tendu": "tense",
+    "tendue": "tense",
+    "humoristique": "humorous",
+    "drôle": "humorous",
+    "sombre": "somber",
+    # Spanish / Portuguese
+    "dramático": "dramatic",
+    "dramatico": "dramatic",
+    "tenso": "tense",
+    "tensa": "tense",
+    "humorístico": "humorous",
+    "humoristico": "humorous",
+    "sombrío": "somber",
+    "sombrio": "somber",
+    # German
+    "dramatisch": "dramatic",
+    "angespannt": "tense",
+    "humorvoll": "humorous",
+    "düster": "somber",
+    "duster": "somber",
+}
+
+
+def _normalize_tone(raw: object) -> Tone:
+    """Map an LLM-emitted tone to a canonical value. Never raises."""
+    if isinstance(raw, str):
+        canonical = _TONE_ALIASES.get(raw.strip().lower())
+        if canonical is not None:
+            return canonical
+        logger.warning("Narrator emitted unknown tone %r — defaulting to %s", raw, _DEFAULT_TONE)
+    return _DEFAULT_TONE
 
 
 class Narrator:
@@ -61,7 +105,7 @@ class Narrator:
                 "Narrator primary returned short narrative (%d chars), retrying simplified",
                 len(result.narrative),
             )
-        except (LLMParseError, OllamaUnavailableError) as exc:
+        except (LLMParseError, OllamaUnavailableError, ValidationError, TypeError) as exc:
             logger.warning("Narrator primary call failed (%s), retrying simplified", exc)
 
         # --- Tier 2: simplified retry ---
@@ -82,7 +126,7 @@ class Narrator:
                 "Narrator simplified retry returned short narrative (%d chars), using template",
                 len(result.narrative),
             )
-        except (LLMParseError, OllamaUnavailableError) as exc:
+        except (LLMParseError, OllamaUnavailableError, ValidationError, TypeError) as exc:
             logger.error("Narrator simplified retry failed (%s), using template", exc)
 
         # --- Tier 3: template fallback (never raises) ---
@@ -135,9 +179,16 @@ class Narrator:
         ]
 
         data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
+        if not isinstance(data, dict):
+            raise LLMParseError(
+                f"narrator payload is {type(data).__name__}, expected JSON object",
+                raw_response=str(data),
+                model=self.MODEL,
+                messages=messages,
+            )
         result = NarrativeResult(
             narrative=str(data.get("narrative", "")),
-            tone=data.get("tone", "dramatic"),  # type: ignore[arg-type]
+            tone=_normalize_tone(data.get("tone")),
             scene_goal_touched=bool(data.get("scene_goal_touched", False)),
             beat_advanced=bool(data.get("beat_advanced", False)),
             npcs_mentioned=list(data.get("npcs_mentioned") or []),

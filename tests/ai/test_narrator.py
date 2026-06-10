@@ -270,6 +270,119 @@ class TestNarratorFallbackChain:
         assert "perfectly valid first-call narrative" in result.narrative
 
 
+class TestNarratorPayloadRobustness:
+    """H10 — narrate() never throws even on malformed LLM payloads.
+
+    The 9b model writing French routinely emits localized tone values
+    ("dramatique") or structurally broken meta fields. None of these may
+    escape the three-tier fallback chain: the mechanics were already
+    applied, so a crash here makes the player retry and double-apply.
+    """
+
+    def test_narrate_normalizes_french_tone(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "L'acier mord l'épaule du gobelin qui hurle de douleur dans la crypte.",
+                "tone": "dramatique",  # French — the 9b parrots the campaign language
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+        )
+        assert result.tone == "dramatic"
+        assert call_count["n"] == 1  # Normalized in place — no retry burned
+
+    def test_narrate_normalizes_unknown_tone_to_default(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        def fake_chat_json(*args, **kwargs):
+            return {
+                "narrative": "Une narration suffisamment longue pour passer le seuil des cinquante caractères.",
+                "tone": "epic",  # Not a valid tone in any supported language
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Action.", context_prompt="Context.",
+        )
+        assert result.tone == "dramatic"
+
+    def test_narrate_falls_back_when_payload_not_dict(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """json.loads can return a list/str — narrate must not crash on it."""
+        def fake_chat_json(*args, **kwargs):
+            return ["not", "a", "dict"]
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Some action.", context_prompt="Context.",
+        )
+        assert isinstance(result, NarrativeResult)
+        assert result.narrative  # Template fallback kept the session alive
+
+    def test_narrate_retries_on_broken_meta_field(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """A non-list npcs_mentioned (TypeError) must route to tier 2, not raise."""
+        call_count = {"n": 0}
+        responses: list[dict] = [
+            {
+                "narrative": "Une première narration assez longue pour le seuil des cinquante caractères.",
+                "tone": "tense",
+                "npcs_mentioned": 42,  # list(42) → TypeError
+            },
+            {
+                "narrative": "La seconde narration simplifiée passe sans encombre le seuil requis.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Action.", context_prompt="Context.",
+        )
+        assert call_count["n"] == 2
+        assert "seconde narration simplifiée" in result.narrative
+
+
+class TestToneNormalization:
+    """Unit tests for the tone lookup."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("dramatic", "dramatic"),
+            ("Dramatique", "dramatic"),
+            (" tendu ", "tense"),
+            ("tendue", "tense"),
+            ("humoristique", "humorous"),
+            ("sombre", "somber"),
+            ("dramático", "dramatic"),
+            ("dramatisch", "dramatic"),
+            ("epic", "dramatic"),  # unknown → default
+            (None, "dramatic"),
+            (42, "dramatic"),
+        ],
+    )
+    def test_normalize_tone(self, raw: object, expected: str) -> None:
+        from ai.narrator import _normalize_tone
+
+        assert _normalize_tone(raw) == expected
+
+
 class TestNarratorMetaParsing:
     """Narrator parses meta fields when LLM emits them, falls back to defaults otherwise."""
 

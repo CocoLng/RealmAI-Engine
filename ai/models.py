@@ -27,7 +27,11 @@ __all__ = [
     "DirectorNote",
     "NPCResponse",
     "NPCSheet",
+    "Tone",
 ]
+
+Tone = Literal["dramatic", "tense", "humorous", "somber"]
+"""Canonical narrative tones — drive the Discord embed color."""
 
 
 class NarrativeResult(BaseModel):
@@ -39,7 +43,7 @@ class NarrativeResult(BaseModel):
     """
 
     narrative: str
-    tone: Literal["dramatic", "tense", "humorous", "somber"]
+    tone: Tone
     scene_goal_touched: bool = False
     beat_advanced: bool = False
     npcs_mentioned: list[str] = Field(default_factory=list)
