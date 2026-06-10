@@ -346,6 +346,54 @@ class TestAssembleMemoryPrefix:
         assert "Narration 12" in prefix
         assert "Narration 1:" not in prefix
 
+    def test_prefix_includes_relevant_lore(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        """Layer 4 read path: the prefix surfaces semantically relevant
+        lore (ChromaDB was write-only in prod — audit H9d)."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+            content="Je demande qui dirige la forge.", interaction_number=1,
+        ))
+        db_session.commit()
+        semantic_memory.add_document(SemanticDocument(
+            campaign_id=sample_campaign.id,
+            doc_type=SemanticDocumentType.WORLD_LORE,
+            content="La Forge des Sortilèges est dirigée par Nezznar.",
+        ))
+
+        assembler = ContextAssembler(db_session, semantic_memory, mock_ollama_client)
+        prefix = assembler.assemble_memory_prefix(
+            sample_campaign.id, query_text="je vais à la forge",
+        )
+
+        assert "[RELEVANT LORE]" in prefix
+        assert "Nezznar" in prefix
+        # Background lore comes before the fresh narrative window
+        assert prefix.index("[RELEVANT LORE]") < prefix.index("[RECENT NARRATIVE]")
+
+    def test_prefix_without_semantic_memory_skips_lore(
+        self, db_session: Session, sample_campaign: Campaign,
+        mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+            content="Bonjour.", interaction_number=1,
+        ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, None, mock_ollama_client)
+        prefix = assembler.assemble_memory_prefix(
+            sample_campaign.id, query_text="bonjour",
+        )
+        assert "[RELEVANT LORE]" not in prefix
+        assert "[RECENT NARRATIVE]" in prefix
+
 
 class TestRagQueryUsesRollingWindow:
     """The RAG query must include the last 2-3 narrative exchanges, not just the current input."""

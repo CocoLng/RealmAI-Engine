@@ -124,7 +124,15 @@ class ContextAssembler:
             summaries, self._budget.layer3_max,
         )
 
-        sections = [s for s in [layer3_text, layer2_text] if s]
+        layer4_text = ""
+        if self._semantic is not None and (query_text or window):
+            rag_query = self._build_rag_query(query_text, window)
+            relevant_docs = self._semantic.query(campaign_id, rag_query)
+            layer4_text = self._semantic.render(
+                relevant_docs, self._budget.layer4_max,
+            )
+
+        sections = [s for s in [layer4_text, layer3_text, layer2_text] if s]
         return "\n\n".join(sections)
 
     @staticmethod

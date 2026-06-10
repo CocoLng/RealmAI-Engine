@@ -243,6 +243,41 @@ class TestMemoryContextCache:
         assert "larmes de sang" in second_context
 
 
+class TestRagReadPath:
+    """The hook queries semantic memory with the turn's text and the
+    cached context surfaces the relevant lore (audit H9d)."""
+
+    @pytest.mark.asyncio
+    async def test_hook_surfaces_relevant_lore_in_cached_context(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        import chromadb
+        from chromadb.config import Settings
+        from memory.models import SemanticDocument, SemanticDocumentType
+        from memory.semantic import SemanticMemory
+
+        client = chromadb.EphemeralClient(settings=Settings(allow_reset=True))
+        client.reset()
+        semantic = SemanticMemory(client=client)
+        semantic.add_document(SemanticDocument(
+            campaign_id="camp-mem-1",
+            doc_type=SemanticDocumentType.WORLD_LORE,
+            content="La Forge des Sortilèges est dirigée par Nezznar l'Araignée Noire.",
+        ))
+        game_session.semantic_memory = semantic
+
+        await narrate.update_memory_after_turn(
+            session=game_session,
+            db_factory=thread_safe_db_factory,
+            player_input="je cherche l'entrée de la forge",
+            narration="Vous longez les parois sombres de la mine.",
+        )
+
+        assert game_session.memory_context is not None
+        assert "[RELEVANT LORE]" in game_session.memory_context
+        assert "Nezznar" in game_session.memory_context
+
+
 class TestSummarizationCadence:
     """update_memory_after_turn schedules background summarization once
     enough exchanges have left the window (audit H9c), without blocking
