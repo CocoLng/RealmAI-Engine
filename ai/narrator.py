@@ -226,7 +226,7 @@ class Narrator:
             logger.error("Narrator simplified retry failed (%s), using template", exc)
 
         # --- Tier 3: template fallback (never raises) ---
-        return self._template_fallback(action_result_text, outcome_facts)
+        return self._template_fallback(action_result_text, outcome_facts, language)
 
     def _call_llm(
         self,
@@ -317,42 +317,139 @@ class Narrator:
             lines.append("Do NOT re-reveal: " + ", ".join(note.forbidden_topics))
         return "\n".join(lines)
 
-    _TEMPLATES: dict[str, list[str]] = {
-        "attack": [
-            "Le combat se poursuit dans la confusion. {action}.",
-            "Les coups pleuvent autour de toi. {action}.",
-            "L'affrontement reprend de plus belle. {action}.",
-        ],
-        "move": [
-            "Le décor change autour de toi. {action}.",
-            "Tes pas te portent ailleurs. {action}.",
-        ],
-        "talk": [
-            "Les mots échangés résonnent encore dans l'air. {action}.",
-            "La conversation suit son cours. {action}.",
-        ],
-        "search": [
-            "Tu fouilles avec attention les environs. {action}.",
-            "Tes mains parcourent l'endroit. {action}.",
-        ],
-        "default": [
-            "Le MJ rassemble ses idées un instant. {action}.",
-            "L'instant se prolonge avant la suite. {action}.",
-        ],
+    _TEMPLATES: dict[str, dict[str, list[str]]] = {
+        "fr": {
+            "attack": [
+                "Le combat se poursuit dans la confusion. {action}.",
+                "Les coups pleuvent autour de toi. {action}.",
+                "L'affrontement reprend de plus belle. {action}.",
+            ],
+            "move": [
+                "Le décor change autour de toi. {action}.",
+                "Tes pas te portent ailleurs. {action}.",
+            ],
+            "talk": [
+                "Les mots échangés résonnent encore dans l'air. {action}.",
+                "La conversation suit son cours. {action}.",
+            ],
+            "search": [
+                "Tu fouilles avec attention les environs. {action}.",
+                "Tes mains parcourent l'endroit. {action}.",
+            ],
+            "default": [
+                "Le MJ rassemble ses idées un instant. {action}.",
+                "L'instant se prolonge avant la suite. {action}.",
+            ],
+        },
+        "en": {
+            "attack": [
+                "The fight rages on around you. {action}.",
+                "Blows keep flying through the chaos. {action}.",
+            ],
+            "move": [
+                "The scenery shifts around you. {action}.",
+                "Your steps carry you onward. {action}.",
+            ],
+            "talk": [
+                "The words exchanged still hang in the air. {action}.",
+                "The conversation runs its course. {action}.",
+            ],
+            "search": [
+                "You comb the surroundings carefully. {action}.",
+                "Your hands sweep across the place. {action}.",
+            ],
+            "default": [
+                "The GM gathers their thoughts for a moment. {action}.",
+                "The moment stretches before what comes next. {action}.",
+            ],
+        },
+        "es": {
+            "attack": [
+                "El combate continúa en plena confusión. {action}.",
+                "Los golpes llueven a tu alrededor. {action}.",
+            ],
+            "move": [
+                "El escenario cambia a tu alrededor. {action}.",
+                "Tus pasos te llevan a otro lugar. {action}.",
+            ],
+            "talk": [
+                "Las palabras intercambiadas aún resuenan en el aire. {action}.",
+                "La conversación sigue su curso. {action}.",
+            ],
+            "search": [
+                "Registras los alrededores con atención. {action}.",
+                "Tus manos recorren el lugar. {action}.",
+            ],
+            "default": [
+                "El DJ ordena sus ideas un instante. {action}.",
+                "El instante se alarga antes de continuar. {action}.",
+            ],
+        },
+        "de": {
+            "attack": [
+                "Der Kampf tobt weiter im Durcheinander. {action}.",
+                "Die Schläge prasseln um dich herum. {action}.",
+            ],
+            "move": [
+                "Die Umgebung verändert sich um dich herum. {action}.",
+                "Deine Schritte tragen dich weiter. {action}.",
+            ],
+            "talk": [
+                "Die gewechselten Worte hallen noch in der Luft nach. {action}.",
+                "Das Gespräch nimmt seinen Lauf. {action}.",
+            ],
+            "search": [
+                "Du durchsuchst die Umgebung aufmerksam. {action}.",
+                "Deine Hände tasten den Ort ab. {action}.",
+            ],
+            "default": [
+                "Der Spielleiter sammelt kurz seine Gedanken. {action}.",
+                "Der Moment dehnt sich, bevor es weitergeht. {action}.",
+            ],
+        },
+        "pt": {
+            "attack": [
+                "O combate continua em plena confusão. {action}.",
+                "Os golpes chovem ao teu redor. {action}.",
+            ],
+            "move": [
+                "O cenário muda ao teu redor. {action}.",
+                "Os teus passos levam-te adiante. {action}.",
+            ],
+            "talk": [
+                "As palavras trocadas ainda ecoam no ar. {action}.",
+                "A conversa segue o seu curso. {action}.",
+            ],
+            "search": [
+                "Vasculhas os arredores com atenção. {action}.",
+                "As tuas mãos percorrem o lugar. {action}.",
+            ],
+            "default": [
+                "O mestre reúne as ideias por um instante. {action}.",
+                "O instante prolonga-se antes do que vem a seguir. {action}.",
+            ],
+        },
     }
 
     def _template_fallback(
-        self, action_result_text: str, outcome_facts: str
+        self, action_result_text: str, outcome_facts: str, language: str = "fr"
     ) -> NarrativeResult:
         """Return a hardcoded short narrative. Never raises.
 
         Used as the last-resort fallback when both the primary LLM call and
         the simplified retry have failed. The narrative is intentionally
         short and in-universe — its job is to keep the session alive, not to
-        be invisible.
+        be invisible. Localized per campaign language (M10) with an explicit
+        French fallback for unknown codes.
         """
+        lang_templates = self._TEMPLATES.get(language)
+        if lang_templates is None:
+            logger.warning(
+                "No fallback templates for language %r — using French", language,
+            )
+            lang_templates = self._TEMPLATES["fr"]
         category = self._pick_template_category(action_result_text)
-        variants = self._TEMPLATES.get(category, self._TEMPLATES["default"])
+        variants = lang_templates.get(category, lang_templates["default"])
         # Deterministic-ish pick: use the length of action_result_text mod len(variants).
         # Avoids importing random for a 3-element list.
         template = variants[len(action_result_text) % len(variants)]

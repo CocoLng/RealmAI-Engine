@@ -822,3 +822,49 @@ def test_narrator_caps_generation_tokens():
     _args, kwargs = narrator._client.chat_json.call_args
     assert kwargs.get("num_predict") == Narrator.NUM_PREDICT
     assert Narrator.NUM_PREDICT > 0
+
+
+class TestLocalizedTemplates:
+    """M10 — tier-3 templates must follow the campaign language."""
+
+    def test_template_fallback_english(self, narrator: Narrator) -> None:
+        result = narrator._template_fallback(
+            "Thorin attacks Goblin. Hit! 8 damage dealt.", "", language="en",
+        )
+        assert "Le combat" not in result.narrative
+        assert "fight" in result.narrative.lower() or "blows" in result.narrative.lower()
+
+    @pytest.mark.parametrize("language", ["fr", "en", "es", "de", "pt"])
+    def test_template_fallback_exists_for_all_supported_languages(
+        self, narrator: Narrator, language: str
+    ) -> None:
+        result = narrator._template_fallback("Some action.", "", language=language)
+        assert isinstance(result, NarrativeResult)
+        assert len(result.narrative) >= 20
+
+    def test_template_fallback_unknown_language_falls_back_to_french(
+        self, narrator: Narrator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ai.narrator"):
+            result = narrator._template_fallback("Some action.", "", language="it")
+        assert isinstance(result, NarrativeResult)
+        assert any("it" in r.getMessage() for r in caplog.records)
+
+    def test_narrate_passes_language_to_template_tier(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """When both LLM tiers fail on an English campaign, the emergency
+        template must be English too."""
+        def fake_chat_json(*args, **kwargs):
+            raise OllamaUnavailableError("down")
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+            language="en",
+        )
+        assert "Le combat" not in result.narrative
+        assert "{action}" not in result.narrative
