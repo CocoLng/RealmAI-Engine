@@ -45,6 +45,18 @@ class SlidingWindow:
         """Get the current sliding window (last N exchanges in ASC order)."""
         return self._repo.get_recent(campaign_id, limit=self._window_size)
 
+    def next_interaction_number(self, campaign_id: str) -> int:
+        """Next strictly-increasing interaction number for this campaign.
+
+        Derived from the exchanges table itself so numbering survives
+        process restarts (/resume) and stays independent of any other
+        counter.
+        """
+        recent = self._repo.get_recent(campaign_id, limit=1)
+        if not recent:
+            return 1
+        return recent[-1].interaction_number + 1
+
     def render(
         self, exchanges: list[NarrativeExchange], max_tokens: int = 700
     ) -> str:

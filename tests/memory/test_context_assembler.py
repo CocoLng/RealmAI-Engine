@@ -230,6 +230,50 @@ class TestContextAssembler:
         assert "number 12" in result
         assert "number 1 " not in result
 
+    def test_assemble_without_semantic_memory(
+        self, db_session: Session, sample_campaign: Campaign,
+        mock_ollama_client: MagicMock,
+    ) -> None:
+        """ChromaDB unavailable (semantic_memory=None) — layers 1-3 still work."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+            content="Hello there", interaction_number=1,
+        ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, None, mock_ollama_client)
+        result = assembler.assemble(sample_campaign.id, "test")
+
+        assert "[GAME STATE]" in result
+        assert "Hello there" in result
+        assert "[RELEVANT LORE]" not in result
+
+    def test_assemble_without_ollama_client(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory,
+    ) -> None:
+        """No LLM backend — summarization is skipped but reads still work."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        exchange_repo = ExchangeRepository(db_session)
+        # Enough exchanges to trigger the summarization cadence
+        for i in range(1, 26):
+            exchange_repo.save(NarrativeExchange(
+                campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+                content=f"Action {i}", interaction_number=i,
+            ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, semantic_memory, None)
+        result = assembler.assemble(sample_campaign.id, "test")
+
+        assert "[GAME STATE]" in result
+        assert "[RECENT NARRATIVE]" in result
+        # No client → no new summary was generated
+        assert "[SESSION HISTORY]" not in result
+
 
 class TestRagQueryUsesRollingWindow:
     """The RAG query must include the last 2-3 narrative exchanges, not just the current input."""

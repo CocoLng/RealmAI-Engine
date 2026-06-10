@@ -44,8 +44,9 @@ class Summarizer:
     def __init__(
         self,
         session: Session,
-        client: OllamaClient,
+        client: OllamaClient | None,
     ) -> None:
+        """``client=None`` disables summary GENERATION; reads still work."""
         self._summary_repo = SummaryRepository(session)
         self._exchange_repo = ExchangeRepository(session)
         self._client = client
@@ -62,6 +63,8 @@ class Summarizer:
 
         Returns None if not enough exchanges or if LLM call fails.
         """
+        if self._client is None:
+            return None
         latest = self._summary_repo.get_latest(campaign_id)
         last_summarized = latest.end_interaction if latest else 0
 

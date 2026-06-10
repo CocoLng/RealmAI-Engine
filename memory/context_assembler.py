@@ -33,10 +33,14 @@ class ContextAssembler:
     def __init__(
         self,
         session: Session,
-        semantic_memory: SemanticMemory,
-        ollama_client: OllamaClient,
+        semantic_memory: SemanticMemory | None,
+        ollama_client: OllamaClient | None,
         budget: ContextBudget | None = None,
     ) -> None:
+        """Both AI services are optional so production sessions running
+        without ChromaDB (``semantic_memory=None``, layer 4 skipped) or
+        without Ollama (``ollama_client=None``, summarization skipped)
+        still get the remaining layers."""
         self._state_builder = StateBuilder(session)
         self._sliding_window = SlidingWindow(session)
         self._summarizer = Summarizer(session, ollama_client)
@@ -77,11 +81,13 @@ class ContextAssembler:
             summaries, self._budget.layer3_max,
         )
 
-        rag_query = self._build_rag_query(player_input, window)
-        relevant_docs = self._semantic.query(campaign_id, rag_query)
-        layer4_text = self._semantic.render(
-            relevant_docs, self._budget.layer4_max,
-        )
+        layer4_text = ""
+        if self._semantic is not None:
+            rag_query = self._build_rag_query(player_input, window)
+            relevant_docs = self._semantic.query(campaign_id, rag_query)
+            layer4_text = self._semantic.render(
+                relevant_docs, self._budget.layer4_max,
+            )
 
         logger.info(
             "CONTEXT layers L1=%d L2=%d L3=%d L4=%d total=%d tokens",

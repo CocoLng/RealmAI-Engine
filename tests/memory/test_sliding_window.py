@@ -98,3 +98,22 @@ class TestSlidingWindow:
         sw = SlidingWindow(db_session)
         text = sw.render([])
         assert text == ""
+
+    def test_next_interaction_number_empty(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        sw = SlidingWindow(db_session)
+        assert sw.next_interaction_number(sample_campaign.id) == 1
+
+    def test_next_interaction_number_continues_from_max(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        sw = SlidingWindow(db_session)
+        for i in (1, 2, 7):
+            sw.add_exchange(sample_campaign.id, ExchangeRole.PLAYER, f"m{i}", i)
+        db_session.commit()
+        assert sw.next_interaction_number(sample_campaign.id) == 8

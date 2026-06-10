@@ -9,7 +9,10 @@ these functions, preserving the legacy call interface.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ai.models import InterpretedAction, MechanicsOutcome, NarrativeResult
 from ai.entity_resolver import ResolutionResult
@@ -23,6 +26,8 @@ if TYPE_CHECKING:
     from bot.game_session import GameSession
     from engine.combat import CombatState
     from engine.inventory import Inventory
+
+logger = logging.getLogger(__name__)
 
 
 def build_player_intent(action: InterpretedAction) -> str:
@@ -87,6 +92,57 @@ def assemble_context(
         lines.append(f"## Location\n{loc.name}\n{loc.description}")
     lines.append(f"## Acting character\n{action.actor_name}")
     return "\n\n".join(lines)
+
+
+async def update_memory_after_turn(
+    *,
+    session: "GameSession | None",
+    db_factory: Callable[[], Any] | None,
+    player_input: str,
+    narration: str,
+) -> None:
+    """Record this turn's exchanges in the Layer 2 sliding window.
+
+    Called once per resolved action, after narration (audit H9a). The
+    player input and the narrator's prose are persisted as two
+    consecutive exchanges so the next turn's context can include them.
+
+    All I/O runs in ``asyncio.to_thread`` — never on the event loop.
+    Failures are swallowed and logged: memory must never break gameplay.
+    """
+    if session is None or db_factory is None:
+        return
+    if not player_input and not narration:
+        return
+    campaign_id = session.campaign.id
+
+    def _record() -> None:
+        from memory.models import ExchangeRole
+        from memory.sliding_window import SlidingWindow
+
+        db = db_factory()
+        try:
+            window = SlidingWindow(db)
+            number = window.next_interaction_number(campaign_id)
+            if player_input:
+                window.add_exchange(
+                    campaign_id, ExchangeRole.PLAYER, player_input, number,
+                )
+                number += 1
+            if narration:
+                window.add_exchange(
+                    campaign_id, ExchangeRole.NARRATOR, narration, number,
+                )
+            db.commit()
+        finally:
+            db.close()
+
+    try:
+        await asyncio.to_thread(_record)
+    except Exception:
+        logger.warning(
+            "MEMORY record failed campaign=%s", campaign_id, exc_info=True,
+        )
 
 
 async def call_narrator(
