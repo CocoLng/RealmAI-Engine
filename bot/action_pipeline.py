@@ -295,9 +295,9 @@ class ActionPipeline:
             ongoing_dialogue_with=ongoing_dialogue_with,
         )
 
-    def _apply_beat_effects(self, effects: Any) -> str:
+    async def _apply_beat_effects(self, effects: Any) -> str:
         """Delegate to PipelineRunner._apply_beat_effects."""
-        return self._runner._apply_beat_effects(effects)
+        return await self._runner._apply_beat_effects(effects)
 
     def _should_trivial_resolve(self, npc: "NPC") -> bool:
         """Delegate to bot.pipeline.resolve.should_trivial_resolve."""

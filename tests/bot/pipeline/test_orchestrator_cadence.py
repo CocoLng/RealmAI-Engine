@@ -434,3 +434,46 @@ class TestObjectivePersistenceH16:
         assert getattr(r2, "new_beat", None) is not None, (
             "second objective completion must reach the M_OF_N threshold"
         )
+
+
+# ---------------------------------------------------------------------------
+# M4 (partial) — ChromaDB indexing in _apply_beat_effects off the event loop
+# ---------------------------------------------------------------------------
+
+
+class TestBeatEffectsIndexingOffLoopM4:
+    async def test_indexing_runs_in_worker_thread(self) -> None:
+        """semantic_indexer.index_revealed_fact hits ChromaDB (blocking
+        I/O) — it must run via asyncio.to_thread, not inline in the
+        async pipeline."""
+        from types import SimpleNamespace
+
+        from world.story_arc import BeatEffects
+
+        recorded: list[int] = []
+
+        def _index(campaign_id: str, fact: str) -> None:
+            recorded.append(threading.get_ident())
+
+        runner = PipelineRunner(
+            interpreter=MagicMock(),
+            narrator=MagicMock(),
+            location=None,
+            npcs={},
+            actor_name="Tester",
+            campaign_id="cmp_m4",
+            semantic_indexer=SimpleNamespace(index_revealed_fact=_index),
+        )
+        effects = BeatEffects(
+            narrative_hint="A breach opens.",
+            state_flags={"breach_open": True},
+        )
+
+        hint = await runner._apply_beat_effects(effects)
+
+        assert hint == "A breach opens."
+        assert len(recorded) == 2  # narrative_hint + one truthy flag
+        main_thread = threading.get_ident()
+        assert all(t != main_thread for t in recorded), (
+            "index_revealed_fact must run via asyncio.to_thread"
+        )

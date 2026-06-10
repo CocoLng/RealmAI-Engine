@@ -610,7 +610,7 @@ class PipelineRunner:
             if should_advance:
                 beat_completed = True
                 old_beat = arc.beats[arc.current_beat_index]
-                hint = self._apply_beat_effects(old_beat.on_complete)
+                hint = await self._apply_beat_effects(old_beat.on_complete)
                 if hint:
                     outcome = outcome.model_copy(update={
                         "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
@@ -760,20 +760,23 @@ class PipelineRunner:
         )
         return result
 
-    def _apply_beat_effects(self, effects: BeatEffects) -> str:
+    async def _apply_beat_effects(self, effects: BeatEffects) -> str:
         """Apply beat completion effects to the current location.
 
         Returns a narrative hint string for the narrator.
         """
         # Index revealed facts regardless of whether a location exists.
+        # ChromaDB indexing is blocking I/O — keep it off the event loop (M4).
         if self.semantic_indexer is not None and self.campaign_id:
             if effects.narrative_hint:
-                self.semantic_indexer.index_revealed_fact(
+                await asyncio.to_thread(
+                    self.semantic_indexer.index_revealed_fact,
                     self.campaign_id, fact=effects.narrative_hint,
                 )
             for flag, value in effects.state_flags.items():
                 if value:
-                    self.semantic_indexer.index_revealed_fact(
+                    await asyncio.to_thread(
+                        self.semantic_indexer.index_revealed_fact,
                         self.campaign_id,
                         fact=f"State flag set: {flag}",
                     )
