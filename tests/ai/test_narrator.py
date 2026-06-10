@@ -270,6 +270,87 @@ class TestNarratorFallbackChain:
         assert "perfectly valid first-call narrative" in result.narrative
 
 
+class TestPlaceholderFilter:
+    """H13 — bracketed placeholders must never reach the player.
+
+    Observed in prod: the 9b parroted the « À ton tour, [nom]. » example
+    from the system prompt verbatim, leaking "[nom]" into Discord.
+    """
+
+    def test_narrate_rejects_bracketed_placeholder(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "Le gobelin titube sous l'impact et recule vers le mur. À ton tour, [nom].",
+                "tone": "tense",
+            },
+            {
+                "narrative": "Le gobelin titube sous l'impact et recule vers le mur. À ton tour, Thorin.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+        )
+        assert call_count["n"] == 2  # Placeholder rejected → simplified retry
+        assert "[nom]" not in result.narrative
+        assert "Thorin" in result.narrative
+
+    def test_narrate_rejects_brace_placeholder(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "Les flammes lèchent la voûte tandis que {personnage} esquive de justesse le coup.",
+                "tone": "dramatic",
+            },
+            {
+                "narrative": "Les flammes lèchent la voûte tandis que Mira esquive de justesse le coup porté.",
+                "tone": "dramatic",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Mira dodges.", context_prompt="Context.",
+        )
+        assert call_count["n"] == 2
+        assert "{personnage}" not in result.narrative
+
+    def test_narrate_uses_template_when_both_tiers_leak_placeholders(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        def fake_chat_json(*args, **kwargs):
+            return {
+                "narrative": "Une narration assez longue pour le seuil mais qui invite [nom] à jouer son tour.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+        )
+        assert isinstance(result, NarrativeResult)
+        assert "[" not in result.narrative  # Template fallback, no leak
+
+
 class TestNarratorPayloadRobustness:
     """H10 — narrate() never throws even on malformed LLM payloads.
 

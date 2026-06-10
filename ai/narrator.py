@@ -1,6 +1,7 @@
 """Narrator — converts mechanical action results into immersive narrative."""
 
 import logging
+import re
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -56,6 +57,21 @@ def _normalize_tone(raw: object) -> Tone:
     return _DEFAULT_TONE
 
 
+_PLACEHOLDER_RE = re.compile(r"[\[{][^\]}]{0,40}[\]}]")
+"""Bracketed tokens like ``[nom]`` or ``{personnage}`` — small models parrot
+them verbatim from prompt examples (observed in prod, H13)."""
+
+
+def _quality_issue(narrative: str) -> str | None:
+    """Return why a narrative is unfit for the player, or ``None`` if fine."""
+    if len(narrative) < 50:
+        return f"too short ({len(narrative)} chars)"
+    match = _PLACEHOLDER_RE.search(narrative)
+    if match is not None:
+        return f"placeholder {match.group(0)!r}"
+    return None
+
+
 class Narrator:
     """Narrates action results as immersive text using the 9B model.
 
@@ -99,11 +115,11 @@ class Narrator:
                 simplified=False,
                 director_note=director_note,
             )
-            if len(result.narrative) >= 50:
+            issue = _quality_issue(result.narrative)
+            if issue is None:
                 return result
             logger.warning(
-                "Narrator primary returned short narrative (%d chars), retrying simplified",
-                len(result.narrative),
+                "Narrator primary rejected (%s), retrying simplified", issue,
             )
         except (LLMParseError, OllamaUnavailableError, ValidationError, TypeError) as exc:
             logger.warning("Narrator primary call failed (%s), retrying simplified", exc)
@@ -120,11 +136,11 @@ class Narrator:
                 simplified=True,
                 director_note=director_note,
             )
-            if len(result.narrative) >= 50:
+            issue = _quality_issue(result.narrative)
+            if issue is None:
                 return result
             logger.error(
-                "Narrator simplified retry returned short narrative (%d chars), using template",
-                len(result.narrative),
+                "Narrator simplified retry rejected (%s), using template", issue,
             )
         except (LLMParseError, OllamaUnavailableError, ValidationError, TypeError) as exc:
             logger.error("Narrator simplified retry failed (%s), using template", exc)

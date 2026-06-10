@@ -45,3 +45,16 @@ def test_phase_prompt_exists_and_enforces_length() -> None:
     assert "narration" in text.lower()
     # Output schema must be declared so the model returns JSON, not prose.
     assert "{" in text and "narration" in text
+
+
+def test_narrator_prompt_has_no_bracketed_placeholder_examples() -> None:
+    """H13 — small models parrot bracketed examples verbatim; the prompt
+    must demonstrate the next-turn invitation with a concrete name."""
+    text = _NARRATOR_PROMPT.read_text()
+    assert "[nom]" not in text
+    assert "[name]" not in text
+
+
+def test_narrator_prompt_forbids_placeholders_explicitly() -> None:
+    text = _NARRATOR_PROMPT.read_text()
+    assert "placeholder" in text.lower()
