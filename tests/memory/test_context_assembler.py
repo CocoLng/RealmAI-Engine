@@ -196,6 +196,40 @@ class TestContextAssembler:
 
         assert estimate_tokens(result) <= 250
 
+    def test_budget_truncation_keeps_newest_exchanges(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        """When the total budget forces layer 2 truncation, the most
+        RECENT exchanges survive — not the oldest ones."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+
+        exchange_repo = ExchangeRepository(db_session)
+        for i in range(1, 13):
+            exchange_repo.save(NarrativeExchange(
+                campaign_id=sample_campaign.id, role=ExchangeRole.NARRATOR,
+                content=(
+                    f"Narration update number {i} where the heroes pressed "
+                    "onward through danger and shadow without rest."
+                ),
+                interaction_number=i,
+            ))
+        db_session.commit()
+
+        budget = ContextBudget(
+            layer1_max=80, layer2_max=400,
+            layer3_max=80, layer4_max=80, total_max=200,
+        )
+        assembler = ContextAssembler(
+            db_session, semantic_memory, mock_ollama_client, budget=budget,
+        )
+        result = assembler.assemble(sample_campaign.id, "onward")
+
+        assert estimate_tokens(result) <= 200
+        assert "number 12" in result
+        assert "number 1 " not in result
+
 
 class TestRagQueryUsesRollingWindow:
     """The RAG query must include the last 2-3 narrative exchanges, not just the current input."""

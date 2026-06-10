@@ -13,7 +13,7 @@ from ai.client import OllamaClient
 from db.repositories.exchange_repo import ExchangeRepository
 from db.repositories.summary_repo import SummaryRepository
 from memory.models import CompressedSummary, NarrativeExchange
-from memory.token_utils import truncate_to_tokens
+from memory.token_utils import truncate_lines_keep_recent
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,8 @@ class Summarizer:
                 f"{s.summary_text}"
             )
         text = "\n".join(lines)
-        return truncate_to_tokens(text, max_tokens)
+        # Oldest summaries are dropped first when over budget.
+        return truncate_lines_keep_recent(text, max_tokens)
 
     def _format_exchanges(self, exchanges: list[NarrativeExchange]) -> str:
         """Format exchanges for the LLM prompt."""

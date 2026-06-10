@@ -154,3 +154,46 @@ class TestStateBuilder:
         summary = builder.build(sample_campaign.id)
         text = builder.render(summary, max_tokens=450)
         assert estimate_tokens(text) <= 450
+
+    def test_render_truncation_preserves_combat_and_arc(
+        self, db_session: Session,
+    ) -> None:
+        """Under a tight budget, combat and story-arc lines must survive —
+        quest/inventory lines are the expendable ones (audit low: truncation
+        was cutting the combat/arc tail instead)."""
+        from memory.models import CharacterSummary, CombatSummary, GameStateSummary
+
+        summary = GameStateSummary(
+            campaign_name="Test",
+            current_location="Cragmaw",
+            location_description="A dark cave with " + "many details " * 30,
+            player_characters=[
+                CharacterSummary(
+                    name="Thorin", race="Dwarf", char_class="Fighter",
+                    level=3, hp=20, max_hp=25, ac=16,
+                ),
+            ],
+            nearby_npcs=[f"Npc{i} (neutral)" for i in range(10)],
+            active_quests=[f"Quest {i} (active) with a long title" for i in range(10)],
+            combat=CombatSummary(
+                is_active=True, round_number=2, current_turn="Thorin",
+                combatants=[
+                    CharacterSummary(
+                        name="Thorin", race="Dwarf", char_class="Fighter",
+                        level=3, hp=20, max_hp=25, ac=16,
+                    ),
+                ],
+            ),
+            inventory_highlights=[f"Magic item {i}" for i in range(10)],
+            current_story_beat="The Goblin Ambush — the trail goes cold",
+            upcoming_story_beat="Cragmaw Hideout",
+            villain_context="Nezznar — wants the Forge of Spells",
+        )
+        builder = StateBuilder(db_session)
+        full = builder.render(summary, max_tokens=10_000)
+        tight_budget = estimate_tokens(full) - 40
+        text = builder.render(summary, max_tokens=tight_budget)
+        assert estimate_tokens(text) <= tight_budget
+        assert "Combat: Round 2" in text
+        assert "[STORY ARC]" in text
+        assert "Goblin Ambush" in text

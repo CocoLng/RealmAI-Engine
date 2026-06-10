@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from db.repositories.exchange_repo import ExchangeRepository
 from memory.models import ExchangeRole, NarrativeExchange
-from memory.token_utils import truncate_to_tokens
+from memory.token_utils import truncate_lines_keep_recent
 
 _ROLE_DISPLAY = {
     ExchangeRole.PLAYER: "Player",
@@ -48,7 +48,11 @@ class SlidingWindow:
     def render(
         self, exchanges: list[NarrativeExchange], max_tokens: int = 700
     ) -> str:
-        """Render exchanges into a text block for the prompt."""
+        """Render exchanges into a text block for the prompt.
+
+        Over budget, the OLDEST exchanges are dropped first — the freshest
+        continuity is what the narrator needs most.
+        """
         if not exchanges:
             return ""
         lines = ["[RECENT NARRATIVE]"]
@@ -56,4 +60,4 @@ class SlidingWindow:
             role_name = _ROLE_DISPLAY.get(ex.role, ex.role.value.capitalize())
             lines.append(f"{role_name}: {ex.content}")
         text = "\n".join(lines)
-        return truncate_to_tokens(text, max_tokens)
+        return truncate_lines_keep_recent(text, max_tokens)

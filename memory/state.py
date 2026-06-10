@@ -163,7 +163,13 @@ class StateBuilder:
         )
 
     def render(self, summary: GameStateSummary, max_tokens: int = 450) -> str:
-        """Render the GameStateSummary into a text block for the prompt."""
+        """Render the GameStateSummary into a text block for the prompt.
+
+        Lines are ordered by importance: campaign/location/players, then
+        combat and story arc, then NPCs/quests/items. End-of-text
+        truncation therefore sacrifices the expendable lines first and
+        never the combat or arc context.
+        """
         lines: list[str] = ["[GAME STATE]"]
         lines.append(f"Campaign: {summary.campaign_name}")
 
@@ -181,12 +187,6 @@ class StateBuilder:
             )
             lines.append(f"Players: {chars}")
 
-        if summary.nearby_npcs:
-            lines.append(f"Nearby NPCs: {', '.join(summary.nearby_npcs)}")
-
-        if summary.active_quests:
-            lines.append(f"Active Quests: {', '.join(summary.active_quests)}")
-
         if summary.combat and summary.combat.is_active:
             c = summary.combat
             combatant_strs = ", ".join(
@@ -198,11 +198,6 @@ class StateBuilder:
                 f"Combatants: {combatant_strs}"
             )
 
-        if summary.inventory_highlights:
-            lines.append(
-                f"Notable Items: {', '.join(summary.inventory_highlights)}"
-            )
-
         if summary.current_story_beat:
             lines.append("[STORY ARC]")
             lines.append(f"Current: {summary.current_story_beat}")
@@ -210,6 +205,17 @@ class StateBuilder:
                 lines.append(f"Next: {summary.upcoming_story_beat}")
             if summary.villain_context:
                 lines.append(f"Villain: {summary.villain_context}")
+
+        if summary.nearby_npcs:
+            lines.append(f"Nearby NPCs: {', '.join(summary.nearby_npcs)}")
+
+        if summary.active_quests:
+            lines.append(f"Active Quests: {', '.join(summary.active_quests)}")
+
+        if summary.inventory_highlights:
+            lines.append(
+                f"Notable Items: {', '.join(summary.inventory_highlights)}"
+            )
 
         text = "\n".join(lines)
         return truncate_to_tokens(text, max_tokens)

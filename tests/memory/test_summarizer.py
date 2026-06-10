@@ -167,6 +167,23 @@ class TestSummarizer:
         text = summarizer.render(summaries, max_tokens=30)
         assert estimate_tokens(text) <= 30
 
+    def test_render_over_budget_keeps_most_recent(self, db_session: Session) -> None:
+        """Over budget, the OLDEST summaries are dropped, not the newest."""
+        summaries = [
+            CompressedSummary(
+                campaign_id="c1",
+                summary_text=f"Era {i}: " + "many things happened during this period " * 5,
+                start_interaction=i * 20 + 1, end_interaction=(i + 1) * 20,
+            )
+            for i in range(4)
+        ]
+        summarizer = Summarizer(db_session, _make_mock_client())
+        text = summarizer.render(summaries, max_tokens=80)
+        assert estimate_tokens(text) <= 80
+        assert "[SESSION HISTORY]" in text
+        assert "Era 3:" in text
+        assert "Era 0:" not in text
+
     def test_render_empty(self, db_session: Session) -> None:
         summarizer = Summarizer(db_session, _make_mock_client())
         assert summarizer.render([]) == ""

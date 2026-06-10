@@ -71,6 +71,27 @@ class TestSlidingWindow:
         text = sw.render(window, max_tokens=50)
         assert estimate_tokens(text) <= 50
 
+    def test_render_over_budget_keeps_most_recent(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        """When the window exceeds the budget, the OLDEST exchanges are
+        dropped — the freshest narrative continuity must survive."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        sw = SlidingWindow(db_session)
+        for i in range(1, 13):
+            sw.add_exchange(
+                sample_campaign.id, ExchangeRole.NARRATOR,
+                f"This is a longer narration for exchange number {i} with extra words.", i,
+            )
+        db_session.commit()
+        window = sw.get_window(sample_campaign.id)
+        text = sw.render(window, max_tokens=80)
+        assert estimate_tokens(text) <= 80
+        assert "[RECENT NARRATIVE]" in text
+        assert "exchange number 12" in text
+        assert "exchange number 1 " not in text
+
     def test_render_empty(self, db_session: Session, sample_campaign: Campaign) -> None:
         CampaignRepository(db_session).save(sample_campaign)
         db_session.commit()

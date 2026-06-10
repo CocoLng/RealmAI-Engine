@@ -18,7 +18,11 @@ from memory.semantic import SemanticMemory
 from memory.sliding_window import SlidingWindow
 from memory.state import StateBuilder
 from memory.summarizer import Summarizer
-from memory.token_utils import estimate_tokens, truncate_to_tokens
+from memory.token_utils import (
+    estimate_tokens,
+    truncate_lines_keep_recent,
+    truncate_to_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +151,7 @@ class ContextAssembler:
                 total -= layer_tokens
                 layers[i] = ""
             else:
-                layers[i] = truncate_to_tokens(layers[i], new_budget)
+                layers[i] = self._truncate_layer(i, layers[i], new_budget)
                 total = sum(estimate_tokens(ly) for ly in layers if ly)
 
         # Final clamp: ceil() rounding may leave 1-3 tokens over budget
@@ -157,10 +161,22 @@ class ContextAssembler:
                 if layers[i]:
                     overage = total - self._budget.total_max
                     new_budget = max(0, estimate_tokens(layers[i]) - overage)
-                    layers[i] = truncate_to_tokens(layers[i], new_budget)
+                    layers[i] = self._truncate_layer(i, layers[i], new_budget)
                     total = sum(estimate_tokens(ly) for ly in layers if ly)
                     if total <= self._budget.total_max:
                         break
 
         sections = [s for s in layers if s]
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _truncate_layer(index: int, text: str, max_tokens: int) -> str:
+        """Truncate one layer to its budget.
+
+        Chronological layers (1 = sliding window, 2 = summaries in the
+        ``layers`` list) keep their most RECENT lines; the RAG layer
+        keeps its top-ranked documents (relevance order, start of text).
+        """
+        if index in (1, 2):
+            return truncate_lines_keep_recent(text, max_tokens)
+        return truncate_to_tokens(text, max_tokens)
