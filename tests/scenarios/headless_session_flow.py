@@ -140,6 +140,14 @@ class HeadlessSessionFlow:
         )
         self._exit_stack.enter_context(sleep_patch)
 
+        # 3b. Lobby TTL watcher — its 2h sleep uses the same (now no-op)
+        #     asyncio.sleep, which would expire the lobby instantly in
+        #     headless runs. Wall-clock expiry is irrelevant here.
+        ttl_patch = patch.object(
+            SessionCog, "_expire_lobby_after", new_callable=AsyncMock,
+        )
+        self._exit_stack.enter_context(ttl_patch)
+
         # 4. StoryBibleLogger.write_header — no Markdown artifacts.
         sb_patch = patch(
             "bot.story_bible_logger.StoryBibleLogger.write_header",

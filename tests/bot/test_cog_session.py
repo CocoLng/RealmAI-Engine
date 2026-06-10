@@ -990,6 +990,93 @@ class TestLobbyLaunchReentrance:
 
 
 # ---------------------------------------------------------------------------
+# Lobby TTL (low — abandoned lobbies never expired)
+# ---------------------------------------------------------------------------
+
+
+class TestLobbyTTL:
+    """Abandoned lobbies must expire instead of leaking forever."""
+
+    @pytest.mark.asyncio
+    async def test_abandoned_lobby_expires(self, cog: SessionCog) -> None:
+        channel = AsyncMock()
+        channel.id = 555
+        lobby = MagicMock()
+        lobby.pregen_task = None
+        lobby.lobby_message = AsyncMock()
+        view = MagicMock()
+        cog.bot.lobbies[channel.id] = lobby
+
+        await cog._expire_lobby_after(channel, lobby, view, delay=0)
+
+        assert channel.id not in cog.bot.lobbies
+        view.stop.assert_called_once()
+        channel.send.assert_awaited_once()
+        assert "expiré" in channel.send.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_launched_lobby_is_left_alone(self, cog: SessionCog) -> None:
+        """A lobby that already launched (popped from the registry) is a no-op."""
+        channel = AsyncMock()
+        channel.id = 556
+        lobby = MagicMock()
+        view = MagicMock()
+        # Registry no longer holds THIS lobby.
+        cog.bot.lobbies.pop(channel.id, None)
+
+        await cog._expire_lobby_after(channel, lobby, view, delay=0)
+
+        view.stop.assert_not_called()
+        channel.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_expiry_cancels_running_pregen(self, cog: SessionCog) -> None:
+        import asyncio
+
+        channel = AsyncMock()
+        channel.id = 557
+        lobby = MagicMock()
+        lobby.lobby_message = None
+        lobby.pregen_task = asyncio.create_task(asyncio.sleep(3600))
+        view = MagicMock()
+        cog.bot.lobbies[channel.id] = lobby
+
+        await cog._expire_lobby_after(channel, lobby, view, delay=0)
+        await asyncio.sleep(0)  # let the cancellation propagate
+
+        assert lobby.pregen_task.cancelled()
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_session_channel")
+    async def test_start_campaign_schedules_ttl(
+        self,
+        mock_create_channel: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        channel = AsyncMock()
+        channel.id = 999_002
+        channel.name = "aventure"
+        channel.mention = "#aventure"
+        channel.send = AsyncMock(return_value=AsyncMock())
+        mock_create_channel.return_value = channel
+
+        with patch.object(
+            SessionCog, "_pregenerate_campaign_world", new=AsyncMock(),
+        ):
+            await cog.start_campaign.callback(  # type: ignore[call-arg, arg-type]
+                cog, interaction, "Theme sombre",
+            )
+
+        try:
+            assert channel.id in cog._lobby_ttl_tasks
+        finally:
+            for task in cog._lobby_ttl_tasks.values():
+                task.cancel()
+
+
+# ---------------------------------------------------------------------------
 # Round-trip integration tests (real in-memory SQLite, no mocks)
 # ---------------------------------------------------------------------------
 

@@ -42,6 +42,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Abandoned lobbies (host never clicked Démarrer) are expired after this
+# delay so they stop leaking registry entries, views, and pregen results.
+_LOBBY_TTL_SECONDS = 2 * 60 * 60
+
 
 class _CampaignChannelArcStore:
     """Adapts CampaignChannelRepository to the ArcTrackerStore Protocol.
@@ -115,6 +119,56 @@ class SessionCog(commands.Cog):
 
     def __init__(self, bot: RealmBot) -> None:
         self.bot = bot
+        self._lobby_ttl_tasks: dict[int, asyncio.Task[None]] = {}
+
+    # ------------------------------------------------------------------
+    # Lobby TTL
+    # ------------------------------------------------------------------
+
+    def _cancel_lobby_ttl(self, channel_id: int) -> None:
+        """Cancel the expiry watcher when the lobby launches or aborts."""
+        task = self._lobby_ttl_tasks.pop(channel_id, None)
+        if task is not None:
+            task.cancel()
+
+    async def _expire_lobby_after(
+        self,
+        channel: Any,
+        lobby: LobbyState,
+        lobby_view: LobbyView,
+        delay: float,
+    ) -> None:
+        """Expire an abandoned lobby after ``delay`` seconds.
+
+        No-ops if the registry no longer holds THIS lobby (it launched or
+        was replaced). Otherwise frees the registry entry, cancels a
+        still-running pregen, stops the view, strips the buttons from the
+        lobby message, and tells the channel.
+        """
+        await asyncio.sleep(delay)
+        if self.bot.lobbies.get(channel.id) is not lobby:
+            return
+        self.bot.lobbies.pop(channel.id, None)
+        self._lobby_ttl_tasks.pop(channel.id, None)
+        if lobby.pregen_task is not None and not lobby.pregen_task.done():
+            lobby.pregen_task.cancel()
+        lobby_view.stop()
+        if lobby.lobby_message is not None:
+            try:
+                await lobby.lobby_message.edit(view=None)
+            except Exception:
+                logger.debug("lobby TTL: message edit failed", exc_info=True)
+        try:
+            await channel.send(
+                "⌛ **Lobby expiré** — relance `/start_campaign` pour "
+                "préparer une nouvelle aventure.",
+            )
+        except Exception:
+            logger.warning("lobby TTL: expiry notice send failed")
+        logger.info(
+            "SESSION lobby_expired channel=%s campaign=%r",
+            channel.id, lobby.campaign_name,
+        )
 
     # ------------------------------------------------------------------
     # /start_campaign
@@ -493,6 +547,12 @@ class SessionCog(commands.Cog):
             name=f"pregen-{campaign.id}",
         )
 
+        # Expiry watcher — an abandoned lobby must not leak forever.
+        self._lobby_ttl_tasks[channel.id] = asyncio.create_task(
+            self._expire_lobby_after(channel, lobby, lobby_view, _LOBBY_TTL_SECONDS),
+            name=f"lobby-ttl-{campaign.id}",
+        )
+
         logger.info(
             "SESSION lobby_open campaign=%s theme=%r host=%s guild=%s channel=%s invited=%d pregen=started",
             campaign.id, theme, creator_id, guild.name, channel.name,
@@ -816,6 +876,7 @@ class SessionCog(commands.Cog):
                 "Relance `/start_campaign` une fois le souci résolu.",
             )
             self.bot.lobbies.pop(channel.id, None)
+            self._cancel_lobby_ttl(channel.id)
             lobby_view.stop()
             return
 
@@ -887,6 +948,7 @@ class SessionCog(commands.Cog):
         # Move the lobby state to active sessions
         self.bot.sessions[channel.id] = session
         self.bot.lobbies.pop(channel.id, None)
+        self._cancel_lobby_ttl(channel.id)
         lobby_view.stop()
 
         # Purge onboarding noise so the campaign opens on a clean canvas
