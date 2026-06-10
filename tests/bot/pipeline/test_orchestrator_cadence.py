@@ -344,3 +344,93 @@ class TestDirectorNoteInvalidationM11:
         await runner.process("je vais à la crypte")
 
         assert cached_note_for(campaign_id) is None
+
+
+# ---------------------------------------------------------------------------
+# H16 — orchestrator persists objective completions across turns
+# ---------------------------------------------------------------------------
+
+
+class TestObjectivePersistenceH16:
+    async def test_m_of_n_beat_completes_across_two_actions(self) -> None:
+        """SEARCH on turn 1, EXAMINE on turn 2 — the orchestrator must write
+        the turn-1 completion back into the beat so turn 2 reaches the
+        M_OF_N threshold (the audit's insatisfiable-beat soft-lock)."""
+        from world.story_arc import AdvanceRule
+
+        campaign_id = "camp-h16-mofn"
+        get_drift_tracker().reset(campaign_id)
+
+        loc = Location(
+            name="Crypte", description="Une crypte sombre.",
+            items_available=["autel", "gravures"],
+        )
+        beat = StoryBeat(
+            beat_number=1, title="Le Rituel", description="...",
+            location_hint="Crypte", encounter_type="puzzle",
+            objectives=[
+                BeatObjective(
+                    id="search_altar", kind=ObjectiveKind.SEARCH,
+                    target="autel", description="Fouiller l'autel",
+                ),
+                BeatObjective(
+                    id="examine_runes", kind=ObjectiveKind.EXAMINE,
+                    target="gravures", description="Examiner les gravures",
+                ),
+            ],
+            advance_rule=AdvanceRule.M_OF_N, advance_threshold=2,
+        )
+        arc = StoryArc(
+            campaign_id=campaign_id,
+            theme="dungeon",
+            premise="A dungeon adventure with many challenges ahead.",
+            beats=[
+                beat,
+                *[
+                    StoryBeat(
+                        beat_number=i + 2, title=f"Beat {i + 2}",
+                        description=f"Desc {i + 2}",
+                        location_hint=f"Area {i + 2}",
+                        encounter_type="exploration",
+                    )
+                    for i in range(9)
+                ],
+            ],
+            villain_name="X",
+            villain_motivation="Y.",
+        )
+        session = _make_session(campaign_turn_count=1)
+        session.story_arc = arc
+        session.current_location = loc
+
+        def _runner(action: InterpretedAction) -> PipelineRunner:
+            return PipelineRunner(
+                interpreter=_StubInterpreter(response=action),  # type: ignore[arg-type]
+                narrator=_StubNarrator(),  # type: ignore[arg-type]
+                location=loc,
+                npcs={},
+                actor_name="Hero",
+                campaign_id=campaign_id,
+                session=session,
+            )
+
+        search = InterpretedAction(
+            action_type=ActionType.SEARCH, actor_name="Hero",
+            target_name="autel", raw_input="je fouille l'autel",
+            confidence=0.95,
+        )
+        r1 = await _runner(search).process("je fouille l'autel")
+        assert getattr(r1, "new_beat", None) is None  # threshold not reached
+        # Turn-1 completion written back into the beat (in-memory arc).
+        assert "search_altar" in arc.beats[0].objectives_completed
+
+        session.campaign.interaction_count = 2
+        examine = InterpretedAction(
+            action_type=ActionType.LOOK, actor_name="Hero",
+            target_name="gravures", raw_input="j'examine les gravures",
+            confidence=0.95,
+        )
+        r2 = await _runner(examine).process("j'examine les gravures")
+        assert getattr(r2, "new_beat", None) is not None, (
+            "second objective completion must reach the M_OF_N threshold"
+        )

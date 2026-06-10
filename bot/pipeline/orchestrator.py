@@ -503,9 +503,15 @@ class PipelineRunner:
             if event_text:
                 record_combat_event(self.combat_state, event_text)
 
+        # The turn counter lives on the Campaign model (incremented by
+        # StoryBibleLogger), NOT on GameSession.
+        _campaign = getattr(self.session, "campaign", None)
+        interaction_count = getattr(_campaign, "interaction_count", 0) or 0
+
         # ----- Beat progression — single decision point -----
         new_beat: StoryBeat | None = None
         beat_completed = False
+        objectives_dirty = False
         engine_decision: DriftDecision = "STAY"
         beat_progress_snapshot: Any = None  # BeatProgress | None
         if self.session is not None and getattr(self.session, "story_arc", None) is not None:
@@ -534,6 +540,7 @@ class PipelineRunner:
                 history=BeatHistory(),
                 world_flags=world_flags,
                 inventory=inventory_items,
+                turn_number=interaction_count,
             )
 
             engine_decision = beat_eval.decision
@@ -584,6 +591,21 @@ class PipelineRunner:
                 )
             except Exception:
                 logger.debug("log_decision failed campaign=%s", self.campaign_id, exc_info=True)
+
+            # H16 — when the beat stays put, record this turn's completions
+            # on the beat itself so the engine merges them back on later
+            # turns (multi-action beats accumulate instead of resetting).
+            if not should_advance:
+                _beat_model = arc.beats[arc.current_beat_index]
+                _newly_done = {
+                    oid: st.completed_at_turn
+                    for oid, st in beat_eval.progress.objective_states.items()
+                    if st.status == "completed"
+                    and oid not in _beat_model.objectives_completed
+                }
+                if _newly_done:
+                    _beat_model.objectives_completed.update(_newly_done)
+                    objectives_dirty = True
 
             if should_advance:
                 beat_completed = True
@@ -670,11 +692,6 @@ class PipelineRunner:
         combat_just_ended = self._last_combat_active and not combat_active_now
         self._last_combat_active = combat_active_now
 
-        # The turn counter lives on the Campaign model (incremented by
-        # StoryBibleLogger), NOT on GameSession.
-        _campaign = getattr(self.session, "campaign", None)
-        interaction_count = getattr(_campaign, "interaction_count", 0) or 0
-
         if should_run_director(
             interaction_count=interaction_count,
             combat_just_ended=combat_just_ended,
@@ -687,8 +704,13 @@ class PipelineRunner:
                 beat_progress=beat_progress_snapshot,
             )
 
-        # Persist the arc if it advanced.
-        if beat_completed and self.db_factory is not None and self.session is not None:
+        # Persist the arc if it advanced OR if objective completions were
+        # recorded on the current beat (H16).
+        if (
+            (beat_completed or objectives_dirty)
+            and self.db_factory is not None
+            and self.session is not None
+        ):
             session_arc = self.session.story_arc
             try:
                 await asyncio.to_thread(

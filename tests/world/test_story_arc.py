@@ -248,3 +248,20 @@ class TestAdvanceBeat:
         result1 = advance_beat(arc)
         result2 = advance_beat(result1)
         assert result1.current_beat_index == result2.current_beat_index
+
+
+class TestObjectivesCompletedH16:
+    """H16 — per-beat persistent objective completions, serialized in
+    arc_json (no DB schema change)."""
+
+    def test_defaults_to_empty_dict(self) -> None:
+        beat = _make_beat()
+        assert beat.objectives_completed == {}
+
+    def test_round_trips_through_json(self, sample_arc: StoryArc) -> None:
+        sample_arc.beats[0].objectives_completed = {"search_altar": 4, "old": None}
+        restored = StoryArc.model_validate_json(sample_arc.model_dump_json())
+        assert restored.beats[0].objectives_completed == {
+            "search_altar": 4, "old": None,
+        }
+        assert restored.beats[1].objectives_completed == {}
