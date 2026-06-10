@@ -8,6 +8,32 @@ from db.models import LocationRow
 from world.location import Location
 
 
+def _copy_fields_to_row(row: LocationRow, location: Location) -> None:
+    """Copy every mutable Location field onto an existing row.
+
+    Single source of truth for the update/upsert write set — the two
+    methods used to duplicate this block, and combat_triggers/npc_roles
+    silently fell out of both (H6: ambushes and NPC roles were lost on
+    the first save/reload).
+    """
+    row.description = location.description
+    row.arrival_hook = location.arrival_hook
+    row.connections = location.connections  # type: ignore[assignment]
+    row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
+    row.npcs_present = location.npcs_present  # type: ignore[assignment]
+    row.items_available = location.items_available  # type: ignore[assignment]
+    row.item_descriptions = location.item_descriptions  # type: ignore[assignment]
+    row.state_flags = location.state_flags  # type: ignore[assignment]
+    row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
+    row.generated = location.generated
+    row.combat_zones = [z.model_dump() for z in location.combat_zones]  # type: ignore[assignment]
+    row.combat_triggers = {  # type: ignore[assignment]
+        key: trigger.model_dump()
+        for key, trigger in location.combat_triggers.items()
+    }
+    row.npc_roles = dict(location.npc_roles)  # type: ignore[assignment]
+
+
 class LocationRepository:
     """Persistence operations for Location entities."""
 
@@ -46,17 +72,7 @@ class LocationRepository:
         if row is None:
             msg = f"Location '{location.name}' not found in campaign '{campaign_id}'"
             raise ValueError(msg)
-        row.description = location.description
-        row.arrival_hook = location.arrival_hook
-        row.connections = location.connections  # type: ignore[assignment]
-        row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
-        row.npcs_present = location.npcs_present  # type: ignore[assignment]
-        row.items_available = location.items_available  # type: ignore[assignment]
-        row.item_descriptions = location.item_descriptions  # type: ignore[assignment]
-        row.state_flags = location.state_flags  # type: ignore[assignment]
-        row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
-        row.generated = location.generated
-        row.combat_zones = [z.model_dump() for z in location.combat_zones]  # type: ignore[assignment]
+        _copy_fields_to_row(row, location)
 
     def upsert(self, location: Location, campaign_id: str) -> None:
         """Insert the location, or update it in place if a row with the same
@@ -74,18 +90,7 @@ class LocationRepository:
         if row is None:
             self._session.add(location_to_db(location, campaign_id))
             return
-        # Row exists — update fields in place.
-        row.description = location.description
-        row.arrival_hook = location.arrival_hook
-        row.connections = location.connections  # type: ignore[assignment]
-        row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
-        row.npcs_present = location.npcs_present  # type: ignore[assignment]
-        row.items_available = location.items_available  # type: ignore[assignment]
-        row.item_descriptions = location.item_descriptions  # type: ignore[assignment]
-        row.state_flags = location.state_flags  # type: ignore[assignment]
-        row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
-        row.generated = location.generated
-        row.combat_zones = [z.model_dump() for z in location.combat_zones]  # type: ignore[assignment]
+        _copy_fields_to_row(row, location)
 
     def delete(self, name: str, campaign_id: str) -> None:
         """Delete a location by name within a campaign."""
