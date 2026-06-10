@@ -6,6 +6,11 @@ from pathlib import Path
 from ai.client import OllamaClient
 from ai.language import language_instruction
 from ai.models import NPCResponse
+from ai.prompt_safety import (
+    PLAYER_DATA_INSTRUCTION,
+    delimited_player_block,
+    sanitize_player_text,
+)
 from world.npc import NPC
 
 logger = logging.getLogger(__name__)
@@ -21,6 +26,9 @@ class NPCAgent:
     """
 
     MODEL = "qwen3.5:4b"
+
+    NUM_PREDICT = 512
+    """Generation cap — 1-3 sentences of dialogue plus reveal list (M7)."""
 
     def __init__(self, client: OllamaClient) -> None:
         self._client = client
@@ -45,13 +53,24 @@ class NPCAgent:
             The caller must apply disposition_change to the NPC object.
         """
         user_content = self._build_user_message(npc, player_input, context_prompt)
-        system_prompt = language_instruction(language) + _SYSTEM_PROMPT
+        # The NPC sheet — secrets included — lives in the SYSTEM message,
+        # never in the same message as player-controlled text (M6).
+        system_prompt = (
+            language_instruction(language)
+            + _SYSTEM_PROMPT
+            + "\n\n"
+            + PLAYER_DATA_INSTRUCTION
+            + "\n\n## Your Character\n"
+            + self._build_npc_sheet(npc)
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.7)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.7, num_predict=self.NUM_PREDICT,
+        )
         response = NPCResponse(
             dialogue=str(data.get("dialogue", "")),
             disposition_change=int(data.get("disposition_change", 0)),
@@ -64,10 +83,9 @@ class NPCAgent:
         )
         return response
 
-    def _build_user_message(
-        self, npc: NPC, player_input: str, context_prompt: str,
-    ) -> str:
-        """Build the user message with NPC sheet, history, and player input."""
+    @staticmethod
+    def _build_npc_sheet(npc: NPC) -> str:
+        """Format the NPC sheet (personality, secrets, knowledge)."""
         npc_sheet_lines = [
             f"Character: {npc.name}",
             f"Race: {npc.race.value}",
@@ -86,14 +104,18 @@ class NPCAgent:
             npc_sheet_lines.append("Knowledge (share if asked appropriately):")
             for fact in npc.knowledge:
                 npc_sheet_lines.append(f"  - {fact}")
-        npc_sheet = "\n".join(npc_sheet_lines)
+        return "\n".join(npc_sheet_lines)
 
-        sections = [context_prompt, f"## Your Character\n{npc_sheet}"]
+    def _build_user_message(
+        self, npc: NPC, player_input: str, context_prompt: str,
+    ) -> str:
+        """Build the user message with context, history, and player input."""
+        sections = [context_prompt]
 
         if npc.dialogue_history:
             history_lines = ["## Conversation so far"]
             for ex in npc.dialogue_history[-5:]:
-                history_lines.append(f"Player: {ex.player_said}")
+                history_lines.append(f"Player: {sanitize_player_text(ex.player_said)}")
                 history_lines.append(f"You: {ex.npc_said}")
             already_revealed = [
                 r for ex in npc.dialogue_history for r in ex.revealed
@@ -105,5 +127,5 @@ class NPCAgent:
                     history_lines.append(f"  - {r}")
             sections.append("\n".join(history_lines))
 
-        sections.append(f"## Player says\n{player_input}")
+        sections.append(f"## Player says\n{delimited_player_block(player_input)}")
         return "\n\n".join(s for s in sections if s.strip())

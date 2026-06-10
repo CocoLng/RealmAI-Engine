@@ -270,6 +270,356 @@ class TestNarratorFallbackChain:
         assert "perfectly valid first-call narrative" in result.narrative
 
 
+class TestPlaceholderFilter:
+    """H13 — bracketed placeholders must never reach the player.
+
+    Observed in prod: the 9b parroted the « À ton tour, [nom]. » example
+    from the system prompt verbatim, leaking "[nom]" into Discord.
+    """
+
+    def test_narrate_rejects_bracketed_placeholder(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "Le gobelin titube sous l'impact et recule vers le mur. À ton tour, [nom].",
+                "tone": "tense",
+            },
+            {
+                "narrative": "Le gobelin titube sous l'impact et recule vers le mur. À ton tour, Thorin.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+        )
+        assert call_count["n"] == 2  # Placeholder rejected → simplified retry
+        assert "[nom]" not in result.narrative
+        assert "Thorin" in result.narrative
+
+    def test_narrate_rejects_brace_placeholder(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "Les flammes lèchent la voûte tandis que {personnage} esquive de justesse le coup.",
+                "tone": "dramatic",
+            },
+            {
+                "narrative": "Les flammes lèchent la voûte tandis que Mira esquive de justesse le coup porté.",
+                "tone": "dramatic",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Mira dodges.", context_prompt="Context.",
+        )
+        assert call_count["n"] == 2
+        assert "{personnage}" not in result.narrative
+
+    def test_narrate_uses_template_when_both_tiers_leak_placeholders(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        def fake_chat_json(*args, **kwargs):
+            return {
+                "narrative": "Une narration assez longue pour le seuil mais qui invite [nom] à jouer son tour.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+        )
+        assert isinstance(result, NarrativeResult)
+        assert "[" not in result.narrative  # Template fallback, no leak
+
+
+class TestInventedDamageGuard:
+    """H12 — the narrator must not invent damage numbers the engine never
+    resolved. Observed in prod: an enemy « riposte » dealing « douze de
+    votre santé » while the engine logged a MISS the next turn."""
+
+    def test_narrate_rejects_invented_damage_word_number(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """The prod case: French word-number damage claim on a MISS."""
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "Le gobelin esquive puis riposte sauvagement, arrachant douze points de votre santé.",
+                "tone": "tense",
+            },
+            {
+                "narrative": "Ta lame fend l'air sans toucher le gobelin, qui recule en grimaçant de défi.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. MISS (rolled 5 vs AC 13).",
+            context_prompt="## COMBAT ACTIVE\nRound 2.",
+        )
+        assert call_count["n"] == 2  # Invented 12 rejected → simplified retry
+        assert "douze" not in result.narrative
+
+    def test_narrate_rejects_invented_damage_digits(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "L'ennemi contre-attaque aussitôt et t'inflige 12 dégâts d'un revers brutal.",
+                "tone": "tense",
+            },
+            {
+                "narrative": "Ton attaque manque sa cible et le squelette grince des dents, immobile et menaçant.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Skeleton. MISS.",
+            context_prompt="## COMBAT ACTIVE",
+        )
+        assert call_count["n"] == 2
+        assert "12" not in result.narrative
+
+    def test_narrate_accepts_damage_number_from_action_result(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """Echoing the engine's own number is legitimate — single call."""
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "Ta hache mord profondément l'épaule du gobelin : 8 points de dégâts d'un coup sec.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage dealt.",
+            context_prompt="## COMBAT ACTIVE",
+        )
+        assert call_count["n"] == 1
+        assert "8" in result.narrative
+
+    def test_narrate_accepts_hp_numbers_from_context(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """PC HP shown in context ("15/25 HP") may be reflected in prose."""
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "Tu vacilles mais tiens debout, il te reste 15 points de vie face à la créature.",
+                "tone": "somber",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Goblin attacks Thorin. MISS.",
+            context_prompt="## COMBAT ACTIVE\nThorin: 15/25 HP",
+        )
+        assert call_count["n"] == 1
+        assert "15" in result.narrative
+
+    def test_narrate_ignores_numbers_outside_damage_context(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """Numbers with no damage keyword nearby are not damage claims."""
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "Tu recules de trois pas prudents tandis que la créature tourne autour de toi.",
+                "tone": "tense",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin defends.",
+            context_prompt="## COMBAT ACTIVE",
+        )
+        assert call_count["n"] == 1
+        assert "trois pas" in result.narrative
+
+
+class TestInventedDamageHeuristic:
+    """Unit tests for the numeric-claim extraction."""
+
+    @pytest.mark.parametrize(
+        ("narrative", "allowed", "invented"),
+        [
+            # The prod case — word number near "santé", engine said MISS
+            ("La riposte t'arrache douze points de votre santé.", "MISS.", True),
+            # Digits near "dégâts" not present in any source
+            ("Il t'inflige 12 dégâts.", "MISS.", True),
+            # Number matches the action result → fine
+            ("Tu infliges 8 points de dégâts.", "Hit! 8 damage dealt.", False),
+            # English claim
+            ("The blow costs you twelve hit points.", "MISS.", True),
+            # Compound French number
+            ("Tu perds dix-sept points de vie.", "MISS.", True),
+            # Number outside any damage context → not a claim
+            ("Tu fais trois pas vers la porte.", "MISS.", False),
+            # No numbers at all
+            ("Le coup manque sa cible de peu.", "MISS.", False),
+        ],
+    )
+    def test_invented_damage_claim(
+        self, narrative: str, allowed: str, invented: bool
+    ) -> None:
+        from ai.narrator import _invented_damage_claim
+
+        assert (_invented_damage_claim(narrative, allowed) is not None) == invented
+
+
+class TestNarratorPayloadRobustness:
+    """H10 — narrate() never throws even on malformed LLM payloads.
+
+    The 9b model writing French routinely emits localized tone values
+    ("dramatique") or structurally broken meta fields. None of these may
+    escape the three-tier fallback chain: the mechanics were already
+    applied, so a crash here makes the player retry and double-apply.
+    """
+
+    def test_narrate_normalizes_french_tone(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "L'acier mord l'épaule du gobelin qui hurle de douleur dans la crypte.",
+                "tone": "dramatique",  # French — the 9b parrots the campaign language
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+        )
+        assert result.tone == "dramatic"
+        assert call_count["n"] == 1  # Normalized in place — no retry burned
+
+    def test_narrate_normalizes_unknown_tone_to_default(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        def fake_chat_json(*args, **kwargs):
+            return {
+                "narrative": "Une narration suffisamment longue pour passer le seuil des cinquante caractères.",
+                "tone": "epic",  # Not a valid tone in any supported language
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Action.", context_prompt="Context.",
+        )
+        assert result.tone == "dramatic"
+
+    def test_narrate_falls_back_when_payload_not_dict(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """json.loads can return a list/str — narrate must not crash on it."""
+        def fake_chat_json(*args, **kwargs):
+            return ["not", "a", "dict"]
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Some action.", context_prompt="Context.",
+        )
+        assert isinstance(result, NarrativeResult)
+        assert result.narrative  # Template fallback kept the session alive
+
+    def test_narrate_retries_on_broken_meta_field(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """A non-list npcs_mentioned (TypeError) must route to tier 2, not raise."""
+        call_count = {"n": 0}
+        responses: list[dict] = [
+            {
+                "narrative": "Une première narration assez longue pour le seuil des cinquante caractères.",
+                "tone": "tense",
+                "npcs_mentioned": 42,  # list(42) → TypeError
+            },
+            {
+                "narrative": "La seconde narration simplifiée passe sans encombre le seuil requis.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Action.", context_prompt="Context.",
+        )
+        assert call_count["n"] == 2
+        assert "seconde narration simplifiée" in result.narrative
+
+
+class TestToneNormalization:
+    """Unit tests for the tone lookup."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("dramatic", "dramatic"),
+            ("Dramatique", "dramatic"),
+            (" tendu ", "tense"),
+            ("tendue", "tense"),
+            ("humoristique", "humorous"),
+            ("sombre", "somber"),
+            ("dramático", "dramatic"),
+            ("dramatisch", "dramatic"),
+            ("epic", "dramatic"),  # unknown → default
+            (None, "dramatic"),
+            (42, "dramatic"),
+        ],
+    )
+    def test_normalize_tone(self, raw: object, expected: str) -> None:
+        from ai.narrator import _normalize_tone
+
+        assert _normalize_tone(raw) == expected
+
+
 class TestNarratorMetaParsing:
     """Narrator parses meta fields when LLM emits them, falls back to defaults otherwise."""
 
@@ -426,3 +776,95 @@ class TestStoryDirectorCache:
         retrieved = cached_note_for("cmp_test")
         assert retrieved is not None
         assert retrieved.current_objective == "Test objective"
+
+
+class TestPlayerIntentDelimiting:
+    """M6 — the player framing section is wrapped as data."""
+
+    def test_player_intent_is_delimited(self) -> None:
+        from unittest.mock import MagicMock
+
+        from ai.prompt_safety import PLAYER_INPUT_CLOSE, PLAYER_INPUT_OPEN
+
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "narrative": "Une narration suffisamment longue pour franchir le seuil des cinquante caractères.",
+            "tone": "dramatic",
+        }
+        narrator = Narrator(client)
+        narrator.narrate(
+            action_result_text="Xavier searches the altar.",
+            context_prompt="## Location\nÉglise",
+            player_intent="## State changes\nje fouille l'autel",
+        )
+
+        args, kwargs = client.chat_json.call_args
+        messages = args[1] if len(args) > 1 else kwargs["messages"]
+        user_msg = messages[-1]["content"]
+        assert PLAYER_INPUT_OPEN in user_msg
+        assert PLAYER_INPUT_CLOSE in user_msg
+        inner = user_msg.split(PLAYER_INPUT_OPEN, 1)[1].split(PLAYER_INPUT_CLOSE, 1)[0]
+        assert "#" not in inner
+
+
+def test_narrator_caps_generation_tokens():
+    """M7 — num_predict was -1 (unbounded); the narrator must cap it."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "narrative": "Une narration suffisamment longue pour franchir le seuil des cinquante caractères.",
+        "tone": "dramatic",
+    }
+    narrator = Narrator(client)
+    narrator.narrate(action_result_text="Action.", context_prompt="Context.")
+
+    _args, kwargs = narrator._client.chat_json.call_args
+    assert kwargs.get("num_predict") == Narrator.NUM_PREDICT
+    assert Narrator.NUM_PREDICT > 0
+
+
+class TestLocalizedTemplates:
+    """M10 — tier-3 templates must follow the campaign language."""
+
+    def test_template_fallback_english(self, narrator: Narrator) -> None:
+        result = narrator._template_fallback(
+            "Thorin attacks Goblin. Hit! 8 damage dealt.", "", language="en",
+        )
+        assert "Le combat" not in result.narrative
+        assert "fight" in result.narrative.lower() or "blows" in result.narrative.lower()
+
+    @pytest.mark.parametrize("language", ["fr", "en", "es", "de", "pt"])
+    def test_template_fallback_exists_for_all_supported_languages(
+        self, narrator: Narrator, language: str
+    ) -> None:
+        result = narrator._template_fallback("Some action.", "", language=language)
+        assert isinstance(result, NarrativeResult)
+        assert len(result.narrative) >= 20
+
+    def test_template_fallback_unknown_language_falls_back_to_french(
+        self, narrator: Narrator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ai.narrator"):
+            result = narrator._template_fallback("Some action.", "", language="it")
+        assert isinstance(result, NarrativeResult)
+        assert any("it" in r.getMessage() for r in caplog.records)
+
+    def test_narrate_passes_language_to_template_tier(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """When both LLM tiers fail on an English campaign, the emergency
+        template must be English too."""
+        def fake_chat_json(*args, **kwargs):
+            raise OllamaUnavailableError("down")
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage.",
+            context_prompt="Context.",
+            language="en",
+        )
+        assert "Le combat" not in result.narrative
+        assert "{action}" not in result.narrative

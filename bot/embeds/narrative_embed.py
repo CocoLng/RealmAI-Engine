@@ -28,6 +28,25 @@ _TONE_COLORS: dict[str, int] = {
 
 _DEFAULT_COLOR = 0xDAA520
 
+_MAX_DESCRIPTION_CHARS = 4096  # Discord hard limit for embed descriptions
+
+_DIALOGUE_WRAP_CHARS = 6  # «*« » and « »* » around the dialogue field value
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Cap ``text`` at ``limit`` chars with a clean ellipsis.
+
+    Cuts at the last word boundary when one exists in the second half of
+    the window, so the player never sees a half-word before the ellipsis.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip() + "…"
+
 
 def build_narrative_embed(
     narrative: str,
@@ -59,16 +78,17 @@ def build_narrative_embed(
     color = _TONE_COLORS.get(tone, _DEFAULT_COLOR)
 
     embed = discord.Embed(
-        description=narrative,
+        description=_truncate(narrative, _MAX_DESCRIPTION_CHARS),
         color=color,
     )
 
     # NPC dialogue: author header + dedicated field for spoken words.
     if npc_name and npc_dialogue:
         embed.set_author(name=f"\U0001f5e3\ufe0f {npc_name}")
+        dialogue = _truncate(npc_dialogue, _MAX_FIELD_CHARS - _DIALOGUE_WRAP_CHARS)
         embed.add_field(
             name=f"\u00ab {npc_name} \u00bb",
-            value=f"*\u00ab {npc_dialogue} \u00bb*",
+            value=f"*\u00ab {dialogue} \u00bb*",
             inline=False,
         )
 

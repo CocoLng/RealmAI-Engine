@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 _THINKING_TOKEN_CAP = 4096
 """Default ``num_predict`` cap when thinking mode is enabled."""
 
+_DEFAULT_KEEP_ALIVE = "10m"
+
+_KEEP_ALIVE_BY_MODEL: dict[str, str] = {
+    # The 4b interpreter reloads in seconds — evict it quickly so it never
+    # sits resident alongside the 9b narrator (18 GB budget, M8).
+    "qwen3.5:4b": "2m",
+    "qwen3.5:9b": "10m",
+}
+"""How long Ollama keeps each model loaded after a request."""
+
 
 class OllamaUnavailableError(Exception):
     """Raised when the Ollama server is unreachable."""
@@ -80,6 +90,7 @@ class OllamaClient:
         num_predict: int = -1,
         num_ctx: int = 16384,
         thinking_budget: int | None = None,
+        keep_alive: str | None = None,
     ) -> dict[str, Any]:
         """Call the model in JSON mode and return the parsed response dict.
 
@@ -101,6 +112,12 @@ class OllamaClient:
                 Only used when ``think=True`` and ``num_predict`` is not
                 explicitly set.  Allows callers to control thinking budget
                 without touching the global default.
+            keep_alive: Per-call override for how long Ollama keeps the
+                model resident after the request.  Defaults to a per-model
+                policy (``_KEEP_ALIVE_BY_MODEL``): short for the 4b so it
+                does not stay loaded alongside the 9b — the documented
+                budget is 18 GB and the models must not be resident
+                simultaneously (M8).
 
         Returns:
             Parsed JSON dict from the model response.
@@ -124,7 +141,9 @@ class OllamaClient:
             "format": "json",
             "think": think,
             "stream": False,
-            "keep_alive": "10m",
+            "keep_alive": keep_alive
+            if keep_alive is not None
+            else _KEEP_ALIVE_BY_MODEL.get(model, _DEFAULT_KEEP_ALIVE),
             "options": {
                 "temperature": temperature,
                 "num_predict": effective_num_predict,

@@ -160,3 +160,21 @@
   forgets the threshold, defaulting to `ceil(N/2)` keeps the beat playable
   without inventing additional knobs. Recipe-driven defaults handle the
   rest.
+## 2026-06-10 — Chantiers parallèles : isolement worktree AVANT le premier edit
+
+- **Plusieurs agents partagent le même checkout — le working tree n'appartient
+  à personne.** Pendant le chantier E (génération), un chantier parallèle a
+  switché la branche du checkout partagé en plein travail : des éditions non
+  commitées ont été balayées puis embarquées PAR ERREUR dans le commit d'un
+  autre chantier (7a7d26d sur feat/memory-coherence). Créer le worktree
+  (EnterWorktree / git worktree add) AVANT le premier edit, pas après le
+  premier incident.
+- **Après un changement de worktree, les chemins absolus mémorisés sont du
+  poison.** Un Edit pointant l'ancien chemin absolu a modifié le checkout
+  partagé pendant que pytest tournait dans le worktree — faux vert garanti
+  (la suite testait l'ancien fichier). Après toute entrée en worktree :
+  re-dériver tous les chemins, et vérifier `pwd` + `git branch --show-current`
+  avant chaque commit.
+- **`git stash` dans un checkout partagé embarque le travail des autres.**
+  Toujours lire `git status` avant un stash/reset ; ne jamais stasher « tout »
+  quand on n'est pas seul propriétaire du tree.

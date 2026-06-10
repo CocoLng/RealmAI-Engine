@@ -1,15 +1,147 @@
 """Narrator — converts mechanical action results into immersive narrative."""
 
 import logging
+import re
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from ai.client import LLMParseError, OllamaClient, OllamaUnavailableError
 from ai.language import language_instruction
-from ai.models import DirectorNote, NarrativeResult
+from ai.models import DirectorNote, NarrativeResult, Tone
+from ai.prompt_safety import PLAYER_DATA_INSTRUCTION, delimited_player_block
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system_narrator.txt").read_text()
+
+_DEFAULT_TONE: Tone = "dramatic"
+
+_TONE_ALIASES: dict[str, Tone] = {
+    # Canonical values
+    "dramatic": "dramatic",
+    "tense": "tense",
+    "humorous": "humorous",
+    "somber": "somber",
+    # French — the 9b writing French routinely localizes the enum
+    "dramatique": "dramatic",
+    "tendu": "tense",
+    "tendue": "tense",
+    "humoristique": "humorous",
+    "drôle": "humorous",
+    "sombre": "somber",
+    # Spanish / Portuguese
+    "dramático": "dramatic",
+    "dramatico": "dramatic",
+    "tenso": "tense",
+    "tensa": "tense",
+    "humorístico": "humorous",
+    "humoristico": "humorous",
+    "sombrío": "somber",
+    "sombrio": "somber",
+    # German
+    "dramatisch": "dramatic",
+    "angespannt": "tense",
+    "humorvoll": "humorous",
+    "düster": "somber",
+    "duster": "somber",
+}
+
+
+def _normalize_tone(raw: object) -> Tone:
+    """Map an LLM-emitted tone to a canonical value. Never raises."""
+    if isinstance(raw, str):
+        canonical = _TONE_ALIASES.get(raw.strip().lower())
+        if canonical is not None:
+            return canonical
+        logger.warning("Narrator emitted unknown tone %r — defaulting to %s", raw, _DEFAULT_TONE)
+    return _DEFAULT_TONE
+
+
+_PLACEHOLDER_RE = re.compile(r"[\[{][^\]}]{0,40}[\]}]")
+"""Bracketed tokens like ``[nom]`` or ``{personnage}`` — small models parrot
+them verbatim from prompt examples (observed in prod, H13)."""
+
+_DAMAGE_KEYWORD_RE = re.compile(
+    r"\b(dégâts?|dommages?|damage|blessures?|santé|vies?|hp|pv"
+    r"|hit\s+points?|health|wounds?)\b",
+    re.IGNORECASE,
+)
+"""Words signalling that a nearby number is a damage/HP claim."""
+
+_DIGIT_RE = re.compile(r"\b(\d{1,3})\b")
+
+_NUMBER_WORDS: dict[str, int] = {
+    # French 2-20 ("un/une" excluded — articles would flood false positives)
+    "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "six": 6, "sept": 7,
+    "huit": 8, "neuf": 9, "dix": 10, "onze": 11, "douze": 12, "treize": 13,
+    "quatorze": 14, "quinze": 15, "seize": 16, "dix-sept": 17,
+    "dix-huit": 18, "dix-neuf": 19, "vingt": 20,
+    # English 2-20 ("one/a" excluded for the same reason)
+    "two": 2, "three": 3, "four": 4, "five": 5, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+# Longest alternatives first so "dix-sept" wins over "dix".
+_NUMBER_WORD_RE = re.compile(
+    r"\b(" + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+_DAMAGE_WINDOW = 40
+"""Chars scanned on each side of a damage keyword for numeric claims."""
+
+
+def _numbers_in(text: str) -> set[int]:
+    """Every number (digits or fr/en words) appearing anywhere in ``text``."""
+    found = {int(m.group(1)) for m in _DIGIT_RE.finditer(text)}
+    found.update(
+        _NUMBER_WORDS[m.group(1).lower()] for m in _NUMBER_WORD_RE.finditer(text)
+    )
+    return found
+
+
+def _claimed_damage_numbers(narrative: str) -> set[int]:
+    """Numbers appearing within ``_DAMAGE_WINDOW`` chars of a damage keyword."""
+    claims: set[int] = set()
+    for kw in _DAMAGE_KEYWORD_RE.finditer(narrative):
+        window = narrative[
+            max(0, kw.start() - _DAMAGE_WINDOW): kw.end() + _DAMAGE_WINDOW
+        ]
+        claims |= _numbers_in(window)
+    return claims
+
+
+def _invented_damage_claim(narrative: str, allowed_text: str) -> str | None:
+    """Detect damage/HP numbers the engine never produced (H12).
+
+    Observed in prod: the 9b narrated an enemy riposte dealing « douze de
+    votre santé » while the engine had resolved a MISS. Any number claimed
+    near a damage keyword must appear somewhere in the engine-provided
+    text (action result, outcome facts, or context). Conservative by
+    design: numbers without a damage keyword nearby are ignored.
+    """
+    claims = _claimed_damage_numbers(narrative)
+    if not claims:
+        return None
+    invented = claims - _numbers_in(allowed_text)
+    if not invented:
+        return None
+    return f"damage numbers {sorted(invented)} absent from engine results"
+
+
+def _quality_issue(narrative: str, allowed_text: str = "") -> str | None:
+    """Return why a narrative is unfit for the player, or ``None`` if fine."""
+    if len(narrative) < 50:
+        return f"too short ({len(narrative)} chars)"
+    match = _PLACEHOLDER_RE.search(narrative)
+    if match is not None:
+        return f"placeholder {match.group(0)!r}"
+    claim = _invented_damage_claim(narrative, allowed_text)
+    if claim is not None:
+        return claim
+    return None
 
 
 class Narrator:
@@ -20,6 +152,10 @@ class Narrator:
     """
 
     MODEL = "qwen3.5:9b"
+
+    NUM_PREDICT = 1024
+    """Generation cap — 2-4 sentences plus JSON meta fields never need
+    more; unbounded output (-1) used to overflow the Discord embed (M7)."""
 
     def __init__(self, client: OllamaClient) -> None:
         self._client = client
@@ -43,6 +179,10 @@ class Narrator:
         """
         logger.info("NARRATE input=%r intent=%r", action_result_text[:100], player_intent[:100])
 
+        # Engine-provided text — the only legitimate source of numeric
+        # damage/HP claims in the narrative (H12 guard).
+        allowed_text = " ".join((action_result_text, outcome_facts, context_prompt))
+
         # --- Tier 1: primary call ---
         try:
             result = self._call_llm(
@@ -55,13 +195,13 @@ class Narrator:
                 simplified=False,
                 director_note=director_note,
             )
-            if len(result.narrative) >= 50:
+            issue = _quality_issue(result.narrative, allowed_text)
+            if issue is None:
                 return result
             logger.warning(
-                "Narrator primary returned short narrative (%d chars), retrying simplified",
-                len(result.narrative),
+                "Narrator primary rejected (%s), retrying simplified", issue,
             )
-        except (LLMParseError, OllamaUnavailableError) as exc:
+        except (LLMParseError, OllamaUnavailableError, ValidationError, TypeError) as exc:
             logger.warning("Narrator primary call failed (%s), retrying simplified", exc)
 
         # --- Tier 2: simplified retry ---
@@ -76,17 +216,17 @@ class Narrator:
                 simplified=True,
                 director_note=director_note,
             )
-            if len(result.narrative) >= 50:
+            issue = _quality_issue(result.narrative, allowed_text)
+            if issue is None:
                 return result
             logger.error(
-                "Narrator simplified retry returned short narrative (%d chars), using template",
-                len(result.narrative),
+                "Narrator simplified retry rejected (%s), using template", issue,
             )
-        except (LLMParseError, OllamaUnavailableError) as exc:
+        except (LLMParseError, OllamaUnavailableError, ValidationError, TypeError) as exc:
             logger.error("Narrator simplified retry failed (%s), using template", exc)
 
         # --- Tier 3: template fallback (never raises) ---
-        return self._template_fallback(action_result_text, outcome_facts)
+        return self._template_fallback(action_result_text, outcome_facts, language)
 
     def _call_llm(
         self,
@@ -117,7 +257,9 @@ class Narrator:
         sections.extend([context_prompt, f"## What happened\n{action_result_text}"])
         if not simplified:
             if player_intent:
-                sections.append(f"## Player framing\n{player_intent}")
+                sections.append(
+                    f"## Player framing\n{delimited_player_block(player_intent)}"
+                )
             if outcome_facts:
                 sections.append(f"## State changes\n{outcome_facts}")
             if has_npc_dialogue:
@@ -128,16 +270,30 @@ class Narrator:
                     "speech. Do NOT write any spoken words."
                 )
         user_content = "\n\n".join(sections)
-        system_prompt = language_instruction(language) + _SYSTEM_PROMPT
+        system_prompt = (
+            language_instruction(language)
+            + _SYSTEM_PROMPT
+            + "\n\n"
+            + PLAYER_DATA_INSTRUCTION
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.8, num_predict=self.NUM_PREDICT,
+        )
+        if not isinstance(data, dict):
+            raise LLMParseError(
+                f"narrator payload is {type(data).__name__}, expected JSON object",
+                raw_response=str(data),
+                model=self.MODEL,
+                messages=messages,
+            )
         result = NarrativeResult(
             narrative=str(data.get("narrative", "")),
-            tone=data.get("tone", "dramatic"),  # type: ignore[arg-type]
+            tone=_normalize_tone(data.get("tone")),
             scene_goal_touched=bool(data.get("scene_goal_touched", False)),
             beat_advanced=bool(data.get("beat_advanced", False)),
             npcs_mentioned=list(data.get("npcs_mentioned") or []),
@@ -161,42 +317,139 @@ class Narrator:
             lines.append("Do NOT re-reveal: " + ", ".join(note.forbidden_topics))
         return "\n".join(lines)
 
-    _TEMPLATES: dict[str, list[str]] = {
-        "attack": [
-            "Le combat se poursuit dans la confusion. {action}.",
-            "Les coups pleuvent autour de toi. {action}.",
-            "L'affrontement reprend de plus belle. {action}.",
-        ],
-        "move": [
-            "Le décor change autour de toi. {action}.",
-            "Tes pas te portent ailleurs. {action}.",
-        ],
-        "talk": [
-            "Les mots échangés résonnent encore dans l'air. {action}.",
-            "La conversation suit son cours. {action}.",
-        ],
-        "search": [
-            "Tu fouilles avec attention les environs. {action}.",
-            "Tes mains parcourent l'endroit. {action}.",
-        ],
-        "default": [
-            "Le MJ rassemble ses idées un instant. {action}.",
-            "L'instant se prolonge avant la suite. {action}.",
-        ],
+    _TEMPLATES: dict[str, dict[str, list[str]]] = {
+        "fr": {
+            "attack": [
+                "Le combat se poursuit dans la confusion. {action}.",
+                "Les coups pleuvent autour de toi. {action}.",
+                "L'affrontement reprend de plus belle. {action}.",
+            ],
+            "move": [
+                "Le décor change autour de toi. {action}.",
+                "Tes pas te portent ailleurs. {action}.",
+            ],
+            "talk": [
+                "Les mots échangés résonnent encore dans l'air. {action}.",
+                "La conversation suit son cours. {action}.",
+            ],
+            "search": [
+                "Tu fouilles avec attention les environs. {action}.",
+                "Tes mains parcourent l'endroit. {action}.",
+            ],
+            "default": [
+                "Le MJ rassemble ses idées un instant. {action}.",
+                "L'instant se prolonge avant la suite. {action}.",
+            ],
+        },
+        "en": {
+            "attack": [
+                "The fight rages on around you. {action}.",
+                "Blows keep flying through the chaos. {action}.",
+            ],
+            "move": [
+                "The scenery shifts around you. {action}.",
+                "Your steps carry you onward. {action}.",
+            ],
+            "talk": [
+                "The words exchanged still hang in the air. {action}.",
+                "The conversation runs its course. {action}.",
+            ],
+            "search": [
+                "You comb the surroundings carefully. {action}.",
+                "Your hands sweep across the place. {action}.",
+            ],
+            "default": [
+                "The GM gathers their thoughts for a moment. {action}.",
+                "The moment stretches before what comes next. {action}.",
+            ],
+        },
+        "es": {
+            "attack": [
+                "El combate continúa en plena confusión. {action}.",
+                "Los golpes llueven a tu alrededor. {action}.",
+            ],
+            "move": [
+                "El escenario cambia a tu alrededor. {action}.",
+                "Tus pasos te llevan a otro lugar. {action}.",
+            ],
+            "talk": [
+                "Las palabras intercambiadas aún resuenan en el aire. {action}.",
+                "La conversación sigue su curso. {action}.",
+            ],
+            "search": [
+                "Registras los alrededores con atención. {action}.",
+                "Tus manos recorren el lugar. {action}.",
+            ],
+            "default": [
+                "El DJ ordena sus ideas un instante. {action}.",
+                "El instante se alarga antes de continuar. {action}.",
+            ],
+        },
+        "de": {
+            "attack": [
+                "Der Kampf tobt weiter im Durcheinander. {action}.",
+                "Die Schläge prasseln um dich herum. {action}.",
+            ],
+            "move": [
+                "Die Umgebung verändert sich um dich herum. {action}.",
+                "Deine Schritte tragen dich weiter. {action}.",
+            ],
+            "talk": [
+                "Die gewechselten Worte hallen noch in der Luft nach. {action}.",
+                "Das Gespräch nimmt seinen Lauf. {action}.",
+            ],
+            "search": [
+                "Du durchsuchst die Umgebung aufmerksam. {action}.",
+                "Deine Hände tasten den Ort ab. {action}.",
+            ],
+            "default": [
+                "Der Spielleiter sammelt kurz seine Gedanken. {action}.",
+                "Der Moment dehnt sich, bevor es weitergeht. {action}.",
+            ],
+        },
+        "pt": {
+            "attack": [
+                "O combate continua em plena confusão. {action}.",
+                "Os golpes chovem ao teu redor. {action}.",
+            ],
+            "move": [
+                "O cenário muda ao teu redor. {action}.",
+                "Os teus passos levam-te adiante. {action}.",
+            ],
+            "talk": [
+                "As palavras trocadas ainda ecoam no ar. {action}.",
+                "A conversa segue o seu curso. {action}.",
+            ],
+            "search": [
+                "Vasculhas os arredores com atenção. {action}.",
+                "As tuas mãos percorrem o lugar. {action}.",
+            ],
+            "default": [
+                "O mestre reúne as ideias por um instante. {action}.",
+                "O instante prolonga-se antes do que vem a seguir. {action}.",
+            ],
+        },
     }
 
     def _template_fallback(
-        self, action_result_text: str, outcome_facts: str
+        self, action_result_text: str, outcome_facts: str, language: str = "fr"
     ) -> NarrativeResult:
         """Return a hardcoded short narrative. Never raises.
 
         Used as the last-resort fallback when both the primary LLM call and
         the simplified retry have failed. The narrative is intentionally
         short and in-universe — its job is to keep the session alive, not to
-        be invisible.
+        be invisible. Localized per campaign language (M10) with an explicit
+        French fallback for unknown codes.
         """
+        lang_templates = self._TEMPLATES.get(language)
+        if lang_templates is None:
+            logger.warning(
+                "No fallback templates for language %r — using French", language,
+            )
+            lang_templates = self._TEMPLATES["fr"]
         category = self._pick_template_category(action_result_text)
-        variants = self._TEMPLATES.get(category, self._TEMPLATES["default"])
+        variants = lang_templates.get(category, lang_templates["default"])
         # Deterministic-ish pick: use the length of action_result_text mod len(variants).
         # Avoids importing random for a 3-element list.
         template = variants[len(action_result_text) % len(variants)]

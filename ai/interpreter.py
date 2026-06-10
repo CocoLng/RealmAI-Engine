@@ -7,12 +7,28 @@ from pathlib import Path
 from ai.client import LLMParseError, OllamaClient
 from ai.language import language_instruction
 from ai.models import InterpretedAction
+from ai.prompt_safety import PLAYER_DATA_INSTRUCTION, delimited_player_block
 from ai.scene_context import SceneContext
 from engine.validators import ActionType
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system_interpreter.txt").read_text()
+
+_ACTION_TYPES_BY_KEY: dict[str, ActionType] = {
+    at.value.lower(): at for at in ActionType
+}
+
+
+def _lookup_action_type(raw: object) -> ActionType | None:
+    """Case-insensitive ActionType lookup tolerating underscores.
+
+    The 4b model regularly emits ``"attack"`` or ``"Cast_Spell"`` instead of
+    the canonical enum values — a casing slip must not cost the player a turn.
+    """
+    if not isinstance(raw, str):
+        return None
+    return _ACTION_TYPES_BY_KEY.get(raw.strip().lower().replace("_", " "))
 
 
 class Interpreter:
@@ -23,6 +39,9 @@ class Interpreter:
     """
 
     MODEL = "qwen3.5:4b"
+
+    NUM_PREDICT = 384
+    """Generation cap — one flat JSON action object (M7)."""
 
     def __init__(self, client: OllamaClient) -> None:
         self._client = client
@@ -45,8 +64,15 @@ class Interpreter:
 
         Returns:
             InterpretedAction with action_type, targets, and confidence.
-            On parse failure, returns a low-confidence fallback action:
-            DEFEND in combat, IMPROVISE outside combat.
+
+        Raises:
+            LLMParseError: When the model output cannot be turned into a
+                valid action (non-JSON, non-dict payload, unknown
+                action_type, unbuildable fields). Raising is deliberate —
+                :func:`bot.llm_retry.retry_llm_call` only retries raised
+                exceptions, and a silent fallback used to convert a 4b
+                hiccup into a DEFEND that consumed the player's turn (H11).
+            OllamaUnavailableError: When the Ollama server is unreachable.
         """
         user_content = self._build_user_message(
             player_text, actor_name, scene_context,
@@ -54,24 +80,38 @@ class Interpreter:
         messages = [
             {
                 "role": "system",
-                "content": language_instruction(language) + _SYSTEM_PROMPT,
+                "content": (
+                    language_instruction(language)
+                    + _SYSTEM_PROMPT
+                    + "\n\n"
+                    + PLAYER_DATA_INSTRUCTION
+                ),
             },
             {"role": "user", "content": user_content},
         ]
 
         logger.info("INTERPRET player=%s input=%r", actor_name, player_text[:100])
 
-        try:
-            data = self._client.chat_json(self.MODEL, messages, temperature=0.3)
-        except (json.JSONDecodeError, LLMParseError):
-            logger.warning("Interpreter: LLM returned non-JSON for input: %r", player_text)
-            return self._fallback(player_text, actor_name, scene_context)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.3, num_predict=self.NUM_PREDICT,
+        )
+        if not isinstance(data, dict):
+            raise LLMParseError(
+                f"interpreter payload is {type(data).__name__}, expected JSON object",
+                raw_response=str(data),
+                model=self.MODEL,
+                messages=messages,
+            )
 
-        try:
-            action_type = ActionType(data.get("action_type", ""))
-        except (ValueError, KeyError) as exc:
-            logger.warning("Interpreter: invalid action_type: %s", exc)
-            return self._fallback(player_text, actor_name, scene_context)
+        raw_action = data.get("action_type")
+        action_type = _lookup_action_type(raw_action)
+        if action_type is None:
+            raise LLMParseError(
+                f"unknown action_type {raw_action!r}",
+                raw_response=json.dumps(data, ensure_ascii=False),
+                model=self.MODEL,
+                messages=messages,
+            )
 
         try:
             action = InterpretedAction(
@@ -88,9 +128,13 @@ class Interpreter:
                 confidence=float(data.get("confidence", 1.0)),
                 is_lethal_intent=bool(data.get("is_lethal_intent", False)),
             )
-        except (ValueError, KeyError) as exc:
-            logger.warning("Interpreter: failed to build InterpretedAction: %s", exc)
-            return self._fallback(player_text, actor_name, scene_context)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise LLMParseError(
+                f"cannot build InterpretedAction: {exc}",
+                raw_response=json.dumps(data, ensure_ascii=False),
+                model=self.MODEL,
+                messages=messages,
+            ) from exc
 
         # Safety net — the 4B model sometimes classifies Move correctly but
         # drops the target_name. Recover by matching the raw input against
@@ -198,33 +242,6 @@ class Interpreter:
                 return name
         return None
 
-    def _fallback(
-        self,
-        player_text: str,
-        actor_name: str,
-        scene_context: SceneContext,
-    ) -> InterpretedAction:
-        """Return a safe fallback action when parsing fails.
-
-        - In combat → DEFEND (preserves the existing combat-loop behaviour).
-        - Outside combat → IMPROVISE with the raw text echoed back so the
-          narrator can gently refuse / ask for clarification in-character.
-        """
-        if scene_context.in_combat:
-            return InterpretedAction(
-                action_type=ActionType.DEFEND,
-                actor_name=actor_name,
-                raw_input=player_text,
-                confidence=0.0,
-            )
-        return InterpretedAction(
-            action_type=ActionType.IMPROVISE,
-            actor_name=actor_name,
-            raw_input=player_text,
-            improvise_description=player_text,
-            confidence=0.0,
-        )
-
     def _build_user_message(
         self,
         player_text: str,
@@ -257,7 +274,7 @@ class Interpreter:
         lines.append(f"Character name: {actor_name}")
         lines.append("")
         lines.append("## Player input")
-        lines.append(player_text)
+        lines.append(delimited_player_block(player_text))
 
         return "\n".join(lines)
 
