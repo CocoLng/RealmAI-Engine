@@ -35,6 +35,7 @@ from bot.action_pipeline import (
     ActionPipeline,
     ActionPipelineResult,
     AmbiguityResult,
+    PipelineOutput,
     UnknownEntityResult,
 )
 from bot.combat_end import finalize_combat
@@ -79,6 +80,15 @@ logger = logging.getLogger(__name__)
 
 
 _TIMEOUT_SECONDS = 300
+
+# Action types that never consume the actor's combat turn. QUESTION and
+# LOOK are the informational actions the validator deliberately allows
+# off-turn (engine/validators.py — _EXPLORATION_ALLOWED_IN_COMBAT); they
+# must not advance the rotation even when the current combatant uses them.
+_NON_CONSUMING_ACTION_TYPES: frozenset[ActionType] = frozenset({
+    ActionType.QUESTION,
+    ActionType.LOOK,
+})
 
 # Labels for the hub-freeze message after combat ends. Displayed on the
 # edited hub above the final CombatState embed.
@@ -137,15 +147,22 @@ class TurnManager:
 
     async def on_action_resolved(
         self,
-        result: ActionPipelineResult | None = None,
+        result: PipelineOutput | None = None,
     ) -> None:
         """Called after any pipeline.process() finishes while combat is live.
 
         Free-text actions come in via :class:`bot.cogs.action_handler.ActionHandlerCog`,
         which already posted the narrative embed; button clicks come in via
         :meth:`dispatch_action`, which posted the narrative embed itself.
-        Either way, the action is done, the turn must advance, pending
-        off-turn cues must be flushed, and the next turn prompted.
+
+        The turn only advances when ``result`` shows the CURRENT combatant
+        actually consumed their action. Refused actions
+        (:class:`UnknownEntityResult`), unresolved ambiguities, off-turn-legal
+        QUESTION/LOOK, free actions, and outputs authored by another player
+        leave the rotation untouched — they re-arm the auto-dodge watcher
+        instead. ``result=None`` is the trusted internal form (NPC turns,
+        surprise skip) whose action economy the engine already enforced:
+        it always advances.
 
         Holds ``session.action_lock`` for the entire turn-advance sequence
         so two concurrent callers (e.g. a button click and a free-text
@@ -155,15 +172,21 @@ class TurnManager:
         :meth:`dispatch_action` and ``ActionHandlerCog._run_pipeline`` both
         release it after the pipeline runs and before handing off here.
         """
-        del result  # Only used by callers for diagnostics; we read state directly.
-        self._cancel_timeout()
-
         async with self.session.action_lock:
             state = self.session.combat_state
             if state is None or not state.is_active:
                 await self._finalize()
                 return
 
+            if not self._turn_was_consumed(result, state):
+                # No turn consumed — keep the rotation in place and make
+                # sure the AFK safety net is back up (rearm_timeout no-ops
+                # when a live watcher exists, e.g. off-turn chatter that
+                # never paused the current PC's watcher).
+                self.rearm_timeout()
+                return
+
+            self._cancel_timeout()
             advance_turn(state)
             await self._flush_pending_cues(state)
 
@@ -182,6 +205,31 @@ class TurnManager:
         # await on Discord I/O for seconds and must not block another action
         # pipeline from grabbing the lock.
         await self._prompt_turn(current)
+
+    def _turn_was_consumed(
+        self,
+        result: PipelineOutput | None,
+        state: CombatState,
+    ) -> bool:
+        """Whether ``result`` represents the current combatant spending their action.
+
+        ``None`` means a trusted internal caller (NPC executor, surprise
+        skip) already enforced the action economy — treated as consumed.
+        Everything else must be an :class:`ActionPipelineResult` authored
+        by the current combatant for a turn-consuming action type.
+        """
+        if result is None:
+            return True
+        if not isinstance(result, ActionPipelineResult):
+            # Refused (UnknownEntityResult) or unresolved (AmbiguityResult):
+            # no mechanics were applied, the action slot is intact.
+            return False
+        action = result.interpreted_action
+        if get_current_combatant(state).name != action.actor_name:
+            return False
+        if result.is_question or result.is_free_action:
+            return False
+        return action.action_type not in _NON_CONSUMING_ACTION_TYPES
 
     async def dispatch_action(self, action: InterpretedAction) -> None:
         """Run one interpreted action through the pipeline and advance the turn.
@@ -233,19 +281,21 @@ class TurnManager:
 
             await self._render_pipeline_result(pipeline, result, action)
 
-        # Free actions (EQUIP) re-prompt the same combatant instead of advancing.
+        # Outcomes that did not consume the turn — free action (EQUIP),
+        # refused action, unresolved ambiguity — re-prompt the same
+        # combatant instead of advancing: the clicked view disabled
+        # itself, so without a fresh hub the player would be stuck until
+        # the auto-dodge timeout fired.
+        state = self.session.combat_state
         if (
-            isinstance(result, ActionPipelineResult)
-            and result.is_free_action
+            state is not None
+            and state.is_active
+            and not self._turn_was_consumed(result, state)
         ):
-            state = self.session.combat_state
-            if state is not None:
-                current = get_current_combatant(state)
-                if current is not None:
-                    await self._prompt_turn(current)
+            await self._prompt_turn(get_current_combatant(state))
             return
 
-        await self.on_action_resolved()
+        await self.on_action_resolved(result)
 
     # ------------------------------------------------------------------
     # Turn prompting

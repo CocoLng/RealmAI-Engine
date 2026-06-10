@@ -50,8 +50,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ai.entity_resolver import EntityCandidate
 from ai.models import InterpretedAction
-from bot.action_pipeline import ActionPipelineResult
+from bot.action_pipeline import (
+    ActionPipelineResult,
+    AmbiguityResult,
+    UnknownEntityResult,
+)
 from bot.cogs.action_handler import ActionHandlerCog
 from bot.combat_turn_manager import TurnManager
 from engine.character import (
@@ -687,3 +692,219 @@ class TestStaleDispatchGuard:
 
         tm_pipeline.process_interpreted_action.assert_not_awaited()
         tm.on_action_resolved.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# C3 — pipeline outputs that did not consume the turn must not advance it
+# ---------------------------------------------------------------------------
+
+
+def _question_result(actor_name: str) -> ActionPipelineResult:
+    return ActionPipelineResult(
+        narrative="Le Gardien explique la situation.",
+        tone="somber",
+        mechanics_text="QUESTION",
+        interpreted_action=InterpretedAction(
+            action_type=ActionType.QUESTION,
+            actor_name=actor_name,
+            raw_input="que vois-je autour de moi ?",
+        ),
+        is_question=True,
+    )
+
+
+def _unknown_entity_result(actor_name: str) -> UnknownEntityResult:
+    return UnknownEntityResult(
+        field_name="target_name",
+        raw_value="le spectre",
+        partial_action=InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name=actor_name,
+            raw_input="j'attaque le spectre",
+        ),
+        refusal_narrative="Aucun spectre en vue.",
+    )
+
+
+class TestNonConsumingFreeText:
+    @pytest.mark.asyncio
+    async def test_question_during_combat_does_not_advance_turn(self) -> None:
+        """A QUESTION from the current combatant must not burn their turn.
+
+        Regression (C3): on_action_resolved advanced the turn on every
+        pipeline output — a player asking a question in combat consumed
+        the active combatant's turn.
+        """
+        session, channel, tm, pc = _combat_setup()
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        pipeline = _FakePipeline(_question_result(pc.name), session)
+        cog._pipeline_factory = MagicMock(return_value=pipeline)
+
+        message = _make_message(channel, bot)
+
+        await asyncio.wait_for(cog.on_message(message), timeout=5.0)
+
+        assert session.combat_state.current_turn_index == 0, (
+            "a QUESTION consumed the current combatant's turn"
+        )
+        tm._prompt_turn.assert_not_awaited()
+        # The no-advance path must leave the AFK safety net armed.
+        watcher = tm.pending_timeout
+        assert watcher is not None and not watcher.done()
+        assert not session.action_lock.locked()
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_refused_action_during_combat_does_not_advance_turn(
+        self,
+    ) -> None:
+        """An UnknownEntityResult (refused action) must not advance the turn."""
+        session, channel, tm, pc = _combat_setup()
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        pipeline = _FakePipeline(_unknown_entity_result(pc.name), session)
+        cog._pipeline_factory = MagicMock(return_value=pipeline)
+
+        message = _make_message(channel, bot)
+
+        await asyncio.wait_for(cog.on_message(message), timeout=5.0)
+
+        assert session.combat_state.current_turn_index == 0, (
+            "a refused action consumed the current combatant's turn"
+        )
+        tm._prompt_turn.assert_not_awaited()
+        assert not session.action_lock.locked()
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_off_turn_player_question_does_not_advance_turn(self) -> None:
+        """A teammate's off-turn QUESTION must not consume the current turn."""
+        current_pc = _pc("Bryn")
+        author_pc = _pc("Aldric")
+        goblin = _enemy()
+        session = _fake_session([current_pc, author_pc, goblin])
+        session.characters = {
+            _PLAYER_ID: author_pc.character,
+            777: current_pc.character,
+        }
+        channel = _fake_channel()
+        tm = TurnManager(
+            channel=channel, session=session, pipeline_factory=MagicMock(),
+        )
+        session.combat_turn_manager = tm
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        pipeline = _FakePipeline(_question_result(author_pc.name), session)
+        cog._pipeline_factory = MagicMock(return_value=pipeline)
+
+        message = _make_message(channel, bot)
+
+        await asyncio.wait_for(cog.on_message(message), timeout=5.0)
+
+        assert session.combat_state.current_turn_index == 0, (
+            "an off-turn player's question consumed the current turn"
+        )
+        tm._prompt_turn.assert_not_awaited()
+        tm._cancel_timeout()
+
+
+class TestAmbiguityDuringCombat:
+    def _ambiguity(self, actor_name: str) -> AmbiguityResult:
+        return AmbiguityResult(
+            field_name="target_name",
+            raw_value="gobelin",
+            candidates=[
+                EntityCandidate(id="npc:gobelin-1", label="Gobelin balafré"),
+                EntityCandidate(id="npc:gobelin-2", label="Gobelin borgne"),
+            ],
+            partial_action=InterpretedAction(
+                action_type=ActionType.ATTACK,
+                actor_name=actor_name,
+                target_name="gobelin",
+                raw_input="j'attaque le gobelin",
+            ),
+        )
+
+    def _stub_view(
+        self, *, cancelled: bool, chosen_entity_id: str | None,
+    ) -> MagicMock:
+        view = MagicMock()
+        view.wait = AsyncMock()
+        view.cancelled = cancelled
+        view.chosen_entity_id = chosen_entity_id
+        return view
+
+    @pytest.mark.asyncio
+    async def test_cancelled_clarification_does_not_advance_turn(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Cancelling the disambiguation aborts the action — no mechanics
+        ran, so the turn must not advance (C3)."""
+        session, channel, tm, pc = _combat_setup()
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        pipeline = _FakePipeline(self._ambiguity(pc.name), session)  # type: ignore[arg-type]
+        cog._pipeline_factory = MagicMock(return_value=pipeline)
+
+        monkeypatch.setattr(
+            "bot.cogs.action_handler.ClarificationView",
+            MagicMock(
+                return_value=self._stub_view(
+                    cancelled=True, chosen_entity_id=None,
+                ),
+            ),
+        )
+
+        message = _make_message(channel, bot)
+        await asyncio.wait_for(cog.on_message(message), timeout=5.0)
+
+        assert session.combat_state.current_turn_index == 0, (
+            "a cancelled clarification consumed the current combatant's turn"
+        )
+        tm._prompt_turn.assert_not_awaited()
+        assert not session.action_lock.locked()
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_resolved_clarification_advances_turn(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Picking a candidate resumes the pipeline; the final (consuming)
+        result must reach the TurnManager handoff so the turn advances."""
+        session, channel, tm, pc = _combat_setup()
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+
+        bot = _make_bot(session)
+        cog = ActionHandlerCog(bot)
+        pipeline = _FakePipeline(self._ambiguity(pc.name), session)  # type: ignore[arg-type]
+        pipeline.resume_with_resolution = AsyncMock(  # type: ignore[attr-defined]
+            return_value=_attack_result(pc.name),
+        )
+        cog._pipeline_factory = MagicMock(return_value=pipeline)
+
+        monkeypatch.setattr(
+            "bot.cogs.action_handler.ClarificationView",
+            MagicMock(
+                return_value=self._stub_view(
+                    cancelled=False, chosen_entity_id="npc:gobelin-1",
+                ),
+            ),
+        )
+
+        message = _make_message(channel, bot)
+        await asyncio.wait_for(cog.on_message(message), timeout=5.0)
+
+        assert session.combat_state.current_turn_index == 1, (
+            "the resolved clarification's attack never advanced the turn"
+        )
+        tm._prompt_turn.assert_awaited_once()
+        assert not session.action_lock.locked()

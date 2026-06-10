@@ -182,11 +182,13 @@ class ActionHandlerCog(commands.Cog):
                     message, session, raw_text, start,
                 )
         finally:
-            # The action did not resolve the turn (pipeline error, dropped
-            # progress message, or an exception escaping the render) — put
-            # the auto-dodge safety net back or combat soft-stalls forever.
-            # Every non-None result advances the turn via on_action_resolved
-            # below, which arms a fresh watcher for the next PC turn.
+            # The action never produced a result (pipeline error, dropped
+            # progress message, cancelled clarification, or an exception
+            # escaping the render) — put the auto-dodge safety net back or
+            # combat soft-stalls forever. Non-None results go through
+            # on_action_resolved below, which either advances the turn
+            # (arming a fresh watcher on the next PC prompt) or re-arms
+            # the current one when the action did not consume the turn.
             if watcher_paused and result is None:
                 turn_manager.rearm_timeout()
         if result is None:
@@ -194,16 +196,17 @@ class ActionHandlerCog(commands.Cog):
 
         # Hand control back to the TurnManager if combat is live. The
         # pipeline does not advance the turn itself — the TurnManager does
-        # so inside on_action_resolved, under action_lock (released above).
+        # so inside on_action_resolved, under action_lock (released above),
+        # and only when the result shows the current combatant actually
+        # consumed their action (refusals, questions, and off-turn
+        # messages leave the rotation untouched).
         if (
             session.combat_turn_manager is not None
             and session.combat_state is not None
             and session.combat_state.is_active
         ):
             try:
-                await session.combat_turn_manager.on_action_resolved(
-                    result if isinstance(result, ActionPipelineResult) else None,
-                )
+                await session.combat_turn_manager.on_action_resolved(result)
             except Exception:
                 logger.exception(
                     "ACTION turn_manager.on_action_resolved failed campaign=%s",
@@ -424,7 +427,12 @@ class ActionHandlerCog(commands.Cog):
                         session.campaign.id,
                     )
         elif isinstance(result, AmbiguityResult):
-            await self._render_ambiguity(
+            # The clarification flow resumes the pipeline — the FINAL
+            # output (not the intermediate AmbiguityResult) is what the
+            # combat handoff must see, otherwise a disambiguated attack
+            # would never advance the turn. ``None`` when the player
+            # cancelled / timed out / the resume failed.
+            result = await self._render_ambiguity(
                 progress_msg, result, message.author.id, pipeline,
                 actor_name=actor_name, raw_text=raw_text, start=start,
                 session=session,
@@ -526,7 +534,13 @@ class ActionHandlerCog(commands.Cog):
         raw_text: str,
         start: float,
         session: Any,
-    ) -> None:
+    ) -> PipelineOutput | None:
+        """Run the clarification flow and return the FINAL pipeline output.
+
+        Returns ``None`` when the action was dropped (player cancelled,
+        view timed out, or the resumed pipeline raised) — the caller then
+        treats the action as never having happened (no turn handoff).
+        """
         embed = build_clarification_embed(ambiguity)
         view = ClarificationView(ambiguity, author_id=author_id)
         await progress_msg.edit(embed=embed, view=view)
@@ -544,7 +558,7 @@ class ActionHandlerCog(commands.Cog):
                 ),
                 view=None,
             )
-            return
+            return None
 
         if view.chosen_entity_id is None:
             # Timeout
@@ -557,7 +571,7 @@ class ActionHandlerCog(commands.Cog):
                 ),
                 view=None,
             )
-            return
+            return None
 
         async def update_progress(phase: PipelinePhase) -> None:
             try:
@@ -595,14 +609,16 @@ class ActionHandlerCog(commands.Cog):
                 ),
                 view=None,
             )
-            return
+            return None
 
         if isinstance(result, ActionPipelineResult):
             await self._render_success(progress_msg, result)
         elif isinstance(result, UnknownEntityResult):
             await self._render_unknown(progress_msg, result)
         # An ambiguity here would be unusual — fall through to leave the
-        # current embed in place rather than crash.
+        # current embed in place rather than crash (it is non-consuming,
+        # so returning it never advances the turn).
+        return result
 
 
 async def setup(bot: "RealmBot") -> None:
