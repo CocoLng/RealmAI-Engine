@@ -430,7 +430,13 @@ class TurnManager:
             await self.on_action_resolved()
             return
 
-        plan = self._dispatch_npc_brain(combatant, state)
+        # Off-loop: the boss tier goes through a synchronous httpx LLM
+        # call — run in-loop it would freeze the whole bot (gateway
+        # heartbeat included) for the entire generation. Players can only
+        # interleave non-mutating QUESTION/LOOK during an NPC turn (the
+        # validator refuses off-turn combat actions), so the thread never
+        # races a state mutation.
+        plan = await asyncio.to_thread(self._dispatch_npc_brain, combatant, state)
 
         dice_embed: discord.Embed | None = None
         if plan.action_type == ActionType.ATTACK and plan.signature_name is None:

@@ -934,6 +934,56 @@ class TestSurpriseSkip:
 
 
 # ---------------------------------------------------------------------------
+# NPC brain must not block the event loop (boss tier = synchronous LLM call)
+# ---------------------------------------------------------------------------
+
+
+class TestNPCBrainOffLoop:
+    @pytest.mark.asyncio
+    async def test_npc_brain_runs_off_the_event_loop(self) -> None:
+        """Boss-tier decisions go through a synchronous httpx LLM call —
+        run in-loop it freezes the whole bot (gateway heartbeat included)
+        for the entire generation (audit H2, boss branch).
+
+        The fake brain below blocks until a loop-side task manages to
+        run: a synchronous in-loop call starves that task and times out;
+        via ``asyncio.to_thread`` the loop stays free and sets the event.
+        """
+        import threading
+
+        from engine.npc_ai.scripted import NPCActionPlan
+
+        pc = _pc()
+        goblin = _enemy(tier=NPCTier.MINION)
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+
+        loop_alive = threading.Event()
+        loop_ran_during_brain = {"value": False}
+
+        def blocking_brain(combatant, state):  # type: ignore[no-untyped-def]
+            loop_ran_during_brain["value"] = loop_alive.wait(timeout=1.0)
+            return NPCActionPlan(action_type=ActionType.DEFEND, rationale="t")
+
+        tm._dispatch_npc_brain = blocking_brain  # type: ignore[method-assign]
+
+        async def _heartbeat() -> None:
+            await asyncio.sleep(0.05)
+            loop_alive.set()
+
+        hb = asyncio.create_task(_heartbeat())
+        await tm._resolve_npc_turn(goblin)
+        await hb
+
+        assert loop_ran_during_brain["value"], (
+            "the NPC brain blocked the event loop — boss LLM calls must "
+            "run via asyncio.to_thread"
+        )
+
+
+# ---------------------------------------------------------------------------
 # H14 — NPC turn summaries must reach players clean (no internal tags)
 # ---------------------------------------------------------------------------
 
