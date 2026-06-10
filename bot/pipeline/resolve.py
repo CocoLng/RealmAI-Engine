@@ -30,7 +30,7 @@ from engine.combat import (
     check_combat_end,
     trivial_resolve,
 )
-from engine.conditions import ActiveCondition, ConditionType
+from engine.conditions import ActiveCondition, ConditionType, apply_condition
 from engine.dice import RollOutcome, roll_check
 from engine.inventory import EquipmentSlot, Weapon, equip_item, remove_item, unequip_item
 from engine.skill_check import (
@@ -42,7 +42,7 @@ from world.location import Location
 from world.npc import NPC, NPCDisposition
 
 if TYPE_CHECKING:
-    from engine.combat import CombatState, TrivialResolveResult
+    from engine.combat import Combatant, CombatState, TrivialResolveResult
     from engine.inventory import Inventory
     from bot.game_session import GameSession
 
@@ -318,6 +318,30 @@ async def resolve_mechanics(
 
     if at == ActionType.ATTACK:
         return resolve_pc_attack(
+            action=action,
+            actor_name=actor_name,
+            combat_state=combat_state,
+            side=side,
+        )
+
+    if at == ActionType.CAST_SPELL:
+        return resolve_cast_spell(
+            action=action,
+            actor_name=actor_name,
+            combat_state=combat_state,
+            side=side,
+        )
+
+    if at == ActionType.DEFEND:
+        return resolve_defend(
+            action=action,
+            actor_name=actor_name,
+            combat_state=combat_state,
+            side=side,
+        )
+
+    if at == ActionType.DISENGAGE:
+        return resolve_disengage(
             action=action,
             actor_name=actor_name,
             combat_state=combat_state,
@@ -832,6 +856,225 @@ def resolve_pc_attack(
         outcome_facts=facts,
         public_effects=public,
         target_defeated=target.name if result.hit and not target.is_alive else None,
+    )
+
+
+def _find_live_combatant(
+    name: str | None,
+    combat_state: "CombatState",
+) -> "Combatant | None":
+    """Return the alive combatant whose name matches ``name``, if any."""
+    if not name:
+        return None
+    return next(
+        (
+            c for c in combat_state.combatants
+            if c.name == name and c.is_alive
+        ),
+        None,
+    )
+
+
+def resolve_cast_spell(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    combat_state: "CombatState | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Resolve a spell cast through :func:`engine.combat.resolve_spell`.
+
+    Consumes the spell slot and the right action-economy slot (Action /
+    Bonus Action / Reaction per the spell's casting time), applies
+    damage/healing/conditions in place, queues a ``("spell_cast",
+    SpellCastResult, caster)`` dice embed, and reports HP deltas through
+    ``PublicEffects``. The validator (``validate_cast_spell``) ran before
+    this — unknown spells or missing casters fall back to a harmless
+    no-op outcome instead of crashing.
+    """
+    from engine.combat import resolve_spell
+    from engine.spells import SPELL_CATALOG, CastingTime
+    from bot.pipeline.narrate import build_player_intent
+
+    intent = build_player_intent(action)
+    fallback = MechanicsOutcome(
+        summary=f"{action.actor_name} performs Cast Spell.",
+        player_intent=intent,
+    )
+    if combat_state is None or not action.spell_name:
+        return fallback
+
+    caster = _find_live_combatant(action.actor_name, combat_state)
+    spell = SPELL_CATALOG.get(action.spell_name)
+    if caster is None or caster.spellcaster is None or spell is None:
+        return fallback
+
+    target = None
+    if action.target_name:
+        target = _find_live_combatant(action.target_name, combat_state)
+        if target is None:
+            return MechanicsOutcome(
+                summary=(
+                    f"{action.actor_name} lance {spell.name}, mais la cible "
+                    f"'{action.target_name}' est introuvable."
+                ),
+                player_intent=intent,
+            )
+
+    try:
+        result = resolve_spell(caster, spell, target=target)
+    except ValueError as exc:
+        # Slot exhausted / spell unknown to the caster — the validator
+        # should have caught this; report without mutating anything.
+        return MechanicsOutcome(
+            summary=(
+                f"{action.actor_name} ne parvient pas à lancer "
+                f"{spell.name} ({exc})."
+            ),
+            player_intent=intent,
+        )
+
+    budget = caster.action_budget
+    if spell.casting_time == CastingTime.BONUS_ACTION:
+        budget.bonus_action_used = True
+    elif spell.casting_time == CastingTime.REACTION:
+        budget.reaction_used_this_round = True
+    else:
+        budget.action_used = True
+
+    side.pending_dice_embeds.append(("spell_cast", result, action.actor_name))
+
+    target_label = f" sur {target.name}" if target is not None else ""
+    effects: list[str] = []
+    hp_delta: dict[str, int] = {}
+    target_defeated: str | None = None
+
+    if result.damage > 0 and target is not None:
+        effects.append(f"{result.damage} dégâts")
+        hp_delta[target.name] = -result.damage
+        if not target.is_alive:
+            target_defeated = target.name
+    if result.healing > 0:
+        heal_recipient = target if target is not None else caster
+        effects.append(f"{result.healing} PV rendus")
+        hp_delta[heal_recipient.name] = (
+            hp_delta.get(heal_recipient.name, 0) + result.healing
+        )
+    if result.condition_applied and target is not None:
+        effects.append(f"{target.name} est {result.condition_applied}")
+
+    summary = f"{action.actor_name} lance {spell.name}{target_label}"
+    if effects:
+        summary += " — " + ", ".join(effects)
+    summary += "."
+
+    facts_lines = [summary]
+    if result.save_outcome is not None and not result.target_failed_save:
+        facts_lines.append(
+            f"{target.name if target else 'La cible'} réussit son jet de "
+            "sauvegarde — effet réduit."
+        )
+    if result.slot_used is not None:
+        facts_lines.append(
+            f"Emplacement de sort niveau {result.slot_used} consommé."
+        )
+    if target_defeated:
+        facts_lines.append(f"{target_defeated} est vaincu.")
+
+    return MechanicsOutcome(
+        summary=summary,
+        player_intent=intent,
+        outcome_facts="\n".join(facts_lines),
+        public_effects=PublicEffects(hp_delta=hp_delta),
+        target_defeated=target_defeated,
+    )
+
+
+def resolve_defend(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    combat_state: "CombatState | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Resolve the Defend (Dodge) action — consume Action, apply DODGING.
+
+    DODGING gives attackers disadvantage until the start of the dodger's
+    next turn (cleared by :func:`engine.combat.advance_turn`).
+    """
+    from engine.combat import consume_action
+    from bot.pipeline.narrate import build_player_intent
+
+    intent = build_player_intent(action)
+    fallback = MechanicsOutcome(
+        summary=f"{action.actor_name} performs Defend.",
+        player_intent=intent,
+    )
+    if combat_state is None:
+        return fallback
+    actor = _find_live_combatant(action.actor_name, combat_state)
+    if actor is None:
+        return fallback
+
+    try:
+        consume_action(actor)
+    except ValueError as exc:
+        return MechanicsOutcome(summary=str(exc), player_intent=intent)
+
+    apply_condition(
+        actor.conditions,
+        ActiveCondition(condition_type=ConditionType.DODGING, source="defend"),
+    )
+    summary = (
+        f"{action.actor_name} se met en garde (Esquive) — les attaques "
+        "contre lui ont un désavantage jusqu'à son prochain tour."
+    )
+    return MechanicsOutcome(
+        summary=summary,
+        player_intent=intent,
+        outcome_facts=summary,
+    )
+
+
+def resolve_disengage(
+    *,
+    action: InterpretedAction,
+    actor_name: str,
+    combat_state: "CombatState | None",
+    side: ResolveSideChannel,
+) -> MechanicsOutcome:
+    """Resolve the Disengage action — consume Action, suppress OOA.
+
+    Delegates to :func:`engine.combat.disengage`, which flags
+    ``disengaged_this_turn`` so zone moves skip opportunity attacks.
+    """
+    from engine.combat import disengage
+    from bot.pipeline.narrate import build_player_intent
+
+    intent = build_player_intent(action)
+    fallback = MechanicsOutcome(
+        summary=f"{action.actor_name} performs Disengage.",
+        player_intent=intent,
+    )
+    if combat_state is None:
+        return fallback
+    actor = _find_live_combatant(action.actor_name, combat_state)
+    if actor is None:
+        return fallback
+
+    try:
+        disengage(actor)
+    except ValueError as exc:
+        return MechanicsOutcome(summary=str(exc), player_intent=intent)
+
+    summary = (
+        f"{action.actor_name} se désengage — ses déplacements ne "
+        "provoquent plus d'attaques d'opportunité ce tour."
+    )
+    return MechanicsOutcome(
+        summary=summary,
+        player_intent=intent,
+        outcome_facts=summary,
     )
 
 

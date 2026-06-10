@@ -24,6 +24,7 @@ from engine.conditions import (
     grants_advantage_to_attackers,
     has_condition,
     has_disadvantage_on_attacks,
+    imposes_disadvantage_on_attackers,
     is_concentrating,
     remove_condition,
     tick_durations,
@@ -492,6 +493,10 @@ def advance_turn(state: CombatState) -> CombatState:
     #    (task 53 — 5e RAW: reset at the start of the boss's own turn).
     new_current = state.combatants[next_index]
     new_current.action_budget.reset_for_new_turn(max(new_current.character.speed, 0))
+    # Dodge (DEFEND) lasts until the start of the dodger's next turn
+    # (SRD 5e) — it protected them through the enemy turns, clear it now.
+    if has_condition(new_current.conditions, ConditionType.DODGING):
+        remove_condition(new_current.conditions, ConditionType.DODGING)
     if (
         new_current.stat_block is not None
         and new_current.stat_block.tier == NPCTier.BOSS
@@ -674,6 +679,8 @@ def resolve_attack(
         disadvantage = True
     if grants_advantage_to_attackers(defender.conditions):
         advantage = True
+    if imposes_disadvantage_on_attackers(defender.conditions):
+        disadvantage = True
 
     # Cancel if both
     if advantage and disadvantage:
@@ -1157,6 +1164,8 @@ def resolve_npc_attack(
         disadvantage = True
     if grants_advantage_to_attackers(defender.conditions):
         advantage = True
+    if imposes_disadvantage_on_attackers(defender.conditions):
+        disadvantage = True
     if advantage and disadvantage:
         advantage = False
         disadvantage = False

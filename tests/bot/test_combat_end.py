@@ -376,6 +376,23 @@ class TestFinalizeCombatCleanup:
             for c in pc.conditions
         )
 
+    def test_removes_dodging_condition(self) -> None:
+        # DODGING (Defend action, audit C2) is combat-only — it must not
+        # leak into exploration once the encounter ends.
+        pc = _pc()
+        pc.conditions.append(
+            ActiveCondition(condition_type=ConditionType.DODGING),
+        )
+        state = _state([pc, _kill(_enemy("Goblin"))])
+
+        finalize_combat(_session_with(state), CombatEndReason.VICTORY)
+
+        assert ConditionType.DODGING in _TRANSIENT_CONDITIONS
+        assert not any(
+            c.condition_type == ConditionType.DODGING
+            for c in pc.conditions
+        )
+
     def test_preserves_poisoned_condition(self) -> None:
         pc = _pc()
         pc.conditions.append(

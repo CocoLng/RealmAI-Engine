@@ -42,7 +42,11 @@ _XP_FALLBACK = 25
 
 # Conditions that make no sense to carry over once the fight is over.
 _TRANSIENT_CONDITIONS: frozenset[ConditionType] = frozenset(
-    {ConditionType.SURPRISED, ConditionType.CONCENTRATING},
+    {
+        ConditionType.SURPRISED,
+        ConditionType.CONCENTRATING,
+        ConditionType.DODGING,
+    },
 )
 
 
@@ -232,11 +236,13 @@ def _cleanup_combat_state(
 ) -> None:
     """Purge transient conditions from surviving combatants.
 
-    SURPRISED and CONCENTRATING make no sense once combat ends:
+    SURPRISED, CONCENTRATING and DODGING make no sense once combat ends:
     - SURPRISED is a first-round-only marker.
     - CONCENTRATING can keep ticking off-combat, but since we freeze the
       state, any concentration-bound effect is orphaned. Dropping it here
       keeps the narrative contract simple.
+    - DODGING (Defend action) only modifies attack rolls within the
+      encounter.
 
     Every other condition (POISONED, PRONE, FRIGHTENED, etc.) is
     preserved — those can legitimately persist out of combat.

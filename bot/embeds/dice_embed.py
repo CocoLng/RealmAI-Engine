@@ -28,7 +28,7 @@ from typing import Any
 import discord
 
 from engine.character import SKILL_ABILITY, Skill
-from engine.combat import AttackResult
+from engine.combat import AttackResult, SpellCastResult
 from engine.dice import D20CheckResult, DiceResult, RollOutcome
 from engine.inventory import DamageType
 
@@ -250,6 +250,48 @@ def build_skill_check_embed(
 
 
 # ---------------------------------------------------------------------------
+# Spell cast embed (CAST_SPELL resolution — audit C2)
+# ---------------------------------------------------------------------------
+
+
+def build_spell_cast_embed(
+    result: SpellCastResult,
+    caster_name: str,
+) -> discord.Embed:
+    """Render a resolved spell cast as a Discord embed.
+
+    Shows damage/healing dealt, the applied condition, the spell slot
+    consumed, and the target's save when the spell allowed one.
+    """
+    lines: list[str] = []
+    if result.damage > 0:
+        lines.append(f"💥 **{result.damage}** dégâts")
+    if result.healing > 0:
+        lines.append(f"💚 **{result.healing}** PV rendus")
+    if result.condition_applied:
+        lines.append(f"🌀 Condition : **{result.condition_applied}**")
+    if result.save_outcome is not None:
+        if result.target_failed_save:
+            lines.append("Jet de sauvegarde **raté**")
+        else:
+            lines.append("Jet de sauvegarde **réussi** — effet réduit")
+    if not lines:
+        lines.append("Le sort prend effet.")
+
+    target_part = f" → {result.target}" if result.target else ""
+    embed = discord.Embed(
+        title=f"✨ {caster_name} — {result.spell_name}{target_part}",
+        description="\n".join(lines),
+        color=_COLOR_HIT if result.target_failed_save else _COLOR_MISS,
+    )
+    if result.slot_used is not None:
+        embed.set_footer(
+            text=f"Emplacement de sort niveau {result.slot_used} consommé",
+        )
+    return embed
+
+
+# ---------------------------------------------------------------------------
 # Tuple → embed dispatcher (used by both action_handler and combat turn manager)
 # ---------------------------------------------------------------------------
 
@@ -260,6 +302,7 @@ def embed_for_dice_entry(entry: Any, *, fallback_actor: str) -> discord.Embed | 
     Tuples carry a ``kind`` tag at index 0 plus payload. Recognised kinds:
 
     - ``("attack_roll", AttackResult, attacker_name)``
+    - ``("spell_cast", SpellCastResult, caster_name)``
     - ``("flee_check", D20CheckResult, actor_name)``
     - ``("truce_check", D20CheckResult, actor_name)``
     - ``("skill_check", D20CheckResult, actor_name, Skill)``
@@ -276,6 +319,8 @@ def embed_for_dice_entry(entry: Any, *, fallback_actor: str) -> discord.Embed | 
 
     if kind == "attack_roll" and isinstance(payload, AttackResult):
         return build_attack_roll_embed(payload, name)
+    if kind == "spell_cast" and isinstance(payload, SpellCastResult):
+        return build_spell_cast_embed(payload, name)
     if not isinstance(payload, D20CheckResult):
         return None
     if kind == "flee_check":

@@ -37,13 +37,14 @@ from engine.inventory import create_inventory
 
 class TestConditionType:
     def test_all_conditions_exist(self) -> None:
-        assert len(ConditionType) == 17
+        assert len(ConditionType) == 18
 
     def test_values_are_human_readable(self) -> None:
         assert ConditionType.BLINDED == "Blinded"
         assert ConditionType.UNCONSCIOUS == "Unconscious"
         assert ConditionType.SURPRISED == "Surprised"
         assert ConditionType.CONCENTRATING == "Concentrating"
+        assert ConditionType.DODGING == "Dodging"
 
 
 # ---------------------------------------------------------------------------
