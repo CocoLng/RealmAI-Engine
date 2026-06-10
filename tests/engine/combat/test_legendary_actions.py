@@ -286,6 +286,36 @@ class TestMaybeSpendEffect:
 
 
 # ---------------------------------------------------------------------------
+# Player-facing summary (audit H14 — French, no internal tags)
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryPlayerFacing:
+    """Summaries are posted verbatim in the combat channel by the
+    TurnManager cue flush — they must be clean French with no internal
+    markers like ``[LEGENDARY]``."""
+
+    def test_summary_is_french_without_internal_tag(self) -> None:
+        boss = _make_boss(legendary_points=3, actions=[_cost_1()])
+        pc = _make_pc("Thorin", hp=20)
+        state = _state([boss, pc])
+
+        summary = maybe_spend_legendary_action(state, boss, pc)
+
+        assert summary == "Dread utilise Quick Strike : Thorin subit 5 dégâts"
+
+    def test_summary_without_effects_falls_back_to_french(self) -> None:
+        no_effect = LegendaryAction(name="Menace", cost=1, description="Rugit.")
+        boss = _make_boss(legendary_points=3, actions=[no_effect])
+        pc = _make_pc("Thorin", hp=20)
+        state = _state([boss, pc])
+
+        summary = maybe_spend_legendary_action(state, boss, pc)
+
+        assert summary == "Dread utilise Menace : aucun effet"
+
+
+# ---------------------------------------------------------------------------
 # advance_turn integration
 # ---------------------------------------------------------------------------
 

@@ -505,8 +505,19 @@ Ordre de merge recommandé : A → B → C → D → E → F → G → I → H
       `tests/engine/combat/test_npc_ai_scripted.py`. Commit
       `fix(combat-npc): clean French summaries for scripted minion executor`
       (branche feat/h8-latency). pytest 2566 passed, ruff + mypy OK.
-- [ ] `engine/npc_ai/legendary.py:133` : MÊME bug encore présent —
-      `"[LEGENDARY] X uses Y: ..."` posté verbatim par
-      `combat_turn_manager._flush_pending_cues` (`⚡ {cue}`, ligne ~687) SANS
-      `_strip_internal_tags`. Tag interne + anglais visibles joueur.
-      Tâche spawnée (chip « Traduire les résumés legendary actions »).
+- [x] `engine/npc_ai/legendary.py:133` : corrigé — résumé joueur
+      `« X utilise Y : ... »`, fallback « aucun effet », cohérent avec
+      scripted.py/elite.py. Tag `[LEGENDARY]` retiré du texte joueur,
+      remplacé par un `logger.debug` (nom + coût de l'action). TDD :
+      `TestSummaryPlayerFacing` (2 tests) dans
+      `tests/engine/combat/test_legendary_actions.py`. Aucun test
+      n'assertait l'ancienne chaîne (grep vérifié). Commit
+      `fix(combat-npc): clean French summaries for legendary actions`
+      (branche feat/h8-latency). pytest 2578 passed, ruff + mypy OK.
+      → Reliquat H14 entièrement clos.
+
+Note (2026-06-10) : flaky observé une fois en suite complète —
+`tests/bot/test_cog_inventory.py::TestUseItem` (4 tests, WIP H8 non
+commité) a échoué sur un run puis passé sur les 2 runs identiques
+suivants ; passe aussi isolé et en `tests/bot/`. Probable sensibilité
+à l'ordre/verrous async à surveiller en finalisant le WIP inventaire.

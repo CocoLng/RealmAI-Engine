@@ -129,5 +129,13 @@ def _execute_legendary(
         effects=action.effects,
     )
     summaries = execute_signature_ability(boss, fake_sig, [target], state)
-    joined = "; ".join(summaries) if summaries else "no effect"
-    return f"[LEGENDARY] {boss.name} uses {action.name}: {joined}"
+    joined = "; ".join(summaries) if summaries else "aucun effet"
+    logger.debug(
+        "Legendary action: %s spends %d point(s) on %s",
+        boss.name,
+        action.cost,
+        action.name,
+    )
+    # Player-facing summary, posted verbatim in the combat channel:
+    # clean French, no internal tags (audit H14).
+    return f"{boss.name} utilise {action.name} : {joined}"
