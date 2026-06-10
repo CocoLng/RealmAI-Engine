@@ -330,3 +330,41 @@ class TestExecuteActionPlan:
         execute_action_plan(goblin, plan, state, location=None)
 
         assert goblin.action_budget.action_used is True
+
+
+class TestExecuteSignatureBudget:
+    """An exhausted signature must not fire at execution time (audit H19)."""
+
+    def test_exhausted_signature_does_not_execute(self) -> None:
+        from engine.npc_stat_block import SignatureAbility, SignatureAbilityEffect
+
+        goblin = _make_melee_goblin()
+        assert goblin.stat_block is not None
+        goblin.stat_block.signature_abilities.append(
+            SignatureAbility(
+                name="Nuke",
+                description="Once per combat, in theory.",
+                usage="per_combat",
+                uses_remaining=0,
+                effects=[
+                    SignatureAbilityEffect(
+                        kind="damage",
+                        dice="10d12",
+                        damage_type=DamageType.FIRE,
+                    ),
+                ],
+            )
+        )
+        pc = _make_pc("Thorin", hp=20)
+        state = _make_zoneless_state([goblin, pc])
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            signature_name="Nuke",
+            rationale="spam attempt",
+        )
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert "no uses remaining" in summary
+        assert pc.character.hp == 20  # effect did not fire

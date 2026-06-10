@@ -13,7 +13,7 @@ Pure Python, no LLM calls.
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from engine.inventory import DamageType
 
@@ -125,6 +125,19 @@ class SignatureAbility(BaseModel):
     is_reaction: bool = False
     action_cost: ActionCost = "action"
     effects: list[SignatureAbilityEffect] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _default_limited_uses(self) -> "SignatureAbility":
+        """Give limited-usage signatures a concrete budget (audit H19).
+
+        LLM-generated stat blocks routinely omit ``uses_remaining``. The
+        executor only decrements integers, so ``None`` on a per_combat /
+        per_day signature meant unlimited uses. ``0`` is preserved — that
+        is how phase-locked signatures are represented before unlock.
+        """
+        if self.usage in ("per_combat", "per_day") and self.uses_remaining is None:
+            self.uses_remaining = 1
+        return self
 
 
 class LegendaryAction(BaseModel):

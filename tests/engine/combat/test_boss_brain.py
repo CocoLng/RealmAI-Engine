@@ -36,6 +36,8 @@ from engine.npc_stat_block import (
     SignatureAbilityEffect,
 )
 from engine.validators import ActionType
+from world.combat_zone import Zone
+from world.location import Location
 
 
 # ---------------------------------------------------------------------------
@@ -241,3 +243,376 @@ class TestDecisionToPlanMapping:
         )
         assert dodge.action_type == ActionType.DEFEND
         assert disengage.action_type == ActionType.DEFEND
+
+
+# ---------------------------------------------------------------------------
+# Engine-side decision validation (audit H19)
+# ---------------------------------------------------------------------------
+
+
+def _make_linear_location(zone_count: int = 3) -> Location:
+    """Build a Location with a chain of zones: Z1 - Z2 - Z3 - ..."""
+    zones: list[Zone] = []
+    for i in range(1, zone_count + 1):
+        neighbours: list[str] = []
+        if i > 1:
+            neighbours.append(f"Z{i - 1}")
+        if i < zone_count:
+            neighbours.append(f"Z{i + 1}")
+        zones.append(
+            Zone(
+                name=f"Z{i}",
+                description=f"Zone {i}",
+                adjacent_zone_names=neighbours,
+            )
+        )
+    return Location(name="Arena", combat_zones=zones)
+
+
+def _make_boss_ally(name: str = "Acolyte") -> Combatant:
+    """A living minion on the boss's side (ENEMY)."""
+    ally = _make_pc(name)
+    return ally.model_copy(update={"side": CombatSide.ENEMY})
+
+
+def _attack(target: str, weapon: str = "Greataxe") -> TacticalDecision:
+    return TacticalDecision(
+        action_type="attack",
+        target_name=target,
+        weapon_name=weapon,
+        reasoning="Validation test decision.",
+    )
+
+
+class TestDecisionValidationTargets:
+    """The engine rejects decisions aimed at dead / fled / allied combatants."""
+
+    def test_rejects_dead_target_then_accepts_valid_retry(self) -> None:
+        boss = _make_boss()
+        alive = _make_pc("Thorin")
+        dead = _make_pc("Ghost")
+        dead.is_alive = False
+        state = _state([boss, alive, dead])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [_attack("Ghost"), _attack("Thorin")]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.target_name == "Thorin"
+
+    def test_rejects_fled_target(self) -> None:
+        boss = _make_boss()
+        alive = _make_pc("Thorin")
+        coward = _make_pc("Coward")
+        coward.fled = True
+        state = _state([boss, alive, coward])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [_attack("Coward"), _attack("Thorin")]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.target_name == "Thorin"
+
+    def test_rejects_same_side_target(self) -> None:
+        boss = _make_boss()
+        ally = _make_boss_ally("Acolyte")
+        pc = _make_pc("Thorin")
+        state = _state([boss, ally, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [_attack("Acolyte"), _attack("Thorin")]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.target_name == "Thorin"
+
+    def test_rejects_attack_without_target(self) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        state = _state([boss, pc])
+
+        no_target = TacticalDecision(
+            action_type="attack",
+            weapon_name="Greataxe",
+            reasoning="Swinging at nobody in particular.",
+        )
+        tactician = MagicMock()
+        tactician.decide.side_effect = [no_target, _attack("Thorin")]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.target_name == "Thorin"
+
+    def test_rejects_unknown_target_engine_side(self) -> None:
+        """The engine must not trust the ai-layer name check."""
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [_attack("Nobody"), _attack("Thorin")]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.target_name == "Thorin"
+
+
+class TestDecisionValidationRange:
+    """Melee decisions across zones are rejected — same gate as players."""
+
+    def test_rejects_melee_attack_across_zones(self) -> None:
+        location = _make_linear_location(zone_count=2)
+        boss = _make_boss()
+        boss.current_zone = "Z1"
+        pc = _make_pc("Thorin")
+        pc.current_zone = "Z2"
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [
+            _attack("Thorin", weapon="Greataxe"),
+            _attack("Thorin", weapon="Greataxe"),
+        ]
+
+        plan = decide_boss_action(boss, state, location=location, tactician=tactician)
+
+        # Both attempts invalid → scripted fallback took over.
+        assert tactician.decide.call_count == 2
+        assert "LLM fallback" in plan.rationale
+
+    def test_allows_ranged_attack_across_zones(self) -> None:
+        location = _make_linear_location(zone_count=2)
+        boss = _make_boss()
+        assert boss.stat_block is not None
+        boss.stat_block.attacks.append(
+            NPCAttack(
+                name="Longbow",
+                damage_dice="1d8+2",
+                damage_type=DamageType.PIERCING,
+                to_hit_bonus=5,
+                range_type="ranged",
+                range_value=150,
+            )
+        )
+        boss.current_zone = "Z1"
+        pc = _make_pc("Thorin")
+        pc.current_zone = "Z2"
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.return_value = _attack("Thorin", weapon="Longbow")
+
+        plan = decide_boss_action(boss, state, location=location, tactician=tactician)
+
+        assert tactician.decide.call_count == 1
+        assert plan.weapon_name == "Longbow"
+
+    def test_allows_melee_attack_same_zone(self) -> None:
+        location = _make_linear_location(zone_count=2)
+        boss = _make_boss()
+        boss.current_zone = "Z1"
+        pc = _make_pc("Thorin")
+        pc.current_zone = "Z1"
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.return_value = _attack("Thorin", weapon="Greataxe")
+
+        plan = decide_boss_action(boss, state, location=location, tactician=tactician)
+
+        assert tactician.decide.call_count == 1
+        assert plan.target_name == "Thorin"
+
+    def test_rejects_unknown_weapon_engine_side(self) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [
+            _attack("Thorin", weapon="Excalibur"),
+            _attack("Thorin", weapon="Greataxe"),
+        ]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.weapon_name == "Greataxe"
+
+
+class TestDecisionValidationSignatureBudget:
+    """A signature with no uses left cannot be picked again (audit H19)."""
+
+    def _signature_decision(self, target: str = "Thorin") -> TacticalDecision:
+        return TacticalDecision(
+            action_type="signature",
+            target_name=target,
+            signature_name="Cleave",
+            reasoning="Spamming the once-per-combat nuke.",
+        )
+
+    def test_rejects_signature_out_of_budget(self) -> None:
+        boss = _make_boss()
+        assert boss.stat_block is not None
+        boss.stat_block.signature_abilities[0].uses_remaining = 0
+        pc = _make_pc("Thorin")
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [
+            self._signature_decision(),
+            _attack("Thorin"),
+        ]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.signature_name is None
+        assert plan.weapon_name == "Greataxe"
+
+    def test_allows_signature_with_budget(self) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.return_value = self._signature_decision()
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 1
+        assert plan.signature_name == "Cleave"
+
+    def test_rejects_unknown_signature_engine_side(self) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        state = _state([boss, pc])
+
+        unknown = TacticalDecision(
+            action_type="signature",
+            target_name="Thorin",
+            signature_name="Meteor Swarm",
+            reasoning="Casting a spell I never had.",
+        )
+        tactician = MagicMock()
+        tactician.decide.side_effect = [unknown, _attack("Thorin")]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.signature_name is None
+
+    def test_rejects_harmful_signature_on_ally(self) -> None:
+        boss = _make_boss()
+        ally = _make_boss_ally("Acolyte")
+        pc = _make_pc("Thorin")
+        state = _state([boss, ally, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [
+            self._signature_decision(target="Acolyte"),
+            _attack("Thorin"),
+        ]
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.signature_name is None
+
+    def test_allows_heal_signature_on_ally(self) -> None:
+        boss = _make_boss()
+        assert boss.stat_block is not None
+        boss.stat_block.signature_abilities.append(
+            SignatureAbility(
+                name="Dark Mending",
+                description="Heals an ally with shadow magic.",
+                usage="per_combat",
+                uses_remaining=1,
+                effects=[
+                    SignatureAbilityEffect(kind="heal", dice="2d6"),
+                ],
+            )
+        )
+        ally = _make_boss_ally("Acolyte")
+        ally.character.hp = 5
+        pc = _make_pc("Thorin")
+        state = _state([boss, ally, pc])
+
+        decision = TacticalDecision(
+            action_type="signature",
+            target_name="Acolyte",
+            signature_name="Dark Mending",
+            reasoning="Keeping my acolyte standing.",
+        )
+        tactician = MagicMock()
+        tactician.decide.return_value = decision
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 1
+        assert plan.signature_name == "Dark Mending"
+        assert plan.target_name == "Acolyte"
+
+
+class TestDecisionValidationMove:
+    """Move decisions must point at an existing, adjacent zone."""
+
+    def _move(self, zone: str) -> TacticalDecision:
+        return TacticalDecision(
+            action_type="move",
+            move_to_zone=zone,
+            reasoning="Repositioning for next round.",
+        )
+
+    def test_rejects_unknown_zone(self) -> None:
+        location = _make_linear_location(zone_count=3)
+        boss = _make_boss()
+        boss.current_zone = "Z1"
+        pc = _make_pc("Thorin")
+        pc.current_zone = "Z3"
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [self._move("Atlantis"), self._move("Z2")]
+
+        plan = decide_boss_action(boss, state, location=location, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.move_to_zone == "Z2"
+
+    def test_rejects_non_adjacent_zone(self) -> None:
+        location = _make_linear_location(zone_count=3)
+        boss = _make_boss()
+        boss.current_zone = "Z1"
+        pc = _make_pc("Thorin")
+        pc.current_zone = "Z3"
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.side_effect = [self._move("Z3"), self._move("Z2")]
+
+        plan = decide_boss_action(boss, state, location=location, tactician=tactician)
+
+        assert tactician.decide.call_count == 2
+        assert plan.move_to_zone == "Z2"
+
+    def test_move_without_zones_is_unrestricted(self) -> None:
+        """Zoneless combat: the engine has no map to validate against."""
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        state = _state([boss, pc])
+
+        tactician = MagicMock()
+        tactician.decide.return_value = self._move("anywhere")
+
+        plan = decide_boss_action(boss, state, location=None, tactician=tactician)
+
+        assert tactician.decide.call_count == 1
+        assert plan.action_type == ActionType.MOVE

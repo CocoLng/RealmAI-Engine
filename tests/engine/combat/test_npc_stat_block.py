@@ -257,3 +257,39 @@ class TestNPCWithoutStatBlock:
         )
         assert npc.stat_block is not None
         assert npc.stat_block.archetype == "bandit"
+
+
+# ---------------------------------------------------------------------------
+# Limited-usage default (audit H19)
+# ---------------------------------------------------------------------------
+
+
+class TestSignatureUsesDefault:
+    """per_combat / per_day signatures without an explicit budget get 1 use.
+
+    LLM-generated stat blocks routinely omit ``uses_remaining`` — leaving it
+    ``None`` made the "once per combat" nuke spammable every round, because
+    the executor only decrements integers.
+    """
+
+    def test_per_combat_none_defaults_to_one(self) -> None:
+        sig = SignatureAbility(name="Nuke", usage="per_combat")
+        assert sig.uses_remaining == 1
+
+    def test_per_day_none_defaults_to_one(self) -> None:
+        sig = SignatureAbility(name="Nuke", usage="per_day")
+        assert sig.uses_remaining == 1
+
+    def test_at_will_stays_none(self) -> None:
+        sig = SignatureAbility(name="Jab", usage="at_will")
+        assert sig.uses_remaining is None
+
+    def test_explicit_budget_untouched(self) -> None:
+        sig = SignatureAbility(name="Nuke", usage="per_combat", uses_remaining=2)
+        assert sig.uses_remaining == 2
+
+    def test_zero_budget_untouched(self) -> None:
+        # Phase-locked signatures start at 0 and are unlocked by the
+        # phase-transition engine — the default must not resurrect them.
+        sig = SignatureAbility(name="Locked", usage="per_combat", uses_remaining=0)
+        assert sig.uses_remaining == 0

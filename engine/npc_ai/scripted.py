@@ -202,6 +202,14 @@ def _execute_signature(
             f"{combatant.name} has no signature named {plan.signature_name!r}"
         )
 
+    if signature.uses_remaining == 0:
+        # Budget chokepoint (audit H19): the decision layers filter
+        # exhausted signatures, but a mispointed plan must not fire the
+        # once-per-combat nuke anyway.
+        return (
+            f"{combatant.name} cannot use {signature.name}: no uses remaining"
+        )
+
     target = _find_by_name(plan.target_name, state)
     targets: list[Combatant] = [target] if target is not None else [combatant]
 
