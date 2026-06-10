@@ -7,6 +7,7 @@ builder (colors, titles, optional-field gating).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,6 +33,8 @@ from engine.combat import (
 from engine.conditions import ActiveCondition, ConditionType
 from engine.inventory import DamageType, create_inventory
 from engine.npc_stat_block import NPCAttack, NPCStatBlock, NPCTier
+from world.location import Location
+from world.npc import NPC
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +506,132 @@ class TestFinalizeCombatIdempotence:
         assert s1.killed_enemies == s2.killed_enemies
         assert s1.xp_earned == s2.xp_earned
         assert s1.rounds_taken == s2.rounds_taken
+
+
+# ---------------------------------------------------------------------------
+# finalize_combat — NPC death propagation (audit C4)
+# ---------------------------------------------------------------------------
+
+
+def _world_npc(
+    name: str = "Goblin",
+    *,
+    hp: int = 8,
+    location_name: str = "Clairière",
+) -> NPC:
+    return NPC(
+        name=name,
+        race=Race.HUMAN,
+        ability_scores=AbilityScores(
+            STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10,
+        ),
+        hp=hp,
+        max_hp=max(hp, 1),
+        ac=12,
+        location_name=location_name,
+    )
+
+
+def _live_session(state: CombatState, npcs: list[NPC]) -> object:
+    """Session stand-in with real npcs dict + location (unlike MagicMock)."""
+    location = Location(
+        name="Clairière",
+        npcs_present=[n.name for n in npcs],
+    )
+    return SimpleNamespace(
+        combat_state=state,
+        npcs={n.name: n for n in npcs},
+        current_location=location,
+        campaign=SimpleNamespace(id=""),  # empty id → no facts file write
+        combat_turn_manager=None,
+        story_bible=None,
+    )
+
+
+class TestFinalizeCombatDeathPropagation:
+    def test_killed_enemy_npc_marked_dead_and_removed_from_scene(self) -> None:
+        npc = _world_npc("Goblin")
+        state = _state([_pc(), _kill(_enemy("Goblin"))])
+        session = _live_session(state, [npc])
+
+        finalize_combat(session, CombatEndReason.VICTORY)
+
+        assert npc.is_alive is False
+        assert npc.hp == 0
+        assert "Goblin" not in session.current_location.npcs_present
+        assert "Goblin" not in session.npcs
+
+    def test_surviving_enemy_npc_untouched(self) -> None:
+        npc = _world_npc("Goblin")
+        enemy = _enemy("Goblin")
+        enemy.fled = True  # truce path marks enemies fled, not dead
+        state = _state([_pc(), enemy])
+        session = _live_session(state, [npc])
+
+        finalize_combat(session, CombatEndReason.TRUCE)
+
+        assert npc.is_alive is True
+        assert "Goblin" in session.current_location.npcs_present
+        assert "Goblin" in session.npcs
+
+    def test_friendly_witnesses_not_turned_hostile_by_combat_kill(self) -> None:
+        # Killing a combat enemy is not the murder of a peaceful NPC —
+        # bystanders must not flip HOSTILE (that rule is trivial-kill only).
+        from world.npc import NPCDisposition
+
+        goblin = _world_npc("Goblin")
+        witness = _world_npc("Aubergiste")
+        witness.disposition = NPCDisposition.FRIENDLY
+        state = _state([_pc(), _kill(_enemy("Goblin"))])
+        session = _live_session(state, [goblin, witness])
+
+        finalize_combat(session, CombatEndReason.VICTORY)
+
+        assert witness.disposition == NPCDisposition.FRIENDLY
+
+    def test_second_finalize_does_not_repropagate(self) -> None:
+        npc = _world_npc("Goblin")
+        state = _state([_pc(), _kill(_enemy("Goblin"))])
+        session = _live_session(state, [npc])
+
+        finalize_combat(session, CombatEndReason.VICTORY)
+        # Simulate a respawned same-name NPC; the idempotent second call
+        # must not kill it.
+        respawn = _world_npc("Goblin")
+        session.npcs["Goblin"] = respawn
+        finalize_combat(session, CombatEndReason.VICTORY)
+
+        assert respawn.is_alive is True
+
+    def test_propagation_persists_via_turn_manager_db_factory(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "bot.pipeline.resolve.append_world_fact",
+            lambda **_kw: None,
+        )
+        npc = _world_npc("Goblin")
+        state = _state([_pc(), _kill(_enemy("Goblin"))])
+        session = _live_session(state, [npc])
+        session.campaign = SimpleNamespace(id="camp-c4")
+        db_session = MagicMock()
+        session.combat_turn_manager = SimpleNamespace(
+            db_factory=MagicMock(return_value=db_session),
+        )
+
+        finalize_combat(session, CombatEndReason.VICTORY)
+
+        assert npc.is_alive is False
+        assert db_session.commit.called
+
+    def test_magicmock_session_still_safe(self) -> None:
+        # Legacy callers/tests pass MagicMock sessions — propagation must
+        # not blow up on them.
+        state = _state([_pc(), _kill(_enemy("Goblin"))])
+
+        summary = finalize_combat(_session_with(state), CombatEndReason.VICTORY)
+
+        assert summary.killed_enemies == ["Goblin"]
 
 
 # ---------------------------------------------------------------------------

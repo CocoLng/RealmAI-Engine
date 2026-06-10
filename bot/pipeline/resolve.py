@@ -42,7 +42,7 @@ from world.location import Location
 from world.npc import NPC, NPCDisposition
 
 if TYPE_CHECKING:
-    from engine.combat import Combatant, CombatState, TrivialResolveResult
+    from engine.combat import Combatant, CombatState
     from engine.inventory import Inventory
     from bot.game_session import GameSession
 
@@ -1345,7 +1345,6 @@ def trivial_kill(
         handle_npc_death(
             npc=target_npc,
             killer=attacker_pc,
-            result=result,
             location=location,
             npcs=npcs,
             session=session,
@@ -1391,15 +1390,23 @@ def find_attacker_weapon(
 def handle_npc_death(
     *,
     npc: NPC,
-    killer: Character,
-    result: "TrivialResolveResult",
+    killer: Character | None,
     location: Location | None,
     npcs: dict[str, NPC],
     session: "GameSession | None",
     campaign_id: str,
     db_factory: Any,
+    witnesses_turn_hostile: bool = True,
 ) -> None:
-    """Propagate an NPC death across world state."""
+    """Propagate an NPC death across world state.
+
+    Single shared propagator for both kill paths: the trivial-kill fast
+    path (``killer`` is the attacking PC, witnesses flip HOSTILE — it is
+    the murder of a peaceful NPC) and the full-combat path via
+    :func:`bot.combat_end.finalize_combat` (``killer`` may be ``None``,
+    ``witnesses_turn_hostile=False`` — bystanders don't blame the party
+    for defending itself).
+    """
     # 1. Idempotent kill (trivial_resolve already did it).
     npc.kill()
 
@@ -1411,15 +1418,19 @@ def handle_npc_death(
         ]
     npcs.pop(npc.name, None)
 
-    # 3. Witnesses: friendly NPCs in the same location turn HOSTILE.
+    # 3. Witnesses: friendly NPCs in the same location turn HOSTILE
+    #    (trivial-kill path only — see docstring).
     witnesses_turned: list[NPC] = []
-    for other in list(npcs.values()):
-        if other.disposition in (
-            NPCDisposition.FRIENDLY,
-            NPCDisposition.ALLIED,
-        ):
-            other.disposition = NPCDisposition.HOSTILE
-            witnesses_turned.append(other)
+    if witnesses_turn_hostile:
+        for other in list(npcs.values()):
+            if not other.is_alive:
+                continue
+            if other.disposition in (
+                NPCDisposition.FRIENDLY,
+                NPCDisposition.ALLIED,
+            ):
+                other.disposition = NPCDisposition.HOSTILE
+                witnesses_turned.append(other)
 
     # 4. Persist DB state if a db_factory is wired.
     if db_factory is not None:
@@ -1446,25 +1457,28 @@ def handle_npc_death(
             campaign_id,
         )
 
-    # 6. Story bible event line.
+    # 6. Story bible event line. "MEURTRE" is the trivial-kill wording
+    #    (cutting down a peaceful NPC); combat deaths are plain casualties.
+    killer_label = killer.name if killer is not None else "Le groupe"
+    event_label = "MEURTRE" if witnesses_turn_hostile else "MORT AU COMBAT"
     if (
         session is not None
         and session.story_bible is not None
     ):
         try:
             session.story_bible.log_event(
-                f"⚔️ MEURTRE — {killer.name} a tué {npc.name} "
+                f"⚔️ {event_label} — {killer_label} a tué {npc.name} "
                 f"dans {location.name if location else 'un lieu inconnu'}.",
             )
         except Exception:
             logger.exception(
-                "TRIVIAL_KILL story bible log failed campaign=%s",
+                "NPC_DEATH story bible log failed campaign=%s",
                 campaign_id,
             )
 
     logger.info(
         "NPC killed campaign=%s npc=%s killer=%s witnesses_turned_hostile=%d",
-        campaign_id, npc.name, killer.name, len(witnesses_turned),
+        campaign_id, npc.name, killer_label, len(witnesses_turned),
     )
 
 
@@ -1497,7 +1511,7 @@ def persist_death(
 
 def append_world_fact(
     *,
-    killer: Character,
+    killer: Character | None,
     victim: NPC,
     location: Location | None,
     campaign_id: str,
@@ -1508,5 +1522,6 @@ def append_world_fact(
     path = Path("logs/campaigns") / f"{campaign_id}_facts.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     loc_name = location.name if location is not None else "lieu inconnu"
+    killer_label = killer.name if killer is not None else "Le groupe"
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(f"- {killer.name} a tué {victim.name} dans {loc_name}.\n")
+        fh.write(f"- {killer_label} a tué {victim.name} dans {loc_name}.\n")

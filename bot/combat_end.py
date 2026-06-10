@@ -121,6 +121,7 @@ def finalize_combat(
     level_ups = _apply_xp_to_survivors(state, summary.xp_earned)
     summary.level_ups = level_ups
     _cleanup_combat_state(session, state)
+    _propagate_enemy_deaths(session, state)
 
     state._finalized = True
 
@@ -229,6 +230,75 @@ def _apply_xp_to_survivors(
         if check_level_up(c.character):
             level_ups.append(c.name)
     return level_ups
+
+
+def _propagate_enemy_deaths(
+    session: "GameSession", state: CombatState,
+) -> None:
+    """Mark world-level NPCs killed in this encounter as dead (audit C4).
+
+    ``build_npc_combatant`` copies each NPC into a fresh ``Character`` —
+    combat damage and death only touch the copy. Without this hook the
+    defeated boss stays alive at full HP, listed in ``npcs_present``, and
+    answers TALK. Delegates to the shared
+    :func:`bot.pipeline.resolve.handle_npc_death` propagator (same one
+    the trivial-kill path uses), with ``witnesses_turn_hostile=False``
+    because a combat casualty is not the murder of a peaceful NPC.
+
+    Persistence uses the TurnManager's ``db_factory`` when one is wired
+    on the session (live flow); otherwise the in-memory propagation alone
+    keeps the scene coherent and the next checkpoint persists it.
+
+    Defensive about session shape: legacy tests pass ``MagicMock``
+    sessions — anything without a real ``npcs`` dict is skipped.
+    """
+    # Local import: resolve.py imports finalize_combat (locally) too —
+    # keeping both imports function-scoped avoids any import-order cycle.
+    from bot.pipeline.resolve import handle_npc_death
+    from world.location import Location
+    from world.npc import NPC
+
+    npcs = getattr(session, "npcs", None)
+    if not isinstance(npcs, dict):
+        return
+
+    location = getattr(session, "current_location", None)
+    if not isinstance(location, Location):
+        location = None
+    campaign_id = str(getattr(getattr(session, "campaign", None), "id", "") or "")
+    turn_manager = getattr(session, "combat_turn_manager", None)
+    db_factory = getattr(turn_manager, "db_factory", None)
+
+    killer = next(
+        (
+            c.character for c in state.combatants
+            if c.side == CombatSide.PLAYER and c.is_alive and not c.fled
+        ),
+        None,
+    )
+
+    for combatant in state.combatants:
+        if combatant.side != CombatSide.ENEMY or combatant.is_alive:
+            continue
+        npc = npcs.get(combatant.name)
+        if not isinstance(npc, NPC) or not npc.is_alive:
+            continue  # unknown to the session, or already propagated
+        try:
+            handle_npc_death(
+                npc=npc,
+                killer=killer,
+                location=location,
+                npcs=npcs,
+                session=session,
+                campaign_id=campaign_id,
+                db_factory=db_factory,
+                witnesses_turn_hostile=False,
+            )
+        except Exception:
+            logger.exception(
+                "Combat-end death propagation failed npc=%s campaign=%s",
+                combatant.name, campaign_id,
+            )
 
 
 def _cleanup_combat_state(
