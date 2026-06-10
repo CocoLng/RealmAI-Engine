@@ -769,3 +769,39 @@ class TestWorldGeneratorIndexing:
         )
 
         indexer.index_location.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Slim generation (chantier I / H8 latency)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_caps_output_tokens(
+    httpx_mock: HTTPXMock, generator: WorldGenerator,
+) -> None:
+    """The location call must carry a hard num_predict cap, not -1/unlimited.
+
+    Baseline (real logs): 992 output tokens at ~12 tok/s = 80 s per
+    location. The cap bounds runaway generations; the prompt's brevity
+    rules do the actual shrinking.
+    """
+    import json as _json
+
+    response_data = {
+        "name": "La Halle aux Brumes",
+        "description": "Une halle couverte noyée de brume.",
+        "connections": [],
+        "npcs_present": [],
+        "items_available": [],
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    generator.generate(
+        campaign_context="Un port fluvial sous le brouillard.",
+        location_type="market",
+    )
+
+    request = httpx_mock.get_requests()[-1]
+    payload = _json.loads(request.content)
+    assert payload["options"]["num_predict"] == WorldGenerator.NUM_PREDICT_CAP
+    assert WorldGenerator.NUM_PREDICT_CAP > 0
