@@ -799,6 +799,87 @@ class TestSettings:
 
 
 # ---------------------------------------------------------------------------
+# Lobby launch re-entrance (M2)
+# ---------------------------------------------------------------------------
+
+
+class TestLobbyLaunchReentrance:
+    """M2 — double-clicking Démarrer must not launch the campaign twice."""
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_session_channel")
+    async def test_double_click_launches_once(
+        self,
+        mock_create_channel: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        import asyncio
+
+        from bot.lobby_state import LobbyPlayerStatus
+
+        channel = AsyncMock()
+        channel.id = 999_001
+        channel.name = "aventure"
+        channel.mention = "#aventure"
+        channel.send = AsyncMock(return_value=AsyncMock())
+        mock_create_channel.return_value = channel
+
+        with patch.object(
+            SessionCog, "_pregenerate_campaign_world", new=AsyncMock(),
+        ):
+            await cog.start_campaign.callback(  # type: ignore[call-arg, arg-type]
+                cog, interaction, "Theme sombre",
+            )
+
+        lobby = cog.bot.lobbies[channel.id]
+        lobby.add_player(USER_ID)
+        record = lobby.players[USER_ID]
+        record.character = create_character(
+            "Hero", Race.HUMAN, CharacterClass.FIGHTER,
+            AbilityScores(STR=16, DEX=12, CON=14, INT=10, WIS=13, CHA=8),
+        )
+        record.inventory = create_inventory()
+        record.status = LobbyPlayerStatus.READY
+
+        view = channel.send.call_args_list[0].kwargs["view"]
+
+        launch_started = asyncio.Event()
+        launch_release = asyncio.Event()
+        launch_calls: list[int] = []
+
+        async def slow_launch(**kwargs: object) -> None:
+            launch_calls.append(1)
+            if len(launch_calls) == 1:
+                launch_started.set()
+                await launch_release.wait()
+
+        def make_click() -> AsyncMock:
+            click = AsyncMock()
+            click.user = MagicMock()
+            click.user.id = USER_ID  # the host
+            click.response = AsyncMock()
+            click.response.is_done = MagicMock(return_value=False)
+            return click
+
+        with patch.object(cog, "_launch_campaign_from_lobby", side_effect=slow_launch):
+            first = asyncio.create_task(view._on_launch(make_click(), view))
+            await launch_started.wait()
+
+            second_click = make_click()
+            await view._on_launch(second_click, view)  # double-click mid-launch
+
+            launch_release.set()
+            await first
+
+        assert len(launch_calls) == 1
+        # The second click got an ephemeral "already launching" notice.
+        second_click.response.send_message.assert_called_once()
+        assert second_click.response.send_message.call_args[1].get("ephemeral") is True
+
+
+# ---------------------------------------------------------------------------
 # Round-trip integration tests (real in-memory SQLite, no mocks)
 # ---------------------------------------------------------------------------
 

@@ -340,6 +340,12 @@ class SessionCog(commands.Cog):
             modal = IdentityModal(parent_view=flow)
             await inter.response.send_modal(modal)
 
+        # M2 — re-entrance guard for the Démarrer button. Checked and set
+        # synchronously (no await in between) so a double-click cannot run
+        # the launch sequence twice. Reset only if the launch fails, so the
+        # host can retry; on success the lobby is gone anyway.
+        launch_in_flight = False
+
         async def on_launch(
             inter: discord.Interaction, lobby_view: LobbyView,
         ) -> None:
@@ -348,6 +354,7 @@ class SessionCog(commands.Cog):
             Host-only is enforced upstream by ``LobbyView.launch`` — defensive
             check kept here so direct callers (test bridge, etc.) can't bypass.
             """
+            nonlocal launch_in_flight
             from bot.lobby_state import GenerationPhase
 
             if inter.user.id != creator_id:
@@ -357,6 +364,14 @@ class SessionCog(commands.Cog):
                         "Seul le host peut démarrer la campagne.", ephemeral=True,
                     )
                 return
+
+            if launch_in_flight:
+                if not inter.response.is_done():
+                    await inter.response.send_message(
+                        "Le lancement est déjà en cours...", ephemeral=True,
+                    )
+                return
+            launch_in_flight = True
 
             try:
                 await inter.response.defer()
@@ -372,6 +387,7 @@ class SessionCog(commands.Cog):
             if not ready:
                 # Should be blocked by has_any_ready, but be defensive
                 logger.warning("on_launch called with no ready players")
+                launch_in_flight = False
                 return
 
             assert channel is not None
@@ -412,14 +428,19 @@ class SessionCog(commands.Cog):
                 except discord.HTTPException:
                     pass
 
-            await self._launch_campaign_from_lobby(
-                channel=channel,
-                campaign=campaign,
-                lobby=lobby,
-                ready_players=ready,
-                language=language,
-                lobby_view=lobby_view,
-            )
+            try:
+                await self._launch_campaign_from_lobby(
+                    channel=channel,
+                    campaign=campaign,
+                    lobby=lobby,
+                    ready_players=ready,
+                    language=language,
+                    lobby_view=lobby_view,
+                )
+            except BaseException:
+                # Failed launch — let the host click Démarrer again.
+                launch_in_flight = False
+                raise
 
         # Build view + post lobby
         lobby_view = LobbyView(
