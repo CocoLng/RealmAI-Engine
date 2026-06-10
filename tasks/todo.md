@@ -493,3 +493,20 @@ ici au merge.
 
 Ordre de merge recommandé : A → B → C → D → E → F → G → I → H
 (chaque chantier rebase sur main avant finalisation).
+
+## Reliquat H14 — résumés NPC français (2026-06-10)
+
+- [x] `engine/npc_ai/scripted.py` : résumés `execute_action_plan` traduits en
+      français propre (« X esquive », « X touche Y avec Z — N dégâts »,
+      « X utilise Y : ... », fallback « aucun effet »). Branches dégradées
+      (cible/arme/signature inconnue, ActionType non géré) : diagnostic repr
+      au log, ligne générique française côté joueur. TDD :
+      `TestExecutionSummariesFrench` (12 tests) dans
+      `tests/engine/combat/test_npc_ai_scripted.py`. Commit
+      `fix(combat-npc): clean French summaries for scripted minion executor`
+      (branche feat/h8-latency). pytest 2566 passed, ruff + mypy OK.
+- [ ] `engine/npc_ai/legendary.py:133` : MÊME bug encore présent —
+      `"[LEGENDARY] X uses Y: ..."` posté verbatim par
+      `combat_turn_manager._flush_pending_cues` (`⚡ {cue}`, ligne ~687) SANS
+      `_strip_internal_tags`. Tag interne + anglais visibles joueur.
+      Tâche spawnée (chip « Traduire les résumés legendary actions »).
