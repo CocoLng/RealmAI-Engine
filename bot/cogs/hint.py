@@ -116,8 +116,9 @@ class HintCog(commands.Cog):
             )
             return
 
-        # Level 3: cooldown check first.
-        current_turn = getattr(session, "interaction_count", 0) or 0
+        # Level 3: cooldown check first. The turn counter lives on the
+        # Campaign model, NOT on GameSession.
+        current_turn = getattr(session.campaign, "interaction_count", 0) or 0
         cooldown = 5
         if (
             row.level3_last_used_turn is not None
@@ -191,7 +192,9 @@ class HintCog(commands.Cog):
             npcs_present=[],
         )
         judge = self._build_judge(session)
-        judge.begin_turn(turn_id=f"hint-{getattr(session, 'interaction_count', 0)}")
+        judge.begin_turn(
+            turn_id=f"hint-{getattr(session.campaign, 'interaction_count', 0)}",
+        )
         resp = judge.evaluate(req)
         if resp.suggested_next_action:
             return (

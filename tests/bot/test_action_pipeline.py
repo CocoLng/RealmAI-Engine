@@ -650,6 +650,8 @@ def _make_session_with_arc(location, story_arc):
     session.combat_state = None
     session.inventory = None
     session.interaction_count = 0
+    # M1: the real turn counter lives on the Campaign model.
+    session.campaign.interaction_count = 0
     # Disable agents/generators that would otherwise be MagicMocks and
     # short-circuit the _resolve_talk path down the cheap no-agent branch.
     session.npc_agent = None

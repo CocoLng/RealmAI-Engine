@@ -471,6 +471,8 @@ class TestImproviseSkillCheckThroughPipeline:
         session.story_arc = None
         session.semantic_indexer = None
         session.interaction_count = 0
+        # M1: the real turn counter lives on the Campaign model.
+        session.campaign.interaction_count = 0
         session.language = "fr"
         session.npc_agent = None
         session.npc_generator = None

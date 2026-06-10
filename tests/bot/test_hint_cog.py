@@ -94,7 +94,9 @@ async def test_level3_cooldown_blocks(cog: HintCog, monkeypatch: pytest.MonkeyPa
     fake_session.story_arc.beats = [fake_beat] * 5
     fake_session.story_arc.current_beat_index = 0
     fake_session.campaign.id = "c1"
-    fake_session.interaction_count = 12  # current turn
+    # M1: the turn counter lives on campaign — GameSession has no such field.
+    fake_session.campaign.interaction_count = 12  # current turn
+    fake_session.interaction_count = 0  # stale attr the buggy getattr used to read
 
     monkeypatch.setattr(cog, "_get_session", lambda channel_id: fake_session)
 
@@ -109,6 +111,56 @@ async def test_level3_cooldown_blocks(cog: HintCog, monkeypatch: pytest.MonkeyPa
 
     sent_text = interaction.response.send_message.call_args[0][0]
     assert "indisponible" in sent_text.lower() or "cooldown" in sent_text.lower()
+
+
+async def test_level3_unlocks_when_campaign_cooldown_expired(
+    cog: HintCog, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1 regression: level 3 must come back once campaign.interaction_count
+    moves past the cooldown. With the bug (counter read on GameSession,
+    always 0) level 3 stayed locked forever."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    interaction.channel_id = 123
+
+    fake_beat = MagicMock(
+        player_visible_hint="vague", description="...", beat_number=1,
+        title="Beat", judge_rubric=None,
+    )
+    fake_beat.objectives = []
+    fake_session = MagicMock()
+    fake_session.story_arc.beats = [fake_beat] * 5
+    fake_session.story_arc.current_beat_index = 0
+    fake_session.campaign.id = "c1"
+    fake_session.campaign.interaction_count = 15  # cooldown of 5 expired (used at 10)
+    fake_session.interaction_count = 0  # stale attr — must NOT be read
+    fake_session.current_location.name = "Forge"
+
+    monkeypatch.setattr(cog, "_get_session", lambda channel_id: fake_session)
+
+    fake_repo = MagicMock()
+    fake_repo.get_or_create.return_value = MagicMock(
+        level1_uses=1, level2_used=True, level3_last_used_turn=10,
+    )
+    monkeypatch.setattr(cog, "_get_repo", lambda: fake_repo)
+
+    fake_judge = MagicMock()
+    fake_judge.evaluate.return_value = MagicMock(
+        suggested_next_action="Parle au forgeron", reasoning="...",
+    )
+    monkeypatch.setattr(cog, "_build_judge", lambda session: fake_judge)
+
+    await cog.hint.callback(cog, interaction)
+
+    interaction.followup.send.assert_called_once()
+    sent_text = interaction.followup.send.call_args[0][0]
+    assert "forgeron" in sent_text
+    # The cooldown stamp must record the CAMPAIGN turn, not the stale 0.
+    fake_repo.set_level3_last_used_turn.assert_called_once_with(
+        campaign_id="c1", beat_number=1, turn=15,
+    )
 
 
 async def test_no_active_session_returns_friendly_error(cog: HintCog, monkeypatch: pytest.MonkeyPatch) -> None:

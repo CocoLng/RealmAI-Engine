@@ -660,7 +660,10 @@ class PipelineRunner:
         combat_just_ended = self._last_combat_active and not combat_active_now
         self._last_combat_active = combat_active_now
 
-        interaction_count = getattr(self.session, "interaction_count", 0) or 0
+        # The turn counter lives on the Campaign model (incremented by
+        # StoryBibleLogger), NOT on GameSession.
+        _campaign = getattr(self.session, "campaign", None)
+        interaction_count = getattr(_campaign, "interaction_count", 0) or 0
 
         if should_run_director(
             interaction_count=interaction_count,
