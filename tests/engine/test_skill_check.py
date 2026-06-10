@@ -22,7 +22,6 @@ from engine.skill_check import (
     VERY_HARD_DC,
     compute_contest_dc,
     compute_skill_check_dc,
-    infer_difficulty_bias,
     infer_skill_from_text,
 )
 from world.npc import NPC, NPCDisposition
@@ -321,64 +320,6 @@ class TestDCConstants:
 
 
 # ---------------------------------------------------------------------------
-# Difficulty bias from narrative cues
-# ---------------------------------------------------------------------------
-
-
-class TestInferDifficultyBias:
-    """``infer_difficulty_bias`` reads narrative qualifiers that suggest
-    the action is unusually easy or hard."""
-
-    def test_no_qualifier_returns_zero(self) -> None:
-        assert infer_difficulty_bias("Je saute par-dessus la barrière") == 0
-
-    @pytest.mark.parametrize(
-        "text",
-        [
-            "Je tente un petit saut par-dessus le ruisseau",
-            "Un saut facile",
-            "J'essaie un truc simple",
-            "I take an easy leap",
-            "I make a small jump",
-        ],
-    )
-    def test_easy_qualifiers_lower_dc(self, text: str) -> None:
-        assert infer_difficulty_bias(text) < 0
-
-    @pytest.mark.parametrize(
-        "text",
-        [
-            "Je tente un saut risqué par-dessus la crevasse",
-            "Une escalade dangereuse",
-            "Un saut périlleux",
-            "Une persuasion difficile",
-            "I attempt a risky jump",
-            "A hard climb",
-            "A difficult persuasion",
-        ],
-    )
-    def test_hard_qualifiers_raise_dc(self, text: str) -> None:
-        bias = infer_difficulty_bias(text)
-        assert bias > 0
-        # Hard, but not impossible.
-        assert bias < 8
-
-    @pytest.mark.parametrize(
-        "text",
-        [
-            "Une tentative héroïque presque impossible",
-            "Un saut désespéré",
-            "A near impossible feat",
-            "A heroic leap",
-        ],
-    )
-    def test_very_hard_qualifiers_raise_dc_more(self, text: str) -> None:
-        bias = infer_difficulty_bias(text)
-        # Should clearly exceed a "merely hard" action.
-        assert bias >= 5
-
-
-# ---------------------------------------------------------------------------
 # Contested DC against an NPC
 # ---------------------------------------------------------------------------
 
@@ -456,7 +397,12 @@ class TestComputeContestDC:
 
 
 class TestComputeSkillCheckDC:
-    """``compute_skill_check_dc`` composes bias + (NPC contest or default)."""
+    """``compute_skill_check_dc`` derives the DC from engine context only.
+
+    Anti-cheat (audit, low finding): the player's wording must NEVER move
+    the DC — neither down ("facile", "simple") nor up ("héroïque"). Only
+    the NPC contest (stats + disposition) or the static default applies.
+    """
 
     def test_default_dc_when_no_text_and_no_npc(self) -> None:
         # A bare action with no qualifiers and no target → MODERATE_DC.
@@ -472,22 +418,22 @@ class TestComputeSkillCheckDC:
         )
         assert dc == MODERATE_DC
 
-    def test_easy_qualifier_lowers_default(self) -> None:
+    def test_easy_wording_does_not_lower_dc(self) -> None:
+        # "facile" / "petit" used to grant a -2 — a free self-served buff.
         dc = compute_skill_check_dc(
             text="un petit saut facile",
             skill=Skill.ATHLETICS,
             target_npc=None,
         )
-        assert dc < MODERATE_DC
-        assert dc >= VERY_EASY_DC
+        assert dc == MODERATE_DC
 
-    def test_hard_qualifier_raises_default(self) -> None:
+    def test_hard_wording_does_not_raise_dc(self) -> None:
         dc = compute_skill_check_dc(
             text="un saut très risqué",
             skill=Skill.ATHLETICS,
             target_npc=None,
         )
-        assert dc > MODERATE_DC
+        assert dc == MODERATE_DC
 
     def test_npc_contest_used_when_skill_is_contestable(self) -> None:
         npc = _make_npc(wis=16)  # passive perception 13
@@ -499,7 +445,7 @@ class TestComputeSkillCheckDC:
         # No qualifier → contested DC dominates: 13.
         assert dc == 13
 
-    def test_npc_contest_combines_with_difficulty_bias(self) -> None:
+    def test_npc_contest_immune_to_player_wording(self) -> None:
         npc = _make_npc(wis=10)  # passive perception 10
         easy_dc = compute_skill_check_dc(
             text="je vole un petit objet sans difficulté",
@@ -511,17 +457,18 @@ class TestComputeSkillCheckDC:
             skill=Skill.SLEIGHT_OF_HAND,
             target_npc=npc,
         )
-        assert easy_dc < 10 or easy_dc <= 10  # easy bias on top of base 10
-        assert hard_dc > 10
+        # Same NPC, same skill → same DC, whatever the player claims.
+        assert easy_dc == hard_dc == 10
 
-    def test_dc_never_below_very_easy_floor(self) -> None:
-        # Even a near-impossible-easy combo must not yield DC < 5.
+    def test_stacked_easy_adjectives_change_nothing(self) -> None:
+        # Piling on "minuscule, facile, simple" used to drive the DC toward
+        # the floor — now it has zero effect.
         dc = compute_skill_check_dc(
             text="un saut absolument minuscule, vraiment facile et simple",
             skill=Skill.ATHLETICS,
             target_npc=None,
         )
-        assert dc >= VERY_EASY_DC
+        assert dc == MODERATE_DC
 
     def test_uncontested_skill_ignores_npc(self) -> None:
         # Athletics shouldn't contest with the NPC.

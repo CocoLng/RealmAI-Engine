@@ -40,7 +40,6 @@ from engine.character import (
 from engine.dice import D20CheckResult
 from engine.skill_check import (
     DEFAULT_SKILL_DC,
-    HARD_DC,
     MODERATE_DC,
 )
 from engine.validators import ActionType
@@ -406,11 +405,10 @@ class TestImproviseContestedDC:
 
         _, check, _, skill = side.pending_dice_embeds[0]
         assert skill == Skill.ATHLETICS
-        # "Risky" qualifier pushes the DC above the moderate baseline.
-        assert check.dc > MODERATE_DC
-        assert check.dc >= HARD_DC
+        # Anti-cheat: player wording ("risqué") never moves the DC.
+        assert check.dc == MODERATE_DC
 
-    def test_easy_action_lowers_default_dc(self) -> None:
+    def test_easy_action_does_not_lower_default_dc(self) -> None:
         hero = _hero_character("Sage")
         session = _build_session(hero)
         action = InterpretedAction(
@@ -428,7 +426,8 @@ class TestImproviseContestedDC:
         )
 
         _, check, _, _ = side.pending_dice_embeds[0]
-        assert check.dc < MODERATE_DC
+        # Anti-cheat: "facile" used to grant a cheaper check — not anymore.
+        assert check.dc == MODERATE_DC
 
     def test_summary_mentions_contest_target(self) -> None:
         hero = _hero_character()

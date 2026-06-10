@@ -47,7 +47,6 @@ __all__ = [
     "VERY_HARD_DC",
     "compute_contest_dc",
     "compute_skill_check_dc",
-    "infer_difficulty_bias",
     "infer_skill_from_text",
 ]
 
@@ -378,73 +377,6 @@ def infer_skill_from_text(
 # ---------------------------------------------------------------------------
 
 
-# Difficulty qualifier tables. Order matters within a tier — longer
-# phrases are matched first so "presque impossible" beats "impossible".
-# Biases are applied to the base DC (or to a contested DC).
-_BIAS_TABLE: tuple[tuple[int, tuple[str, ...]], ...] = (
-    # Very-hard tier (+8): heroic / desperate / near-impossible.
-    (
-        +8,
-        (
-            "presque impossible", "quasi impossible", "heroique", "desespere",
-            "desesperee", "in extremis",
-            "near impossible", "nearly impossible", "heroic", "desperate",
-        ),
-    ),
-    # Hard tier (+3): risky / dangerous / hard.
-    (
-        +3,
-        (
-            "risque", "risquee", "perilleux", "perilleuse", "dangereux",
-            "dangereuse", "ardu", "ardue", "difficile", "tres difficile",
-            "very risky",
-            "risky", "perilous", "dangerous", "hard", "difficult",
-            "tough",
-        ),
-    ),
-    # Easy tier (-2): small / simple / easy.
-    (
-        -2,
-        (
-            "facile", "tres facile", "simple", "petit", "petite", "leger",
-            "legere", "modeste", "minuscule",
-            "easy", "simple", "small", "light", "minor", "trivial",
-            "trifling",
-        ),
-    ),
-)
-
-
-def infer_difficulty_bias(text: str) -> int:
-    """Read narrative qualifiers and return a DC bias.
-
-    Positive bias means the action sounds harder than baseline (apply
-    on top of the contested or default DC); negative bias means easier.
-    The biases follow the SRD difficulty ladder (Easy 10 / Moderate 12 /
-    Hard 15 / Very Hard 20):
-
-    - Very-hard qualifier (héroïque, désespéré, near impossible) → ``+8``
-    - Hard qualifier (risqué, périlleux, dangerous) → ``+3``
-    - Easy qualifier (petit, facile, simple) → ``-2``
-    - No qualifier → ``0``
-
-    When several tiers match, the highest-impact tier wins (very-hard
-    beats hard beats easy). This avoids "petit saut héroïque" cancelling
-    out — the heroic framing dominates.
-    """
-    text_norm = _normalize(text)
-    if not text_norm:
-        return 0
-    # Walk tiers from largest absolute bias to smallest so a heroic+easy
-    # mention still resolves to "heroic dominates".
-    sorted_tiers = sorted(_BIAS_TABLE, key=lambda tier: abs(tier[0]), reverse=True)
-    for bias, qualifiers in sorted_tiers:
-        for q in qualifiers:
-            if _whole_word_search(text_norm, _normalize(q)):
-                return bias
-    return 0
-
-
 def compute_contest_dc(npc: "NPC", skill: Skill) -> int | None:
     """Return a contested DC for ``skill`` against ``npc``.
 
@@ -483,20 +415,21 @@ def compute_skill_check_dc(
 ) -> int:
     """Top-level DC composer for an improvised skill check.
 
-    Combines:
+    The DC derives from ENGINE CONTEXT ONLY: :data:`DEFAULT_SKILL_DC`
+    when no NPC contest applies, otherwise :func:`compute_contest_dc`
+    (NPC ability score + disposition) for an NPC-contested skill.
 
-    1. The base DC — :data:`DEFAULT_SKILL_DC` if no NPC contest applies,
-       otherwise :func:`compute_contest_dc` for an NPC-contested skill.
-    2. The narrative-qualifier bias from :func:`infer_difficulty_bias`.
+    ``text`` is accepted for call-site compatibility but deliberately
+    never shapes the DC. An earlier version lowered the DC when the
+    player wrote "facile" / "simple" — a free, self-served difficulty
+    buff (anti-cheat audit, low finding). Player wording must never
+    move a mechanical outcome.
 
-    The result is clamped to ``[VERY_EASY_DC, VERY_HARD_DC + 2]`` so
-    a stack of "héroïque" + "très difficile" cannot push the DC past
-    what a level-1 PC could ever reach. Equally, an "easy + small +
-    simple" pile cannot drop below DC 5.
+    The result is clamped to ``[VERY_EASY_DC, VERY_HARD_DC + 2]`` as a
+    safety net for future DC sources.
     """
-    bias = infer_difficulty_bias(text)
+    del text  # player wording must never influence the DC
     base = compute_contest_dc(target_npc, skill) if target_npc is not None else None
     if base is None:
         base = DEFAULT_SKILL_DC
-    raw = base + bias
-    return max(VERY_EASY_DC, min(raw, VERY_HARD_DC + 2))
+    return max(VERY_EASY_DC, min(base, VERY_HARD_DC + 2))
