@@ -81,3 +81,46 @@ class TestDeadNpcViolations:
             npcs_mentioned=[],
         )
         assert violations == []
+
+
+_LONG_SENTENCE = (
+    "Les ombres dansent sur les murs de pierre tandis que la torche "
+    "crachote dans l'air humide de la crypte abandonnée."
+)
+
+
+class TestRepetitionGuard:
+    """Anti-monotony: a narration repeating ≥8 contiguous words from one
+    of the last 2 narrations is flagged (mirrors the simulator's
+    R2.repetition rule)."""
+
+    def test_detects_verbatim_repetition(self) -> None:
+        narration_guard.record_narration("camp-guard", _LONG_SENTENCE)
+        snippet = narration_guard.find_repetition(
+            "camp-guard",
+            "Au détour du couloir, " + _LONG_SENTENCE,
+        )
+        assert snippet is not None
+        assert "ombres dansent" in snippet
+
+    def test_short_overlap_is_fine(self) -> None:
+        narration_guard.record_narration("camp-guard", _LONG_SENTENCE)
+        snippet = narration_guard.find_repetition(
+            "camp-guard",
+            "Les ombres dansent sur le sol, mais tout le reste est différent ici.",
+        )
+        assert snippet is None
+
+    def test_only_last_two_narrations_kept(self) -> None:
+        narration_guard.record_narration("camp-guard", _LONG_SENTENCE)
+        narration_guard.record_narration("camp-guard", "Deuxième narration sans rapport aucun.")
+        narration_guard.record_narration("camp-guard", "Troisième narration tout aussi originale.")
+        # The first narration has rolled out of the 2-entry window
+        assert narration_guard.find_repetition("camp-guard", _LONG_SENTENCE) is None
+
+    def test_unknown_campaign_is_silent(self) -> None:
+        assert narration_guard.find_repetition("camp-inconnu", _LONG_SENTENCE) is None
+
+    def test_empty_narration_not_recorded(self) -> None:
+        narration_guard.record_narration("camp-guard", "   ")
+        assert narration_guard.find_repetition("camp-guard", _LONG_SENTENCE) is None

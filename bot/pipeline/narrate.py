@@ -142,6 +142,9 @@ async def update_memory_after_turn(
     if session is None:
         return
     _sync_locked_facts(session)
+    if narration:
+        from memory import narration_guard
+        narration_guard.record_narration(session.campaign.id, narration)
     if db_factory is None:
         return
     if not player_input and not narration:
@@ -307,7 +310,8 @@ async def call_narrator(
         narrative=result.narrative,
         npcs_mentioned=result.npcs_mentioned,
     )
-    if not violations:
+    repeated = narration_guard.find_repetition(campaign_id, result.narrative)
+    if not violations and repeated is None:
         if result.locked_facts_used:
             logger.info(
                 "NARRATE locked_facts_used campaign=%s ids=%s",
@@ -315,19 +319,33 @@ async def call_narrator(
             )
         return result
 
-    names = ", ".join(violations)
-    logger.warning(
-        "NARRATION guard: dead NPC(s) %s resurrected campaign=%s — retrying once",
-        names, campaign_id,
-    )
-    constraint = (
-        f"CONTRAINTE ABSOLUE (faits verrouillés) : {names} — MORT(S). "
-        "Un personnage mort ne peut ni parler, ni bouger, ni réagir. "
-        "Réécris la narration sans le(s) faire agir ; tu peux au mieux "
-        "mentionner leur cadavre."
-    )
+    constraints: list[str] = []
+    if violations:
+        names = ", ".join(violations)
+        logger.warning(
+            "NARRATION guard: dead NPC(s) %s resurrected campaign=%s — retrying once",
+            names, campaign_id,
+        )
+        constraints.append(
+            f"CONTRAINTE ABSOLUE (faits verrouillés) : {names} — MORT(S). "
+            "Un personnage mort ne peut ni parler, ni bouger, ni réagir. "
+            "Réécris la narration sans le(s) faire agir ; tu peux au mieux "
+            "mentionner leur cadavre."
+        )
+    if repeated is not None:
+        logger.warning(
+            "NARRATION guard: repetition %r campaign=%s — retrying once",
+            repeated[:80], campaign_id,
+        )
+        constraints.append(
+            "CONTRAINTE DE VARIATION : ta narration répète presque mot pour "
+            f"mot un passage récent (« {repeated[:120]} »). Reformule avec "
+            "des images, un rythme et un vocabulaire différents, sans "
+            "changer les faits."
+        )
+    amended = "\n\n".join([outcome.summary, *constraints])
     return await retry_llm_call(
-        lambda: _do(f"{outcome.summary}\n\n{constraint}"),
+        lambda: _do(amended),
         log_label=f"ACTION campaign={campaign_id} narrate-guard-retry",
     )
 

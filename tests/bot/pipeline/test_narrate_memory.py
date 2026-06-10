@@ -444,6 +444,61 @@ class TestLockedFactsFlow:
         narration_guard.reset("camp-guard-loop")
 
 
+class TestAntiMonotonyFlow:
+    """A narration that near-verbatim repeats one of the last 2 gets ONE
+    corrective retry asking for variation."""
+
+    _REPEATED = (
+        "Les ombres dansent sur les murs de pierre tandis que la torche "
+        "crachote dans l'air humide de la crypte."
+    )
+
+    @pytest.mark.asyncio
+    async def test_call_narrator_retries_on_repetition(self) -> None:
+        from ai.models import MechanicsOutcome
+        from memory import narration_guard
+
+        narration_guard.reset("camp-mono")
+        narration_guard.record_narration("camp-mono", self._REPEATED)
+        narrator = FakeNarrator(responses=[
+            NarrativeResult(narrative="Encore une fois, " + self._REPEATED, tone="tense"),
+            NarrativeResult(narrative="Un froid nouveau vous saisit.", tone="somber"),
+        ])
+
+        result = await narrate.call_narrator(
+            narrator=narrator,  # type: ignore[arg-type]
+            outcome=MechanicsOutcome(summary="Le joueur avance."),
+            context_prompt="## Location\nCrypte",
+            language="fr",
+            campaign_id="camp-mono",
+        )
+
+        assert len(narrator.calls) == 2
+        assert "VARIATION" in narrator.calls[1]["action_result_text"]
+        assert result.narrative == "Un froid nouveau vous saisit."
+        narration_guard.reset("camp-mono")
+
+    @pytest.mark.asyncio
+    async def test_hook_records_narration_for_guard(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        from memory import narration_guard
+
+        narration_guard.reset("camp-mem-1")
+        await narrate.update_memory_after_turn(
+            session=game_session,
+            db_factory=thread_safe_db_factory,
+            player_input="j'avance",
+            narration=self._REPEATED,
+        )
+
+        snippet = narration_guard.find_repetition(
+            "camp-mem-1", "Soudain, " + self._REPEATED,
+        )
+        assert snippet is not None
+        narration_guard.reset("camp-mem-1")
+
+
 class TestRagReadPath:
     """The hook queries semantic memory with the turn's text and the
     cached context surfaces the relevant lore (audit H9d)."""
