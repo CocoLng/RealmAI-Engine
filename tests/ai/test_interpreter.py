@@ -5,7 +5,7 @@ import json
 import pytest
 from pytest_httpx import HTTPXMock
 
-from ai.client import OllamaClient
+from ai.client import LLMParseError, OllamaClient
 from ai.interpreter import Interpreter
 from ai.models import InterpretedAction
 from ai.scene_context import SceneContext
@@ -327,45 +327,32 @@ def test_interpret_improvise_creative_action(
 
 
 # ---------------------------------------------------------------------------
-# Fallbacks
+# Parse failures raise so bot.llm_retry can retry (H11)
 # ---------------------------------------------------------------------------
 
 
-def test_invalid_json_falls_back_to_improvise_in_exploration(
-    httpx_mock: HTTPXMock,
-    interpreter: Interpreter,
-    cathedral_scene: SceneContext,
-) -> None:
-    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("not JSON"))
-
-    result = interpreter.interpret(
-        player_text="uhhhh idk",
-        actor_name="Aldric",
-        scene_context=cathedral_scene,
-    )
-    assert result.action_type == ActionType.IMPROVISE
-    assert result.confidence == 0.0
-    assert result.raw_input == "uhhhh idk"
-    assert result.improvise_description == "uhhhh idk"
-
-
-def test_invalid_json_falls_back_to_defend_in_combat(
+def test_invalid_json_raises_llm_parse_error(
     httpx_mock: HTTPXMock,
     interpreter: Interpreter,
     combat_scene: SceneContext,
 ) -> None:
+    """A non-JSON 4b hiccup must RAISE, not silently return DEFEND.
+
+    retry_llm_call only retries on raised exceptions — a swallowed parse
+    error used to turn « j'attaque » into a defensive stance with the turn
+    consumed and no message (H11).
+    """
     httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("not JSON"))
 
-    result = interpreter.interpret(
-        player_text="uhhhh",
-        actor_name="Thorin",
-        scene_context=combat_scene,
-    )
-    assert result.action_type == ActionType.DEFEND
-    assert result.confidence == 0.0
+    with pytest.raises(LLMParseError):
+        interpreter.interpret(
+            player_text="j'attaque le gobelin",
+            actor_name="Thorin",
+            scene_context=combat_scene,
+        )
 
 
-def test_invalid_action_type_falls_back(
+def test_unknown_action_type_raises_llm_parse_error(
     httpx_mock: HTTPXMock,
     interpreter: Interpreter,
     cathedral_scene: SceneContext,
@@ -373,17 +360,125 @@ def test_invalid_action_type_falls_back(
     httpx_mock.add_response(
         url=CHAT_URL,
         json=make_ollama_response(
-            {"action_type": "INVALID_ACTION", "actor_name": "Aldric", "confidence": 0.5},
+            {"action_type": "Backflip", "actor_name": "Aldric", "confidence": 0.5},
+        ),
+    )
+
+    with pytest.raises(LLMParseError):
+        interpreter.interpret(
+            player_text="do something",
+            actor_name="Aldric",
+            scene_context=cathedral_scene,
+        )
+
+
+def test_non_dict_payload_raises_llm_parse_error(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """json.loads can return a bare list — interpret must reject it."""
+    httpx_mock.add_response(
+        url=CHAT_URL, json=make_ollama_response('["not", "a", "dict"]'),
+    )
+
+    with pytest.raises(LLMParseError):
+        interpreter.interpret(
+            player_text="je regarde",
+            actor_name="Aldric",
+            scene_context=cathedral_scene,
+        )
+
+
+def test_unbuildable_action_raises_llm_parse_error(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """Garbage field types (confidence as prose) raise instead of DEFEND."""
+    httpx_mock.add_response(
+        url=CHAT_URL,
+        json=make_ollama_response(
+            {"action_type": "Look", "actor_name": "Aldric", "confidence": "très haute"},
+        ),
+    )
+
+    with pytest.raises(LLMParseError):
+        interpreter.interpret(
+            player_text="je regarde",
+            actor_name="Aldric",
+            scene_context=cathedral_scene,
+        )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("attack", ActionType.ATTACK),
+        ("ATTACK", ActionType.ATTACK),
+        ("cast spell", ActionType.CAST_SPELL),
+        ("Cast_Spell", ActionType.CAST_SPELL),
+        ("pick up", ActionType.PICKUP),
+        ("question", ActionType.QUESTION),
+    ],
+)
+def test_action_type_lookup_is_case_insensitive(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    combat_scene: SceneContext,
+    raw: str,
+    expected: ActionType,
+) -> None:
+    """The 4b model often emits lowercase/underscored action types."""
+    httpx_mock.add_response(
+        url=CHAT_URL,
+        json=make_ollama_response(
+            {"action_type": raw, "actor_name": "Thorin", "confidence": 0.9},
         ),
     )
 
     result = interpreter.interpret(
-        player_text="do something",
-        actor_name="Aldric",
-        scene_context=cathedral_scene,
+        player_text="action",
+        actor_name="Thorin",
+        scene_context=combat_scene,
     )
-    assert result.action_type == ActionType.IMPROVISE
-    assert result.confidence == 0.0
+    assert result.action_type == expected
+
+
+async def test_retry_llm_call_retries_interpret_parse_failures(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    combat_scene: SceneContext,
+) -> None:
+    """End-to-end H11 contract: a 4b hiccup is retried, not converted
+    into a silent DEFEND. Two bad responses then a good one → success."""
+    from bot.llm_retry import retry_llm_call
+
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("garbled"))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response("still garbled"))
+    httpx_mock.add_response(
+        url=CHAT_URL,
+        json=make_ollama_response(
+            {
+                "action_type": "Attack",
+                "actor_name": "Thorin",
+                "target_name": "Goblin",
+                "confidence": 0.9,
+            },
+        ),
+    )
+
+    result = await retry_llm_call(
+        lambda: interpreter.interpret(
+            player_text="j'attaque le gobelin",
+            actor_name="Thorin",
+            scene_context=combat_scene,
+        ),
+        delays=(0.0, 0.0),
+        log_label="test interpret",
+    )
+    assert result.action_type == ActionType.ATTACK
+    assert result.target_name == "Goblin"
 
 
 # ---------------------------------------------------------------------------
