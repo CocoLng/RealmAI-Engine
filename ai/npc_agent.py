@@ -27,6 +27,9 @@ class NPCAgent:
 
     MODEL = "qwen3.5:4b"
 
+    NUM_PREDICT = 512
+    """Generation cap — 1-3 sentences of dialogue plus reveal list (M7)."""
+
     def __init__(self, client: OllamaClient) -> None:
         self._client = client
 
@@ -65,7 +68,9 @@ class NPCAgent:
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.7)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.7, num_predict=self.NUM_PREDICT,
+        )
         response = NPCResponse(
             dialogue=str(data.get("dialogue", "")),
             disposition_change=int(data.get("disposition_change", 0)),

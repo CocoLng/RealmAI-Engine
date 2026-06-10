@@ -805,3 +805,20 @@ class TestPlayerIntentDelimiting:
         assert PLAYER_INPUT_CLOSE in user_msg
         inner = user_msg.split(PLAYER_INPUT_OPEN, 1)[1].split(PLAYER_INPUT_CLOSE, 1)[0]
         assert "#" not in inner
+
+
+def test_narrator_caps_generation_tokens():
+    """M7 — num_predict was -1 (unbounded); the narrator must cap it."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.chat_json.return_value = {
+        "narrative": "Une narration suffisamment longue pour franchir le seuil des cinquante caractères.",
+        "tone": "dramatic",
+    }
+    narrator = Narrator(client)
+    narrator.narrate(action_result_text="Action.", context_prompt="Context.")
+
+    _args, kwargs = narrator._client.chat_json.call_args
+    assert kwargs.get("num_predict") == Narrator.NUM_PREDICT
+    assert Narrator.NUM_PREDICT > 0

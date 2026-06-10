@@ -153,6 +153,10 @@ class Narrator:
 
     MODEL = "qwen3.5:9b"
 
+    NUM_PREDICT = 1024
+    """Generation cap — 2-4 sentences plus JSON meta fields never need
+    more; unbounded output (-1) used to overflow the Discord embed (M7)."""
+
     def __init__(self, client: OllamaClient) -> None:
         self._client = client
 
@@ -277,7 +281,9 @@ class Narrator:
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.8)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.8, num_predict=self.NUM_PREDICT,
+        )
         if not isinstance(data, dict):
             raise LLMParseError(
                 f"narrator payload is {type(data).__name__}, expected JSON object",

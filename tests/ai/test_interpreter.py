@@ -640,3 +640,27 @@ def test_player_input_is_delimited_in_prompt(
     assert not any(
         line.lstrip().startswith("#") for line in inner.splitlines()
     )
+
+
+def test_interpreter_caps_generation_tokens(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """M7 — the interpreter must bound its output tokens."""
+    httpx_mock.add_response(
+        url=CHAT_URL,
+        json=make_ollama_response(
+            {"action_type": "Look", "actor_name": "Aldric", "confidence": 0.9},
+        ),
+    )
+    interpreter.interpret(
+        player_text="je regarde",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+
+    request = httpx_mock.get_requests()[-1]
+    body = json.loads(request.content)
+    assert body["options"]["num_predict"] == Interpreter.NUM_PREDICT
+    assert Interpreter.NUM_PREDICT > 0

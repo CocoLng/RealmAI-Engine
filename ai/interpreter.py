@@ -40,6 +40,9 @@ class Interpreter:
 
     MODEL = "qwen3.5:4b"
 
+    NUM_PREDICT = 384
+    """Generation cap — one flat JSON action object (M7)."""
+
     def __init__(self, client: OllamaClient) -> None:
         self._client = client
 
@@ -89,7 +92,9 @@ class Interpreter:
 
         logger.info("INTERPRET player=%s input=%r", actor_name, player_text[:100])
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.3)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.3, num_predict=self.NUM_PREDICT,
+        )
         if not isinstance(data, dict):
             raise LLMParseError(
                 f"interpreter payload is {type(data).__name__}, expected JSON object",
