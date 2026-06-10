@@ -351,6 +351,162 @@ class TestPlaceholderFilter:
         assert "[" not in result.narrative  # Template fallback, no leak
 
 
+class TestInventedDamageGuard:
+    """H12 — the narrator must not invent damage numbers the engine never
+    resolved. Observed in prod: an enemy « riposte » dealing « douze de
+    votre santé » while the engine logged a MISS the next turn."""
+
+    def test_narrate_rejects_invented_damage_word_number(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """The prod case: French word-number damage claim on a MISS."""
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "Le gobelin esquive puis riposte sauvagement, arrachant douze points de votre santé.",
+                "tone": "tense",
+            },
+            {
+                "narrative": "Ta lame fend l'air sans toucher le gobelin, qui recule en grimaçant de défi.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. MISS (rolled 5 vs AC 13).",
+            context_prompt="## COMBAT ACTIVE\nRound 2.",
+        )
+        assert call_count["n"] == 2  # Invented 12 rejected → simplified retry
+        assert "douze" not in result.narrative
+
+    def test_narrate_rejects_invented_damage_digits(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        call_count = {"n": 0}
+        responses = [
+            {
+                "narrative": "L'ennemi contre-attaque aussitôt et t'inflige 12 dégâts d'un revers brutal.",
+                "tone": "tense",
+            },
+            {
+                "narrative": "Ton attaque manque sa cible et le squelette grince des dents, immobile et menaçant.",
+                "tone": "tense",
+            },
+        ]
+
+        def fake_chat_json(*args, **kwargs):
+            r = responses[call_count["n"]]
+            call_count["n"] += 1
+            return r
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Skeleton. MISS.",
+            context_prompt="## COMBAT ACTIVE",
+        )
+        assert call_count["n"] == 2
+        assert "12" not in result.narrative
+
+    def test_narrate_accepts_damage_number_from_action_result(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """Echoing the engine's own number is legitimate — single call."""
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "Ta hache mord profondément l'épaule du gobelin : 8 points de dégâts d'un coup sec.",
+                "tone": "dramatic",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin attacks Goblin. Hit! 8 damage dealt.",
+            context_prompt="## COMBAT ACTIVE",
+        )
+        assert call_count["n"] == 1
+        assert "8" in result.narrative
+
+    def test_narrate_accepts_hp_numbers_from_context(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """PC HP shown in context ("15/25 HP") may be reflected in prose."""
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "Tu vacilles mais tiens debout, il te reste 15 points de vie face à la créature.",
+                "tone": "somber",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Goblin attacks Thorin. MISS.",
+            context_prompt="## COMBAT ACTIVE\nThorin: 15/25 HP",
+        )
+        assert call_count["n"] == 1
+        assert "15" in result.narrative
+
+    def test_narrate_ignores_numbers_outside_damage_context(
+        self, monkeypatch: pytest.MonkeyPatch, narrator: Narrator
+    ) -> None:
+        """Numbers with no damage keyword nearby are not damage claims."""
+        call_count = {"n": 0}
+
+        def fake_chat_json(*args, **kwargs):
+            call_count["n"] += 1
+            return {
+                "narrative": "Tu recules de trois pas prudents tandis que la créature tourne autour de toi.",
+                "tone": "tense",
+            }
+
+        monkeypatch.setattr(narrator._client, "chat_json", fake_chat_json)
+        result = narrator.narrate(
+            action_result_text="Thorin defends.",
+            context_prompt="## COMBAT ACTIVE",
+        )
+        assert call_count["n"] == 1
+        assert "trois pas" in result.narrative
+
+
+class TestInventedDamageHeuristic:
+    """Unit tests for the numeric-claim extraction."""
+
+    @pytest.mark.parametrize(
+        ("narrative", "allowed", "invented"),
+        [
+            # The prod case — word number near "santé", engine said MISS
+            ("La riposte t'arrache douze points de votre santé.", "MISS.", True),
+            # Digits near "dégâts" not present in any source
+            ("Il t'inflige 12 dégâts.", "MISS.", True),
+            # Number matches the action result → fine
+            ("Tu infliges 8 points de dégâts.", "Hit! 8 damage dealt.", False),
+            # English claim
+            ("The blow costs you twelve hit points.", "MISS.", True),
+            # Compound French number
+            ("Tu perds dix-sept points de vie.", "MISS.", True),
+            # Number outside any damage context → not a claim
+            ("Tu fais trois pas vers la porte.", "MISS.", False),
+            # No numbers at all
+            ("Le coup manque sa cible de peu.", "MISS.", False),
+        ],
+    )
+    def test_invented_damage_claim(
+        self, narrative: str, allowed: str, invented: bool
+    ) -> None:
+        from ai.narrator import _invented_damage_claim
+
+        assert (_invented_damage_claim(narrative, allowed) is not None) == invented
+
+
 class TestNarratorPayloadRobustness:
     """H10 — narrate() never throws even on malformed LLM payloads.
 

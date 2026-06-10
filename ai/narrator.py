@@ -61,14 +61,85 @@ _PLACEHOLDER_RE = re.compile(r"[\[{][^\]}]{0,40}[\]}]")
 """Bracketed tokens like ``[nom]`` or ``{personnage}`` — small models parrot
 them verbatim from prompt examples (observed in prod, H13)."""
 
+_DAMAGE_KEYWORD_RE = re.compile(
+    r"\b(dégâts?|dommages?|damage|blessures?|santé|vies?|hp|pv"
+    r"|hit\s+points?|health|wounds?)\b",
+    re.IGNORECASE,
+)
+"""Words signalling that a nearby number is a damage/HP claim."""
 
-def _quality_issue(narrative: str) -> str | None:
+_DIGIT_RE = re.compile(r"\b(\d{1,3})\b")
+
+_NUMBER_WORDS: dict[str, int] = {
+    # French 2-20 ("un/une" excluded — articles would flood false positives)
+    "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "six": 6, "sept": 7,
+    "huit": 8, "neuf": 9, "dix": 10, "onze": 11, "douze": 12, "treize": 13,
+    "quatorze": 14, "quinze": 15, "seize": 16, "dix-sept": 17,
+    "dix-huit": 18, "dix-neuf": 19, "vingt": 20,
+    # English 2-20 ("one/a" excluded for the same reason)
+    "two": 2, "three": 3, "four": 4, "five": 5, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+# Longest alternatives first so "dix-sept" wins over "dix".
+_NUMBER_WORD_RE = re.compile(
+    r"\b(" + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+_DAMAGE_WINDOW = 40
+"""Chars scanned on each side of a damage keyword for numeric claims."""
+
+
+def _numbers_in(text: str) -> set[int]:
+    """Every number (digits or fr/en words) appearing anywhere in ``text``."""
+    found = {int(m.group(1)) for m in _DIGIT_RE.finditer(text)}
+    found.update(
+        _NUMBER_WORDS[m.group(1).lower()] for m in _NUMBER_WORD_RE.finditer(text)
+    )
+    return found
+
+
+def _claimed_damage_numbers(narrative: str) -> set[int]:
+    """Numbers appearing within ``_DAMAGE_WINDOW`` chars of a damage keyword."""
+    claims: set[int] = set()
+    for kw in _DAMAGE_KEYWORD_RE.finditer(narrative):
+        window = narrative[
+            max(0, kw.start() - _DAMAGE_WINDOW): kw.end() + _DAMAGE_WINDOW
+        ]
+        claims |= _numbers_in(window)
+    return claims
+
+
+def _invented_damage_claim(narrative: str, allowed_text: str) -> str | None:
+    """Detect damage/HP numbers the engine never produced (H12).
+
+    Observed in prod: the 9b narrated an enemy riposte dealing « douze de
+    votre santé » while the engine had resolved a MISS. Any number claimed
+    near a damage keyword must appear somewhere in the engine-provided
+    text (action result, outcome facts, or context). Conservative by
+    design: numbers without a damage keyword nearby are ignored.
+    """
+    claims = _claimed_damage_numbers(narrative)
+    if not claims:
+        return None
+    invented = claims - _numbers_in(allowed_text)
+    if not invented:
+        return None
+    return f"damage numbers {sorted(invented)} absent from engine results"
+
+
+def _quality_issue(narrative: str, allowed_text: str = "") -> str | None:
     """Return why a narrative is unfit for the player, or ``None`` if fine."""
     if len(narrative) < 50:
         return f"too short ({len(narrative)} chars)"
     match = _PLACEHOLDER_RE.search(narrative)
     if match is not None:
         return f"placeholder {match.group(0)!r}"
+    claim = _invented_damage_claim(narrative, allowed_text)
+    if claim is not None:
+        return claim
     return None
 
 
@@ -103,6 +174,10 @@ class Narrator:
         """
         logger.info("NARRATE input=%r intent=%r", action_result_text[:100], player_intent[:100])
 
+        # Engine-provided text — the only legitimate source of numeric
+        # damage/HP claims in the narrative (H12 guard).
+        allowed_text = " ".join((action_result_text, outcome_facts, context_prompt))
+
         # --- Tier 1: primary call ---
         try:
             result = self._call_llm(
@@ -115,7 +190,7 @@ class Narrator:
                 simplified=False,
                 director_note=director_note,
             )
-            issue = _quality_issue(result.narrative)
+            issue = _quality_issue(result.narrative, allowed_text)
             if issue is None:
                 return result
             logger.warning(
@@ -136,7 +211,7 @@ class Narrator:
                 simplified=True,
                 director_note=director_note,
             )
-            issue = _quality_issue(result.narrative)
+            issue = _quality_issue(result.narrative, allowed_text)
             if issue is None:
                 return result
             logger.error(

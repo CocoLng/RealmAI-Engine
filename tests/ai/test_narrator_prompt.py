@@ -58,3 +58,11 @@ def test_narrator_prompt_has_no_bracketed_placeholder_examples() -> None:
 def test_narrator_prompt_forbids_placeholders_explicitly() -> None:
     text = _NARRATOR_PROMPT.read_text()
     assert "placeholder" in text.lower()
+
+
+def test_narrator_prompt_forbids_invented_enemy_damage() -> None:
+    """H12 — the combat block must forbid narrating enemy ripostes/damage
+    absent from the ActionResult."""
+    text = _NARRATOR_PROMPT.read_text()
+    assert "riposte" in text.lower() or "counter-attack" in text.lower()
+    assert "NEVER invent an enemy attack" in text
