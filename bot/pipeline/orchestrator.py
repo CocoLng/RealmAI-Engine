@@ -478,6 +478,9 @@ class PipelineRunner:
         ):
             self.location = self.session.current_location
             self.npcs = self.session.npcs
+            # The cached DirectorNote describes the previous scene (M11).
+            from ai.story_director import invalidate_note
+            invalidate_note(self.campaign_id)
 
         # PICKUP syncs location + inventory refs after item transfer.
         if (
@@ -593,6 +596,9 @@ class PipelineRunner:
                 from world.story_arc import advance_beat
                 advanced_arc = advance_beat(arc)
                 self.session.story_arc = advanced_arc
+                # The cached DirectorNote targets the completed beat (M11).
+                from ai.story_director import invalidate_note
+                invalidate_note(self.campaign_id)
                 # Reset /hint usage for the now-completed beat.
                 if self.db_factory is not None:
                     try:

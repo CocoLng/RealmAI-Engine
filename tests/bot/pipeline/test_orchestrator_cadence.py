@@ -140,7 +140,9 @@ class TestDirectorCadenceM1:
 # ---------------------------------------------------------------------------
 
 
-def _stonewall_judge_scenario() -> tuple[PipelineRunner, MagicMock]:
+def _stonewall_judge_scenario(
+    campaign_id: str = "camp-h2-judge",
+) -> tuple[PipelineRunner, MagicMock]:
     """TALK to the right NPC but with zero reveals → MIN_REVEALS gate fails
     → BeatProgressionEngine returns NEEDS_JUDGE."""
     loc = Location(
@@ -150,7 +152,7 @@ def _stonewall_judge_scenario() -> tuple[PipelineRunner, MagicMock]:
         npcs_present=["Kaelen"],
     )
     arc = StoryArc(
-        campaign_id="camp-h2-judge",
+        campaign_id=campaign_id,
         theme="dungeon",
         premise="A dungeon adventure with many challenges ahead.",
         beats=[
@@ -212,7 +214,7 @@ def _stonewall_judge_scenario() -> tuple[PipelineRunner, MagicMock]:
         location=loc,
         npcs=npcs,
         actor_name="Hero",
-        campaign_id="camp-h2-judge",
+        campaign_id=campaign_id,
         session=session,
     )
     return runner, session
@@ -249,3 +251,96 @@ class TestJudgeOffEventLoopH2:
         )
         # A passing judge (confidence >= 0.7) advances the beat.
         assert getattr(result, "new_beat", None) is not None
+
+
+# ---------------------------------------------------------------------------
+# M11 — cached DirectorNote invalidated on beat advance / location change
+# ---------------------------------------------------------------------------
+
+
+class _PassingJudge:
+    def begin_turn(self, *, turn_id: str) -> None:
+        pass
+
+    def evaluate(self, request: Any) -> JudgeResponse:
+        return JudgeResponse(passed=True, confidence=0.9, reasoning="ok")
+
+
+def _seed_note(campaign_id: str) -> None:
+    from ai.models import DirectorNote
+    from ai.story_director import _store_latest_note, reset_latest_notes
+
+    reset_latest_notes()
+    _store_latest_note(
+        campaign_id,
+        DirectorNote(coherence_issues=[], suggested_hooks=[], priority="low"),
+    )
+
+
+class TestDirectorNoteInvalidationM11:
+    async def test_beat_completion_invalidates_cached_note(self) -> None:
+        """A stale note must not survive a beat advance — its objective and
+        atmosphere describe the PREVIOUS beat."""
+        from ai.story_director import cached_note_for
+
+        campaign_id = "camp-m11-beat"
+        get_drift_tracker().reset(campaign_id)
+        runner, _session = _stonewall_judge_scenario(campaign_id)
+        runner.beat_judge = _PassingJudge()
+        _seed_note(campaign_id)
+
+        result = await runner.process("bonjour")
+
+        assert getattr(result, "new_beat", None) is not None  # beat advanced
+        assert cached_note_for(campaign_id) is None
+
+    async def test_location_change_invalidates_cached_note(
+        self, monkeypatch: Any,
+    ) -> None:
+        """A stale note must not survive a location change — required
+        mentions / hooks reference the previous scene."""
+        from ai.models import PublicEffects
+        from ai.story_director import cached_note_for
+        from engine.contracts import MechanicsOutcome
+
+        campaign_id = "camp-m11-move"
+        get_drift_tracker().reset(campaign_id)
+        _seed_note(campaign_id)
+
+        session = _make_session(campaign_turn_count=1)
+        session.current_location = Location(
+            name="Crypte", description="Une crypte sombre.",
+        )
+
+        move = InterpretedAction(
+            action_type=ActionType.MOVE,
+            actor_name="Hero",
+            target_name="Crypte",
+            raw_input="je vais à la crypte",
+            confidence=0.95,
+        )
+        runner = PipelineRunner(
+            interpreter=_StubInterpreter(response=move),  # type: ignore[arg-type]
+            narrator=_StubNarrator(),  # type: ignore[arg-type]
+            location=Location(
+                name="Clairière",
+                description="Une clairière calme.",
+                connections=["Crypte"],
+            ),
+            npcs={},
+            actor_name="Hero",
+            campaign_id=campaign_id,
+            session=session,
+        )
+
+        async def fake_resolve(**kwargs: Any) -> MechanicsOutcome:
+            return MechanicsOutcome(
+                summary="Hero arrives at Crypte.",
+                public_effects=PublicEffects(location_change="Crypte"),
+            )
+
+        monkeypatch.setattr("bot.pipeline.resolve.resolve_mechanics", fake_resolve)
+
+        await runner.process("je vais à la crypte")
+
+        assert cached_note_for(campaign_id) is None

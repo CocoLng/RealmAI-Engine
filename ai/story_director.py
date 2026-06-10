@@ -36,6 +36,16 @@ def _store_latest_note(campaign_id: str, note: DirectorNote) -> None:
     _LATEST_NOTES[campaign_id] = note
 
 
+def invalidate_note(campaign_id: str) -> None:
+    """Drop the cached DirectorNote for ``campaign_id``.
+
+    Called by the orchestrator when engine state moves past what the note
+    describes (beat advance, location change) — a stale note would keep
+    steering the narrator toward the previous beat/scene.
+    """
+    _LATEST_NOTES.pop(campaign_id, None)
+
+
 def reset_latest_notes() -> None:
     """Test helper — clear the cache."""
     _LATEST_NOTES.clear()

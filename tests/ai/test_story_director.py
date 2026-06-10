@@ -201,3 +201,34 @@ class TestStoryDirectorDirection:
         assert note.forbidden_topics == []
         assert note.required_mentions == []
         assert note.stale_quest_ids == []
+
+
+class TestNoteInvalidationM11:
+    """M11 — the cached DirectorNote must be invalidatable when engine
+    state moves on (beat advance, location change), otherwise stale
+    directives keep being injected into every narrator call."""
+
+    def test_invalidate_note_clears_cache(self) -> None:
+        from ai.story_director import (
+            _store_latest_note,
+            cached_note_for,
+            invalidate_note,
+            reset_latest_notes,
+        )
+
+        reset_latest_notes()
+        note = DirectorNote(
+            coherence_issues=[], suggested_hooks=[], priority="low",
+        )
+        _store_latest_note("c1", note)
+        assert cached_note_for("c1") is note
+
+        invalidate_note("c1")
+
+        assert cached_note_for("c1") is None
+
+    def test_invalidate_unknown_campaign_is_noop(self) -> None:
+        from ai.story_director import invalidate_note, reset_latest_notes
+
+        reset_latest_notes()
+        invalidate_note("never-seen")  # must not raise
