@@ -1642,18 +1642,27 @@ def test_pipeline_exploration_rejected_in_combat_except_info_actions() -> None:
 
 
 def test_pipeline_detects_attack_trigger_and_bootstraps() -> None:
-    """ATTACK on combat-worthy NPC bootstraps combat and stores pending embed."""
+    """A LEGAL attack on a combat-worthy NPC bootstraps combat and stores
+    the pending embed. (Since audit H18 the triggering action is probed
+    against the prospective state — an illegal attack rolls the bootstrap
+    back, so the hero needs a real equipped weapon here.)"""
     from unittest.mock import MagicMock, patch
     from engine.combat import CombatState, Combatant, CombatSide
     from engine.combat_trigger import CombatTrigger, CombatTriggerKind, InitiativeSide
     from engine.character import CharacterClass, Race, AbilityScores, create_character
-    from engine.inventory import Inventory
+    from engine.inventory import (
+        EquipmentSlot, ITEM_CATALOG, Inventory, add_item, create_inventory,
+        equip_item,
+    )
 
     scores = AbilityScores(STR=16, DEX=14, CON=14, INT=10, WIS=12, CHA=8)
     char = create_character("Héros", Race.HUMAN, CharacterClass.FIGHTER, scores)
     goblin_char = create_character("Goblin", Race.HALFLING, CharacterClass.ROGUE,
                                    AbilityScores(STR=8, DEX=12, CON=10, INT=8, WIS=8, CHA=8))
-    hero = Combatant(name="Héros", side=CombatSide.PLAYER, character=char, inventory=Inventory())
+    hero_inv = create_inventory()
+    hero_inv = add_item(hero_inv, ITEM_CATALOG["Longsword"])
+    hero_inv = equip_item(hero_inv, "Longsword", EquipmentSlot.MAIN_HAND)
+    hero = Combatant(name="Héros", side=CombatSide.PLAYER, character=char, inventory=hero_inv)
     goblin = Combatant(name="Goblin", side=CombatSide.ENEMY, character=goblin_char, inventory=Inventory())
     bootstrapped_state = CombatState(combatants=[hero, goblin], current_turn_index=0, is_active=True)
 
@@ -1673,7 +1682,8 @@ def test_pipeline_detects_attack_trigger_and_bootstraps() -> None:
     )
     action = InterpretedAction(
         action_type=ActionType.ATTACK, actor_name="Héros",
-        target_name="Goblin", raw_input="j'attaque le goblin",
+        target_name="Goblin", weapon_name="Longsword",
+        raw_input="j'attaque le goblin",
     )
 
     with (

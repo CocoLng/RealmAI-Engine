@@ -94,6 +94,50 @@ def _assign_initial_zones(state: CombatState, location: Location) -> None:
             c.current_zone = pc_zone if c.side == CombatSide.PLAYER else npc_zone
 
 
+def _charge_aggressor_to_target(
+    state: CombatState,
+    trigger: CombatTrigger,
+    eng_action: Action,
+) -> None:
+    """Close the distance for the combat-triggering attack (audit H18).
+
+    Default zone assignment puts PCs and enemies at opposite ends of the
+    location, which guaranteed an "hors de portée" refusal for every
+    melee attack that *starts* a combat. The triggering attack IS the
+    charge: when the aggressor's weapon cannot reach the target from the
+    starting zones, move the aggressor into the target's zone. Ranged
+    and thrown attackers stay put.
+    """
+    from engine.validators import _check_range
+
+    aggressor = next(
+        (c for c in state.combatants if c.name == trigger.aggressor_name),
+        None,
+    )
+    target = next(
+        (c for c in state.combatants if c.name == eng_action.target_name),
+        None,
+    )
+    if aggressor is None or target is None:
+        return
+    if aggressor.current_zone is None or target.current_zone is None:
+        return  # zoneless combat — everyone already in range
+
+    weapon: Weapon | None = None
+    for slot in (EquipmentSlot.MAIN_HAND, EquipmentSlot.OFF_HAND):
+        item = aggressor.inventory.equipped.get(slot)
+        if (
+            item is not None
+            and isinstance(item, Weapon)
+            and item.name == eng_action.weapon_name
+        ):
+            weapon = item
+            break
+
+    if not _check_range(aggressor, target, weapon):
+        aggressor.current_zone = target.current_zone
+
+
 # ---------------------------------------------------------------------------
 # Public functions
 # ---------------------------------------------------------------------------
@@ -234,21 +278,51 @@ def validate(
             trigger = detect_combat_trigger(action, session)
 
         if trigger is not None:
-            logger.info(
-                "COMBAT bootstrapped kind=%s campaign=%s aggressor=%s enemies=%s",
-                trigger.kind, campaign_id,
-                trigger.aggressor_name, trigger.enemy_names,
-            )
-            # Build party-wide CombatState, roll initiative, apply surprise
+            # Build the PROSPECTIVE CombatState first (initiative,
+            # surprise, zones, charge) and validate the triggering action
+            # against it BEFORE committing it to the session (audit H18).
+            previous_state = session.combat_state  # type: ignore[union-attr]
             try:
                 pre_state = enter_combat(session, trigger)  # type: ignore[arg-type]
             except ValueError as exc:
                 logger.warning("Combat bootstrap failed: %s", exc)
                 return ValidationResult(is_valid=False, error_message=str(exc))
-            combat_state = start_combat(pre_state.combatants, trigger=trigger)
-            session.combat_state = combat_state  # type: ignore[union-attr]
+            new_state = start_combat(pre_state.combatants, trigger=trigger)
             if location is not None and location.has_combat_zones():
-                _assign_initial_zones(combat_state, location)
+                _assign_initial_zones(new_state, location)
+                _charge_aggressor_to_target(new_state, trigger, eng_action)
+
+            # Probe the triggering action when the aggressor acts first
+            # and the action is a combat action: a refused attack must
+            # not leave an unwanted combat (and a burned surprise round)
+            # on the session. Two cases skip the probe and always commit:
+            # the enemy legitimately won initiative (BOTH_READY face-off
+            # — the attack is merely deferred to the PC's turn), and
+            # exploration-typed triggers (trap INTERACT, lethal
+            # IMPROVISE — the trap is sprung / the intent declared).
+            current = new_state.combatants[new_state.current_turn_index]
+            if (
+                current.name == eng_action.actor_name
+                and eng_action.action_type not in EXPLORATION_ACTION_TYPES
+            ):
+                probe = validate_action(eng_action, new_state)
+                if not probe.is_valid:
+                    session.combat_state = previous_state  # type: ignore[union-attr]
+                    logger.info(
+                        "COMBAT bootstrap rolled back kind=%s campaign=%s "
+                        "aggressor=%s reason=%s",
+                        trigger.kind, campaign_id,
+                        trigger.aggressor_name, probe.error_message,
+                    )
+                    return probe
+
+            logger.info(
+                "COMBAT bootstrapped kind=%s campaign=%s aggressor=%s enemies=%s",
+                trigger.kind, campaign_id,
+                trigger.aggressor_name, trigger.enemy_names,
+            )
+            combat_state = new_state
+            session.combat_state = combat_state  # type: ignore[union-attr]
             side.pending_combat_start_embed = (combat_state, trigger)
             # Fall through to combat dispatch below
 
