@@ -442,12 +442,36 @@ def guild_config_to_db(config: GuildConfig) -> GuildConfigRow:
 
 
 def guild_config_from_db(row: GuildConfigRow) -> GuildConfig:
-    """Convert a GuildConfigRow to a GuildConfig domain model."""
-    return GuildConfig(
-        guild_id=row.guild_id,
-        category_name=row.category_name,
-        language=row.language,
-    )
+    """Convert a GuildConfigRow to a GuildConfig domain model.
+
+    Rows written before /settings validated its input can hold poisoned
+    values (e.g. ``language="French"``). Each field falls back to its
+    default individually — a bad language must not kill /start_campaign,
+    /resume and /settings for the whole guild (H7).
+    """
+    try:
+        return GuildConfig(
+            guild_id=row.guild_id,
+            category_name=row.category_name,
+            language=row.language,
+        )
+    except ValidationError as exc:
+        logger.warning(
+            "Poisoned guild_config row for guild %s — resetting invalid "
+            "fields to defaults: %s",
+            row.guild_id, exc,
+        )
+        valid: dict = {"guild_id": row.guild_id}
+        for field_name, value in (
+            ("category_name", row.category_name),
+            ("language", row.language),
+        ):
+            try:
+                GuildConfig.model_validate({"guild_id": row.guild_id, field_name: value})
+            except ValidationError:
+                continue
+            valid[field_name] = value
+        return GuildConfig.model_validate(valid)
 
 
 # ---------------------------------------------------------------------------

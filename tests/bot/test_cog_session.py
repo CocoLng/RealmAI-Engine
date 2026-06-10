@@ -761,6 +761,42 @@ class TestSettings:
         interaction.response.send_message.assert_called_once()
         assert interaction.response.send_message.call_args[1].get("ephemeral") is True
 
+    @pytest.mark.asyncio
+    async def test_invalid_language_rejected_not_persisted(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        """H7 — 'French' must be refused, not persisted as a poison row.
+
+        model_copy(update=...) does not validate in Pydantic v2; a bad
+        language used to be written to DB and every subsequent
+        guild_config_from_db raised, killing /start_campaign, /resume and
+        /settings for the whole guild.
+        """
+        await cog.settings.callback(cog, interaction, None, "French")  # type: ignore[call-arg, arg-type]
+
+        interaction.response.send_message.assert_called_once()
+        msg = interaction.response.send_message.call_args[0][0]
+        assert "invalide" in msg.lower()
+        assert interaction.response.send_message.call_args[1].get("ephemeral") is True
+        assert GuildConfigRepository(db_session).get(GUILD_ID) is None
+
+    @pytest.mark.asyncio
+    async def test_language_normalized_before_persist(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        """' EN ' is tolerated: trimmed + lowercased, then validated."""
+        await cog.settings.callback(cog, interaction, None, " EN ")  # type: ignore[call-arg, arg-type]
+
+        config = GuildConfigRepository(db_session).get(GUILD_ID)
+        assert config is not None
+        assert config.language == "en"
+
 
 # ---------------------------------------------------------------------------
 # Round-trip integration tests (real in-memory SQLite, no mocks)

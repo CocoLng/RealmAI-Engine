@@ -1344,10 +1344,30 @@ class SessionCog(commands.Cog):
             existing = repo.get(interaction.guild.id)
             config = existing or GuildConfig(guild_id=interaction.guild.id)
 
+            # H7 — model_copy(update=...) does NOT validate in Pydantic v2.
+            # An invalid language persisted here used to poison the row and
+            # crash every later guild_config_from_db for the guild. Merge,
+            # normalize, and validate BEFORE anything touches the DB.
+            merged = config.model_dump()
             if category is not None:
-                config = config.model_copy(update={"category_name": category})
+                merged["category_name"] = category.strip()
             if language is not None:
-                config = config.model_copy(update={"language": language})
+                merged["language"] = language.strip().lower()
+            from pydantic import ValidationError
+
+            try:
+                config = GuildConfig.model_validate(merged)
+            except ValidationError as exc:
+                fields = ", ".join(
+                    ".".join(str(part) for part in err.get("loc", ())) or "?"
+                    for err in exc.errors()
+                )
+                await interaction.response.send_message(
+                    f"❌ Paramètres invalides ({fields}). Langue attendue : "
+                    "code à 2 lettres (fr, en, es, de, pt).",
+                    ephemeral=True,
+                )
+                return
 
             repo.upsert(config)
             db_session.commit()
@@ -1367,9 +1387,9 @@ class SessionCog(commands.Cog):
         else:
             parts = []
             if category is not None:
-                parts.append(f"categorie: **{category}**")
+                parts.append(f"categorie: **{config.category_name}**")
             if language is not None:
-                parts.append(f"langue: **{language}**")
+                parts.append(f"langue: **{config.language}**")
             await interaction.response.send_message(
                 f"Mis a jour: {', '.join(parts)}", ephemeral=True,
             )

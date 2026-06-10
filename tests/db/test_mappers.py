@@ -466,6 +466,31 @@ class TestCorruptSaveErrors:
         assert exc_info.value.entity == "StoryArc"
 
 
+class TestGuildConfigDepoison:
+    """H7 — poisoned guild_config rows must fall back to defaults, not raise."""
+
+    def test_poisoned_language_falls_back_keeping_valid_fields(self) -> None:
+        from db.mappers import guild_config_from_db
+        from db.models import GuildConfigRow
+
+        row = GuildConfigRow(
+            guild_id=42, category_name="Mes Sessions", language="French",
+        )
+        config = guild_config_from_db(row)
+        assert config.guild_id == 42
+        assert config.language == "fr"  # poisoned field reset to default
+        assert config.category_name == "Mes Sessions"  # valid field kept
+
+    def test_valid_row_passes_through(self) -> None:
+        from db.mappers import guild_config_from_db
+        from db.models import GuildConfigRow
+
+        row = GuildConfigRow(guild_id=7, category_name="RPG", language="en")
+        config = guild_config_from_db(row)
+        assert config.language == "en"
+        assert config.category_name == "RPG"
+
+
 class TestCampaignChannelMapper:
     """CampaignChannel mapper round-trip tests."""
 
