@@ -47,6 +47,27 @@ def test_ensure_schema_stamps_version(tmp_path: Path) -> None:
     assert get_schema_version(engine) == SCHEMA_VERSION
 
 
+def test_ensure_schema_refuses_downgrade(tmp_path: Path) -> None:
+    """A DB stamped by NEWER code must not be touched by older code.
+
+    The auto column-add only goes forward; running an old binary against
+    a newer schema risks silent corruption. The stamp is now actually
+    read, and a higher version aborts before any DDL.
+    """
+    import pytest
+
+    engine = _engine(tmp_path)
+    ensure_schema(engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql("UPDATE schema_version SET version = 999")
+
+    with pytest.raises(RuntimeError, match="999"):
+        ensure_schema(engine)
+
+    # The newer stamp must remain untouched.
+    assert get_schema_version(engine) == 999
+
+
 def test_ensure_schema_adds_missing_nullable_column(tmp_path: Path) -> None:
     """The real bug: create_all() never adds a column to an existing table."""
     engine = _engine(tmp_path)
