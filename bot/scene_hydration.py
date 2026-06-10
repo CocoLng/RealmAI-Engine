@@ -339,7 +339,10 @@ def take_scene_item(
 
     Returns the created :class:`engine.inventory.Item` on success, ``None``
     if no matching scene item exists. The location row and the player
-    inventory row are persisted in a single transaction.
+    inventory row are persisted in a single transaction. If that persist
+    fails, the in-memory mutation is reverted and ``None`` is returned —
+    reporting success on a failed write would leave a phantom item that
+    duplicates at the next reload (audit low).
     """
     location = session.current_location
     if location is None:
@@ -403,6 +406,11 @@ def take_scene_item(
             session.campaign.id, item_name, user_id, exc_info=True,
         )
         db_session.rollback()
+        # Revert the in-memory mutation — memory and DB must agree.
+        location.items_available.append(item_name)
+        if inventory is not None and item in inventory.items:
+            inventory.items.remove(item)
+        return None
     finally:
         db_session.close()
 

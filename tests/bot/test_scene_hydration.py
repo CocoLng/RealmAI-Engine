@@ -539,6 +539,26 @@ def test_take_scene_item_unknown_returns_none(db_factory) -> None:
     assert item is None
 
 
+def test_take_scene_item_reverts_memory_on_persist_failure(db_factory) -> None:
+    """A failed persist must not report success: the in-memory pickup is
+    reverted so the item is neither phantom-owned nor duplicated at the
+    next reload (audit low — take_scene_item)."""
+    session = _make_session_with_player(db_factory)
+    failing_db = MagicMock()
+    failing_db.commit.side_effect = RuntimeError("disk full")
+    failing_factory = MagicMock(return_value=failing_db)
+
+    item = take_scene_item(
+        session, item_name="Clé de Fer", user_id=42, db_factory=failing_factory,
+    )
+
+    assert item is None
+    assert "Clé de Fer" in session.current_location.items_available
+    assert not any(
+        i.name == "Clé de Fer" for i in session.inventories[42].items
+    )
+
+
 # ---------------------------------------------------------------------------
 # PICKUP entity resolver
 # ---------------------------------------------------------------------------
