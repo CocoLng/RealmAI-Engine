@@ -1283,19 +1283,57 @@ class SessionCog(commands.Cog):
             logger.warning("end_campaign: interaction expired before defer()")
             return
 
-        # Persist before archiving
-        self._persist_session(session)
-
-        # Clean up ChromaDB collection for this campaign (L5).
-        if session.semantic_memory is not None:
+        # M3 — serialize behind any in-flight action, dismantle the combat
+        # UI (watcher, button view, TurnManager), persist, and drop the
+        # session from the registry — all under the lock. Otherwise a live
+        # watcher or pipeline resurrects the ended session and posts into
+        # the archived channel.
+        async with session.action_lock:
+            # Cancel any still-running neighbor-prefetch loop for this
+            # campaign (H8) — done under the lock with the rest of the
+            # teardown so a stale loop cannot outlive the session and keep
+            # burning the shared background-generation gate.
             try:
-                session.semantic_memory.delete_campaign(session.campaign.id)
+                from bot.location_prefetch import cancel_for_campaign
+                cancel_for_campaign(session.campaign.id)
             except Exception:
                 logger.warning(
-                    "Failed to delete ChromaDB collection for campaign %s",
-                    session.campaign.id,
+                    "Failed to cancel location prefetch on /end_campaign",
                     exc_info=True,
                 )
+
+            turn_manager = session.combat_turn_manager
+            if turn_manager is not None:
+                try:
+                    turn_manager._cancel_timeout()
+                    if turn_manager.current_view is not None:
+                        turn_manager.current_view.stop()
+                    turn_manager._finalized = True
+                except Exception:
+                    logger.warning(
+                        "end_campaign: TurnManager teardown failed campaign=%s",
+                        session.campaign.id, exc_info=True,
+                    )
+                session.combat_turn_manager = None
+
+            # Persist before archiving
+            self._persist_session(session)
+
+            # Clean up ChromaDB collection for this campaign (L5).
+            if session.semantic_memory is not None:
+                try:
+                    session.semantic_memory.delete_campaign(session.campaign.id)
+                except Exception:
+                    logger.warning(
+                        "Failed to delete ChromaDB collection for campaign %s",
+                        session.campaign.id,
+                        exc_info=True,
+                    )
+
+            # Drop from the registry while still holding the lock so no new
+            # action can slip in between teardown and removal.
+            if channel_id is not None:
+                self.bot.sessions.pop(channel_id, None)
 
         logger.info(
             "SESSION end campaign=%s channel=%s",
@@ -1321,22 +1359,6 @@ class SessionCog(commands.Cog):
         guild = interaction.guild
         if channel and guild:
             await archive_channel(channel, guild)  # type: ignore[arg-type]
-
-        # Cancel any still-running neighbor-prefetch loop for this campaign
-        # (H8) — the session is about to be dropped, and a stale loop would
-        # otherwise keep burning the shared background-generation gate.
-        try:
-            from bot.location_prefetch import cancel_for_campaign
-            cancel_for_campaign(session.campaign.id)
-        except Exception:
-            logger.warning(
-                "Failed to cancel location prefetch on /end_campaign",
-                exc_info=True,
-            )
-
-        # Remove from in-memory sessions
-        if channel_id is not None and channel_id in self.bot.sessions:
-            del self.bot.sessions[channel_id]
 
     # ------------------------------------------------------------------
     # /settings

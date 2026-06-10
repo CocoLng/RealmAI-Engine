@@ -642,6 +642,64 @@ class TestEndCampaign:
 
     @pytest.mark.asyncio
     @patch("bot.cogs.session.archive_channel")
+    async def test_end_tears_down_turn_manager(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M3 — /end_campaign must dismantle the live combat UI.
+
+        Without teardown the auto-dodge watcher and button views outlive
+        the session and resurrect it, posting into the archived channel.
+        """
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        turn_manager = MagicMock()
+        view = MagicMock()
+        turn_manager.current_view = view
+        turn_manager._finalized = False
+        session.combat_turn_manager = turn_manager
+        session.combat_state = _make_combat_state()
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        turn_manager._cancel_timeout.assert_called_once()
+        view.stop.assert_called_once()
+        assert turn_manager._finalized is True
+        assert session.combat_turn_manager is None
+        assert CHANNEL_ID not in cog.bot.sessions
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_waits_for_in_flight_action(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M3 — teardown must serialize behind session.action_lock."""
+        import asyncio
+
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        await session.action_lock.acquire()  # an action pipeline is running
+        task = asyncio.create_task(
+            cog.end_campaign.callback(cog, interaction),  # type: ignore[call-arg, arg-type]
+        )
+        await asyncio.sleep(0.05)
+        assert not task.done()  # blocked on the lock
+        assert CHANNEL_ID in cog.bot.sessions  # not torn down mid-action
+
+        session.action_lock.release()
+        await task
+        assert CHANNEL_ID not in cog.bot.sessions
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
     async def test_end_allows_host(
         self,
         mock_archive: AsyncMock,
