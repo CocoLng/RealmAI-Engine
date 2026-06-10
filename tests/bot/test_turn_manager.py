@@ -409,6 +409,95 @@ class TestPersistState:
         await tm._persist_state()
 
     @pytest.mark.asyncio
+    async def test_checkpoint_failure_warns_in_channel_once(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M5 — players must learn their progress is not being saved, but
+        only once per failure streak (no warning spam every turn)."""
+        session = _fake_session([_pc()])
+        channel = _fake_channel()
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session",
+            MagicMock(side_effect=RuntimeError("db unavailable")),
+        )
+
+        tm = _turn_manager(session, channel, db_factory=MagicMock())
+        await tm._persist_state()
+        await tm._persist_state()  # still failing — no second warning
+
+        warnings = [
+            call.kwargs.get("content", "") or ""
+            for call in channel.send.await_args_list
+            if "sauvegarde" in (call.kwargs.get("content", "") or "").lower()
+        ]
+        assert len(warnings) == 1, (
+            f"expected exactly one checkpoint warning, got {warnings!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_dirty_flag_set_on_failure_cleared_on_success(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M5 — a failed checkpoint flags the state dirty; the next
+        successful checkpoint (which persists the full session anyway)
+        clears it."""
+        session = _fake_session([_pc()])
+        calls = {"fail": True}
+
+        def persist(factory, sess):
+            if calls["fail"]:
+                raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session", persist,
+        )
+
+        tm = _turn_manager(session, _fake_channel(), db_factory=MagicMock())
+        assert tm.checkpoint_dirty is False
+
+        await tm._persist_state()
+        assert tm.checkpoint_dirty is True
+
+        calls["fail"] = False
+        await tm._persist_state()
+        assert tm.checkpoint_dirty is False
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_warns_again_after_recovery(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M5 — a NEW failure streak after a successful checkpoint warns
+        again (the once-only guard is per streak, not per combat)."""
+        session = _fake_session([_pc()])
+        channel = _fake_channel()
+        calls = {"fail": True}
+
+        def persist(factory, sess):
+            if calls["fail"]:
+                raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session", persist,
+        )
+
+        tm = _turn_manager(session, channel, db_factory=MagicMock())
+        await tm._persist_state()   # fail → warn #1
+        calls["fail"] = False
+        await tm._persist_state()   # recovery
+        calls["fail"] = True
+        await tm._persist_state()   # new streak → warn #2
+
+        warnings = [
+            call.kwargs.get("content", "") or ""
+            for call in channel.send.await_args_list
+            if "sauvegarde" in (call.kwargs.get("content", "") or "").lower()
+        ]
+        assert len(warnings) == 2, (
+            f"expected two checkpoint warnings, got {warnings!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_finalize_persists_final_state(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:

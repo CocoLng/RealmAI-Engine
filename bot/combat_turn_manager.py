@@ -148,6 +148,11 @@ class TurnManager:
         self.pending_timeout: asyncio.Task[None] | None = None
         self.current_view: CombatActionView | None = None
         self._finalized = False
+        self.checkpoint_dirty = False
+        """True while the latest auto-checkpoint failed (audit M5). The
+        next successful checkpoint clears it — ``persist_session`` always
+        writes the full session snapshot, so the retry is implicit."""
+        self._checkpoint_warned = False
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -884,8 +889,11 @@ class TurnManager:
 
         Off-loaded to a thread because :func:`bot.persistence.persist_session`
         is synchronous SQLAlchemy. ``db_factory=None`` (tests / dev) makes
-        this a no-op. Failures are logged and swallowed — a failed
-        checkpoint must not brick the turn flow.
+        this a no-op. A failed checkpoint must not brick the turn flow,
+        but it is not silent either (audit M5): the channel gets ONE
+        warning per failure streak, ``checkpoint_dirty`` flags the
+        unsaved progress, and the next checkpoint retries naturally
+        (``persist_session`` always writes the full session snapshot).
         """
         if self.db_factory is None:
             return
@@ -897,6 +905,21 @@ class TurnManager:
             logger.exception(
                 "TurnManager auto-checkpoint failed: %s", exc,
             )
+            self.checkpoint_dirty = True
+            if not self._checkpoint_warned:
+                self._checkpoint_warned = True
+                await self._safe_send(
+                    "⚠️ La sauvegarde automatique du combat a échoué — "
+                    "nouvelle tentative au prochain tour.",
+                )
+            return
+
+        if self.checkpoint_dirty:
+            logger.info(
+                "TurnManager auto-checkpoint recovered after earlier failure.",
+            )
+        self.checkpoint_dirty = False
+        self._checkpoint_warned = False
 
     # ------------------------------------------------------------------
     # Session helpers
