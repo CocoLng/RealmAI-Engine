@@ -44,6 +44,41 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T", bound=BaseModel)
 
 
+class CorruptSaveError(Exception):
+    """A persisted JSON blob no longer validates against its domain model.
+
+    Raised on load paths where silently dropping the data would lose a
+    player character or the campaign's story arc. Carries the entity name
+    and the first faulty field so callers can tell the player exactly what
+    broke instead of surfacing a raw ValidationError traceback.
+    """
+
+    def __init__(self, entity: str, context: str, exc: ValidationError) -> None:
+        self.entity = entity
+        self.context = context
+        errors = exc.errors()
+        first = errors[0] if errors else {}
+        self.field = ".".join(str(part) for part in first.get("loc", ())) or "?"
+        self.detail = str(first.get("msg", exc))
+        super().__init__(
+            f"{entity} ({context}): champ '{self.field}' — {self.detail}",
+        )
+
+
+def _validate_json_or_corrupt(
+    model_cls: type[_T],
+    raw_json: str,
+    *,
+    entity: str,
+    context: str,
+) -> _T:
+    """Validate a JSON string, raising :class:`CorruptSaveError` on failure."""
+    try:
+        return model_cls.model_validate_json(raw_json)
+    except ValidationError as exc:
+        raise CorruptSaveError(entity, context, exc) from exc
+
+
 def _validate_list(
     model_cls: type[_T],
     raw_items: list | None,
@@ -440,13 +475,20 @@ def player_character_from_db(
     Returns:
         Tuple of (discord_user_id, Character, Inventory, SpellcasterState | None).
     """
-    character = Character.model_validate_json(row.character_json)
+    context = f"user_id={row.discord_user_id} campaign={row.campaign_id!r}"
+    character = _validate_json_or_corrupt(
+        Character, row.character_json, entity="Character", context=context,
+    )
     character = backfill_character_features(character)
-    inventory = Inventory.model_validate_json(row.inventory_json)
-    spellcaster = (
-        SpellcasterState.model_validate_json(row.spellcaster_json)
-        if row.spellcaster_json
-        else None
+    inventory = _validate_json_or_corrupt(
+        Inventory, row.inventory_json, entity="Inventory", context=context,
+    )
+    # Spellcaster state is optional — a drifted blob degrades to None
+    # (spell slots reset) instead of blocking the whole character load.
+    spellcaster = _safe_validate_json(
+        SpellcasterState,
+        row.spellcaster_json,
+        context=f"PlayerCharacter spellcaster {context}",
     )
     return row.discord_user_id, character, inventory, spellcaster
 
@@ -496,7 +538,12 @@ def story_arc_from_db(row: StoryArcRow) -> StoryArc:
     The dedicated ``current_beat_index`` column is authoritative;
     the value inside ``arc_json`` is ignored for this field.
     """
-    arc = StoryArc.model_validate_json(row.arc_json)
+    arc = _validate_json_or_corrupt(
+        StoryArc,
+        row.arc_json,
+        entity="StoryArc",
+        context=f"campaign={row.campaign_id!r}",
+    )
     if arc.current_beat_index != row.current_beat_index:
         arc = arc.model_copy(update={"current_beat_index": row.current_beat_index})
     return arc

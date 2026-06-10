@@ -960,6 +960,8 @@ class SessionCog(commands.Cog):
             )
             return
 
+        from db.mappers import CorruptSaveError
+
         # Load campaign from DB via channel mapping
         db_session = self.bot.db_factory()
         try:
@@ -988,7 +990,16 @@ class SessionCog(commands.Cog):
 
             # Load player characters
             pc_repo = PlayerCharacterRepository(db_session)
-            pc_rows = pc_repo.get_all_for_campaign(campaign_id)
+            try:
+                pc_rows = pc_repo.get_all_for_campaign(campaign_id)
+            except CorruptSaveError as exc:
+                logger.error("resume: corrupt save campaign=%s: %s", campaign_id, exc)
+                await interaction.followup.send(
+                    f"❌ Sauvegarde corrompue — **{exc.entity}** "
+                    f"(champ `{exc.field}`) : {exc.detail}. "
+                    "La campagne ne peut pas être reprise en l'état.",
+                )
+                return
 
             # Load location
             location = None
@@ -1006,15 +1017,39 @@ class SessionCog(commands.Cog):
 
             # Load story arc
             arc_repo = StoryArcRepository(db_session)
-            story_arc = arc_repo.get_by_campaign(campaign_id)
+            try:
+                story_arc = arc_repo.get_by_campaign(campaign_id)
+            except CorruptSaveError as exc:
+                logger.error("resume: corrupt save campaign=%s: %s", campaign_id, exc)
+                await interaction.followup.send(
+                    f"❌ Sauvegarde corrompue — **{exc.entity}** "
+                    f"(champ `{exc.field}`) : {exc.detail}. "
+                    "La campagne ne peut pas être reprise en l'état.",
+                )
+                return
         finally:
             db_session.close()
 
-        # Restore combat state from JSON
+        # Restore combat state from JSON. An unparseable blob (schema drift,
+        # truncated write) must not brick the campaign: drop it with a channel
+        # warning — the combat is over, exploration continues.
         combat_state = None
+        combat_state_dropped = False
         if campaign.combat_state_json:
+            from pydantic import ValidationError
+
             from engine.combat import CombatState
-            combat_state = CombatState.model_validate_json(campaign.combat_state_json)
+            try:
+                combat_state = CombatState.model_validate_json(
+                    campaign.combat_state_json,
+                )
+            except ValidationError:
+                combat_state_dropped = True
+                campaign.combat_state_json = None
+                logger.warning(
+                    "resume: dropping unparseable combat_state campaign=%s",
+                    campaign_id, exc_info=True,
+                )
 
         # Rebuild in-memory session. ``creator_id`` is set from the resumer
         # — we don't persist it on Campaign yet, so /resume effectively
@@ -1065,6 +1100,15 @@ class SessionCog(commands.Cog):
                     await interaction.channel.send(warning)
                 except Exception:
                     logger.warning("Failed to send AI warning to channel %s", channel_id)
+
+        if combat_state_dropped and interaction.channel is not None:
+            try:
+                await interaction.channel.send(
+                    "⚠️ L'état du combat sauvegardé était illisible — combat "
+                    "abandonné, l'exploration continue.",
+                )
+            except Exception:
+                logger.warning("resume: dropped-combat warning send failed")
 
         # C5 — an active combat needs its TurnManager back, otherwise the
         # resumed encounter is dead: no hub, no NPC turns, and the validator

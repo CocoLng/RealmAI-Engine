@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from sqlalchemy.orm import Session
 
 from engine.character import AbilityScores, CharacterClass, Race, create_character
@@ -370,6 +371,69 @@ class TestPlayerCharacterMapper:
         row = player_character_to_db(1, "c", char, inv, None)
         assert "Test" in row.character_json
         assert "Human" in row.character_json
+
+
+class TestCorruptSaveErrors:
+    """H3 — drifted/corrupt JSON blobs must surface an explicit error
+    (player character, story arc) or degrade gracefully (spellcaster),
+    never crash campaign load with a raw ValidationError."""
+
+    def _pc_row(self) -> PlayerCharacterRow:
+        scores = AbilityScores(STR=16, DEX=14, CON=13, INT=10, WIS=12, CHA=8)
+        char = create_character("Thorin", Race.DWARF, CharacterClass.FIGHTER, scores)
+        return player_character_to_db(123, "camp-1", char, create_inventory(), None)
+
+    def test_corrupt_character_json_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError
+
+        row = self._pc_row()
+        row.character_json = '{"name": "Ghost"}'  # missing race/class/scores
+        with pytest.raises(CorruptSaveError) as exc_info:
+            player_character_from_db(row)
+        err = exc_info.value
+        assert err.entity == "Character"
+        assert err.field  # names the faulty field
+        assert "Character" in str(err)
+
+    def test_unparseable_character_json_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError
+
+        row = self._pc_row()
+        row.character_json = "{not even json"
+        with pytest.raises(CorruptSaveError) as exc_info:
+            player_character_from_db(row)
+        assert exc_info.value.entity == "Character"
+
+    def test_corrupt_inventory_json_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError
+
+        row = self._pc_row()
+        row.inventory_json = '{"items": 42}'
+        with pytest.raises(CorruptSaveError) as exc_info:
+            player_character_from_db(row)
+        assert exc_info.value.entity == "Inventory"
+        assert "items" in exc_info.value.field
+
+    def test_corrupt_spellcaster_json_degrades_to_none(self) -> None:
+        row = self._pc_row()
+        row.spellcaster_json = '{"bogus": 1}'  # missing spellcasting_ability
+        uid, char, inv, spell = player_character_from_db(row)
+        assert uid == 123
+        assert char.name == "Thorin"
+        assert spell is None
+
+    def test_corrupt_story_arc_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError, story_arc_from_db
+        from db.models import StoryArcRow
+
+        row = StoryArcRow(
+            campaign_id="camp-1",
+            arc_json='{"campaign_id": "camp-1"}',  # missing beats/villain_name
+            current_beat_index=0,
+        )
+        with pytest.raises(CorruptSaveError) as exc_info:
+            story_arc_from_db(row)
+        assert exc_info.value.entity == "StoryArc"
 
 
 class TestCampaignChannelMapper:

@@ -347,6 +347,73 @@ class TestResumeCombatRebuild:
         assert cog.bot.sessions[CHANNEL_ID].combat_turn_manager is None
 
 
+class TestResumeCorruptBlobs:
+    """H3 — corrupt saved JSON must not brick /resume with a raw traceback."""
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_corrupt_combat_state_dropped_with_warning(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """Unparseable combat_state → dropped, combat over, exploration on."""
+        persisted_campaign.combat_state_json = '{"combatants": "nope"}'
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+        interaction.channel = AsyncMock()
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert CHANNEL_ID in cog.bot.sessions
+        session = cog.bot.sessions[CHANNEL_ID]
+        assert session.combat_state is None
+        assert session.campaign.combat_state_json is None
+        msg = interaction.followup.send.call_args[0][0]
+        assert "combat en cours" not in msg
+        warnings = [
+            str(c.args[0]) for c in interaction.channel.send.call_args_list if c.args
+        ]
+        assert any("illisible" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_corrupt_character_aborts_with_explicit_message(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """A drifted character blob names the faulty field instead of crashing."""
+        from db.models import PlayerCharacterRow
+
+        db_session.add(
+            PlayerCharacterRow(
+                discord_user_id=USER_ID,
+                campaign_id=persisted_campaign.id,
+                character_json='{"name": "Ghost"}',
+                inventory_json="{}",
+            ),
+        )
+        db_session.flush()
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert CHANNEL_ID not in cog.bot.sessions
+        interaction.followup.send.assert_called_once()
+        msg = interaction.followup.send.call_args[0][0]
+        assert "corrompue" in msg
+        assert "Character" in msg
+        assert "champ" in msg
+
+
 # ---------------------------------------------------------------------------
 # /save
 # ---------------------------------------------------------------------------
