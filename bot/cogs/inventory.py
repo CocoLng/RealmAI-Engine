@@ -201,7 +201,16 @@ class InventoryCog(commands.Cog):
     @app_commands.command(name="use_item", description="Utilise un objet consommable")
     @app_commands.describe(item="Nom de l'objet a utiliser")
     async def use_item(self, interaction: discord.Interaction, item: str) -> None:
-        """Use (consume) an item, removing it from inventory."""
+        """Apply a consumable's effect, then remove it from inventory.
+
+        Audit H22: the old implementation only called ``remove_item`` —
+        a healing potion vanished without healing. The effect (heal dice
+        roll, clamped at max HP) is now applied and the roll shown in the
+        response embed. Items without a usable effect are refused instead
+        of destroyed. In combat the command is refused: using an item
+        costs the Action and belongs to the combat flow (free-text /
+        buttons), which enforces the turn order and budget.
+        """
         session = self.bot.get_session(interaction.channel_id)
         if session is None:
             await interaction.response.send_message("Aucune session active.", ephemeral=True)
@@ -214,16 +223,65 @@ class InventoryCog(commands.Cog):
             await interaction.response.send_message("Tu n'as pas de personnage.", ephemeral=True)
             return
 
-        try:
-            inv, used_item = remove_item(inv, item)
-        except (ValueError, KeyError) as e:
-            await interaction.response.send_message(f"Erreur: {e}", ephemeral=True)
+        if _active_combat(session) is not None:
+            await interaction.response.send_message(
+                "Utiliser un objet en plein combat coûte ton Action — "
+                "fais-le par le combat (« je bois ma potion »), pas par "
+                "la commande.",
+                ephemeral=True,
+            )
             return
 
-        session.inventories[user_id] = inv
-        await interaction.response.send_message(
-            f"**{used_item.name}** utilise.", ephemeral=True,
+        matching = next((i for i in inv.items if i.name == item), None)
+        if matching is None:
+            await interaction.response.send_message(
+                f"Erreur: Item '{item}' not found in inventory", ephemeral=True,
+            )
+            return
+
+        heal_dice = getattr(matching, "heal_dice", None)
+        if not heal_dice:
+            await interaction.response.send_message(
+                f"**{matching.name}** n'a aucun effet utilisable — "
+                "objet conservé.",
+                ephemeral=True,
+            )
+            return
+
+        if session.action_lock.locked():
+            await interaction.response.send_message(
+                _LOCK_BUSY_MSG, ephemeral=True,
+            )
+            return
+        async with session.action_lock:
+            from engine.dice import roll as roll_dice
+
+            dice_result = roll_dice(heal_dice)
+            old_hp = char.hp
+            char.hp = min(old_hp + dice_result.total, char.max_hp)
+            healed = char.hp - old_hp
+
+            try:
+                inv, _used = remove_item(inv, item)
+            except (ValueError, KeyError) as e:
+                # Race between the lookup and the removal — undo the heal.
+                char.hp = old_hp
+                await interaction.response.send_message(f"Erreur: {e}", ephemeral=True)
+                return
+
+            session.inventories[user_id] = inv
+
+        rolls_text = ", ".join(str(r) for r in dice_result.rolls)
+        embed = discord.Embed(
+            title=f"🧪 {char.name} utilise {matching.name}",
+            description=(
+                f"`{heal_dice}` → ({rolls_text}) = **{dice_result.total}**\n"
+                f"💚 **{healed}** PV rendus — "
+                f"PV : {old_hp} → {char.hp}/{char.max_hp}"
+            ),
+            color=0x2ECC71,
         )
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 async def setup(bot: commands.Bot) -> None:

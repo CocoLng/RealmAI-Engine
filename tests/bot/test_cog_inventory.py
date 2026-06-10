@@ -70,8 +70,8 @@ def _make_inventory_with_sword() -> Inventory:
     return add_item(inv, sword)
 
 
-def _make_inventory_with_potion() -> Inventory:
-    """Create an inventory containing a Healing Potion."""
+def _make_inventory_with_potion(quantity: int = 2) -> Inventory:
+    """Create an inventory containing a Healing Potion (with heal dice)."""
     inv = create_inventory()
     potion = Item(
         name="Healing Potion",
@@ -80,7 +80,8 @@ def _make_inventory_with_potion() -> Inventory:
         value_gp=50,
         description="Heals 2d4+2 hit points.",
         stackable=True,
-        quantity=2,
+        quantity=quantity,
+        heal_dice="2d4+2",
     )
     return add_item(inv, potion)
 
@@ -618,12 +619,13 @@ class TestUseItem:
         assert msg[1]["ephemeral"] is True
 
     @pytest.mark.asyncio()
-    async def test_use_item_success(
+    async def test_healing_potion_heals_and_is_consumed(
         self, cog: InventoryCog, interaction: AsyncMock,
     ) -> None:
-        """Should remove the item from inventory on use."""
+        """Drinking a potion must actually heal (audit H22) and show the roll."""
         session = _make_session()
         char = _make_character()
+        char.hp = 1
         inv = _make_inventory_with_potion()
         session.characters[USER_ID] = char
         session.inventories[USER_ID] = inv
@@ -631,33 +633,112 @@ class TestUseItem:
 
         await cog.use_item.callback(cog, interaction, item="Healing Potion")
 
-        msg = interaction.response.send_message.call_args
-        assert "Healing Potion" in msg[0][0]
-        assert "utilise" in msg[0][0]
-        assert msg[1]["ephemeral"] is True
-
+        # 2d4+2 → between 4 and 10 HP healed
+        assert 5 <= char.hp <= 11
         # Potion had quantity=2, so 1 should remain
         updated_inv = session.inventories[USER_ID]
         potion = next(i for i in updated_inv.items if i.name == "Healing Potion")
         assert potion.quantity == 1
+        # The dice roll is shown in an embed
+        call_kwargs = interaction.response.send_message.call_args[1]
+        embed = call_kwargs["embed"]
+        assert isinstance(embed, discord.Embed)
+        full_text = (embed.title or "") + (embed.description or "")
+        assert "2d4+2" in full_text
+        assert call_kwargs["ephemeral"] is False  # healing is public mechanics
 
     @pytest.mark.asyncio()
-    async def test_use_last_item_removes_it(
+    async def test_healing_clamped_at_max_hp(
         self, cog: InventoryCog, interaction: AsyncMock,
     ) -> None:
-        """Using the last of a non-stackable item should remove it entirely."""
         session = _make_session()
         char = _make_character()
-        inv = _make_inventory_with_sword()  # single non-stackable item
+        char.hp = char.max_hp
+        inv = _make_inventory_with_potion()
+        session.characters[USER_ID] = char
+        session.inventories[USER_ID] = inv
+        cog.bot.get_session.return_value = session
+
+        await cog.use_item.callback(cog, interaction, item="Healing Potion")
+
+        assert char.hp == char.max_hp
+
+    @pytest.mark.asyncio()
+    async def test_last_potion_removed_entirely(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        session = _make_session()
+        char = _make_character()
+        char.hp = 1
+        inv = _make_inventory_with_potion(quantity=1)
+        session.characters[USER_ID] = char
+        session.inventories[USER_ID] = inv
+        cog.bot.get_session.return_value = session
+
+        await cog.use_item.callback(cog, interaction, item="Healing Potion")
+
+        updated_inv = session.inventories[USER_ID]
+        assert not any(i.name == "Healing Potion" for i in updated_inv.items)
+
+    @pytest.mark.asyncio()
+    async def test_item_without_effect_refused_and_not_consumed(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        """A sword is not a consumable — refuse instead of destroying it."""
+        session = _make_session()
+        char = _make_character()
+        inv = _make_inventory_with_sword()
         session.characters[USER_ID] = char
         session.inventories[USER_ID] = inv
         cog.bot.get_session.return_value = session
 
         await cog.use_item.callback(cog, interaction, item="Longsword")
 
-        msg = interaction.response.send_message.call_args
-        assert "Longsword" in msg[0][0]
-        assert "utilise" in msg[0][0]
-
         updated_inv = session.inventories[USER_ID]
-        assert not any(i.name == "Longsword" for i in updated_inv.items)
+        assert any(i.name == "Longsword" for i in updated_inv.items)
+        msg = interaction.response.send_message.call_args
+        assert "effet" in msg[0][0].lower()
+        assert msg[1]["ephemeral"] is True
+
+    @pytest.mark.asyncio()
+    async def test_use_item_refused_in_combat(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        """In combat the action costs the turn — route players to the
+        combat path instead of bypassing the action economy."""
+        char = _make_character()
+        char.hp = 1
+        inv = _make_inventory_with_potion()
+        session, pc = _combat_session(char, inv, player_turn=True)
+        cog.bot.get_session.return_value = session
+
+        await cog.use_item.callback(cog, interaction, item="Healing Potion")
+
+        assert char.hp == 1  # nothing applied
+        potion = next(i for i in inv.items if i.name == "Healing Potion")
+        assert potion.quantity == 2  # nothing consumed
+        assert pc.action_budget.action_used is False
+        msg = interaction.response.send_message.call_args
+        assert "combat" in msg[0][0].lower()
+
+    @pytest.mark.asyncio()
+    async def test_use_item_refused_when_lock_busy(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        session = _make_session()
+        char = _make_character()
+        char.hp = 1
+        inv = _make_inventory_with_potion()
+        session.characters[USER_ID] = char
+        session.inventories[USER_ID] = inv
+        cog.bot.get_session.return_value = session
+
+        await session.action_lock.acquire()
+        try:
+            await cog.use_item.callback(cog, interaction, item="Healing Potion")
+        finally:
+            session.action_lock.release()
+
+        assert char.hp == 1
+        msg = interaction.response.send_message.call_args
+        assert "en cours" in msg[0][0]
