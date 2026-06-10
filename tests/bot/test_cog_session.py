@@ -23,7 +23,7 @@ from db.repositories import (
     QuestRepository,
 )
 from engine.character import AbilityScores, CharacterClass, Race, create_character
-from engine.combat import CombatSide, CombatState, Combatant
+from engine.combat import CombatEndReason, CombatSide, CombatState, Combatant
 from engine.inventory import create_inventory
 from world.campaign import Campaign
 from world.location import Location
@@ -236,6 +236,115 @@ class TestResume:
         await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
         interaction.followup.send.assert_called_once()
         assert interaction.followup.send.call_args[1].get("ephemeral") is True
+
+
+def _make_combat_state(*, is_active: bool = True) -> CombatState:
+    """An active (or finished) single-PC combat state for resume tests."""
+    char = create_character(
+        "Hero", Race.HUMAN, CharacterClass.FIGHTER,
+        AbilityScores(STR=16, DEX=12, CON=14, INT=10, WIS=13, CHA=8),
+    )
+    combatant = Combatant(
+        name="Hero", side=CombatSide.PLAYER,
+        character=char, inventory=create_inventory(), initiative=15,
+    )
+    return CombatState(
+        combatants=[combatant],
+        round_number=2,
+        current_turn_index=0,
+        is_active=is_active,
+        end_reason=None if is_active else CombatEndReason.VICTORY,
+    )
+
+
+class TestResumeCombatRebuild:
+    """C5 — /resume must rebuild the TurnManager for an active combat."""
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_active_combat_rebuilds_turn_manager(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        persisted_campaign.combat_state_json = _make_combat_state().model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+
+        turn_manager = MagicMock()
+        turn_manager._prompt_turn = AsyncMock()
+        combat_cog = MagicMock()
+        combat_cog.build_turn_manager = MagicMock(return_value=turn_manager)
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        session = cog.bot.sessions[CHANNEL_ID]
+        combat_cog.build_turn_manager.assert_called_once_with(
+            interaction.channel, session,
+        )
+        assert session.combat_turn_manager is turn_manager
+        turn_manager._prompt_turn.assert_awaited_once()
+        prompted = turn_manager._prompt_turn.call_args[0][0]
+        assert prompted.name == "Hero"
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_inactive_combat_does_not_rebuild(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """A finished-combat snapshot must not resurrect a TurnManager."""
+        persisted_campaign.combat_state_json = (
+            _make_combat_state(is_active=False).model_dump_json()
+        )
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+
+        combat_cog = MagicMock()
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        session = cog.bot.sessions[CHANNEL_ID]
+        combat_cog.build_turn_manager.assert_not_called()
+        assert session.combat_turn_manager is None
+        msg = interaction.followup.send.call_args[0][0]
+        assert "combat en cours" not in msg
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_combat_rebuild_failure_does_not_break_resume(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """A TurnManager rebuild failure degrades gracefully — session stays up."""
+        persisted_campaign.combat_state_json = _make_combat_state().model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+
+        combat_cog = MagicMock()
+        combat_cog.build_turn_manager = MagicMock(side_effect=RuntimeError("boom"))
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert CHANNEL_ID in cog.bot.sessions
+        assert cog.bot.sessions[CHANNEL_ID].combat_turn_manager is None
 
 
 # ---------------------------------------------------------------------------

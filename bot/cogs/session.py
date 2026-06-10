@@ -1042,14 +1042,15 @@ class SessionCog(commands.Cog):
 
         schedule_location_prefetch(session, db_factory=self.bot.db_factory)
 
+        combat_active = combat_state is not None and combat_state.is_active
         player_count = len(session.characters)
-        combat_msg = " (combat en cours !)" if combat_state else ""
+        combat_msg = " (combat en cours !)" if combat_active else ""
         npc_count = len(session.npcs)
         quest_count = len(session.quests)
         logger.info(
             "SESSION resume campaign=%s channel=%s characters=%d npcs=%d quests=%d combat=%s",
             campaign.id, channel_id, player_count, npc_count, quest_count,
-            combat_state is not None,
+            combat_active,
         )
 
         await interaction.followup.send(
@@ -1064,6 +1065,60 @@ class SessionCog(commands.Cog):
                     await interaction.channel.send(warning)
                 except Exception:
                     logger.warning("Failed to send AI warning to channel %s", channel_id)
+
+        # C5 — an active combat needs its TurnManager back, otherwise the
+        # resumed encounter is dead: no hub, no NPC turns, and the validator
+        # refuses every action with "pas ton tour".
+        if combat_active:
+            await self._rebuild_combat_turn_manager(session, interaction.channel)
+
+    async def _rebuild_combat_turn_manager(
+        self, session: GameSession, channel: Any,
+    ) -> None:
+        """Reattach a TurnManager to a resumed active combat and re-prompt.
+
+        Mirrors the fresh-bootstrap path in ``ActionHandlerCog`` (step 3b):
+        build via ``CombatCog.build_turn_manager``, store on the session,
+        then prompt the current combatant — which re-posts the combat hub
+        with live buttons (PC turn) or resumes the NPC brain (NPC turn).
+        Failures degrade to an exploration-only session with a channel
+        warning instead of breaking /resume.
+        """
+        state = session.combat_state
+        if channel is None or state is None:
+            return
+        combat_cog = self.bot.get_cog("CombatCog")
+        if combat_cog is None:
+            logger.warning(
+                "resume: CombatCog unavailable — combat %s resumed without "
+                "a TurnManager", state.combat_id,
+            )
+            return
+        try:
+            from engine.combat import get_current_combatant
+
+            turn_manager = combat_cog.build_turn_manager(  # type: ignore[attr-defined]
+                channel, session,
+            )
+            session.combat_turn_manager = turn_manager
+            current = get_current_combatant(state)
+            # Private by convention, but it is the exact "re-post the hub and
+            # prompt whoever's turn it is" entry point the fresh-bootstrap
+            # flow reaches through dispatch/advance.
+            await turn_manager._prompt_turn(current)
+        except Exception:
+            session.combat_turn_manager = None
+            logger.exception(
+                "resume: TurnManager rebuild failed campaign=%s",
+                session.campaign.id,
+            )
+            try:
+                await channel.send(
+                    "⚠️ Le combat sauvegardé n'a pas pu être réactivé — "
+                    "reprise en mode exploration.",
+                )
+            except Exception:
+                logger.warning("resume: combat rebuild warning send failed")
 
     # ------------------------------------------------------------------
     # /save
