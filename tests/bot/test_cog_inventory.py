@@ -409,6 +409,164 @@ class TestUnequip:
 
 
 # ===========================================================================
+# /equip & /unequip during combat (audit H21)
+# ===========================================================================
+
+
+def _make_inventory_sword_equipped_dagger_in_pack() -> Inventory:
+    """Longsword equipped MAIN_HAND, Dagger waiting in the backpack."""
+    from engine.inventory import WeaponProperty, equip_item
+
+    inv = _make_inventory_with_sword()
+    inv = equip_item(inv, "Longsword", EquipmentSlot.MAIN_HAND)
+    dagger = Weapon(
+        name="Dagger",
+        item_type=ItemType.WEAPON,
+        weight=1.0,
+        value_gp=2,
+        damage_dice="1d4",
+        damage_type=DamageType.PIERCING,
+        weapon_category=WeaponCategory.SIMPLE_MELEE,
+        properties=[WeaponProperty.FINESSE, WeaponProperty.LIGHT],
+    )
+    return add_item(inv, dagger)
+
+
+def _combat_session(
+    char: Character,
+    inv: Inventory,
+    *,
+    player_turn: bool = True,
+):
+    """Session with an active combat; the PC combatant shares char + inv."""
+    from engine.combat import CombatSide, CombatState, Combatant
+
+    session = _make_session()
+    session.characters[USER_ID] = char
+    session.inventories[USER_ID] = inv
+
+    enemy_char = _make_character("Gobelin")
+    pc = Combatant(
+        name=char.name, side=CombatSide.PLAYER,
+        character=char, inventory=inv,
+    )
+    enemy = Combatant(
+        name="Gobelin", side=CombatSide.ENEMY,
+        character=enemy_char, inventory=create_inventory(),
+    )
+    combatants = [pc, enemy] if player_turn else [enemy, pc]
+    session.combat_state = CombatState(
+        combatants=combatants, current_turn_index=0, is_active=True,
+    )
+    return session, pc
+
+
+class TestEquipDuringCombat:
+    """In combat, /equip must respect the ActionValidator (audit H21)."""
+
+    @pytest.mark.asyncio()
+    async def test_weapon_swap_on_own_turn_succeeds(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        char = _make_character()
+        inv = _make_inventory_sword_equipped_dagger_in_pack()
+        session, pc = _combat_session(char, inv, player_turn=True)
+        cog.bot.get_session.return_value = session
+
+        await cog.equip.callback(cog, interaction, item="Dagger", slot="Main Hand")
+
+        assert inv.equipped[EquipmentSlot.MAIN_HAND].name == "Dagger"
+        assert pc.action_budget.weapon_swapped_this_turn is True
+        msg = interaction.response.send_message.call_args
+        assert "Dagger" in msg[0][0]
+
+    @pytest.mark.asyncio()
+    async def test_swap_refused_off_turn(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        char = _make_character()
+        inv = _make_inventory_sword_equipped_dagger_in_pack()
+        session, pc = _combat_session(char, inv, player_turn=False)
+        cog.bot.get_session.return_value = session
+
+        await cog.equip.callback(cog, interaction, item="Dagger", slot="Main Hand")
+
+        assert inv.equipped[EquipmentSlot.MAIN_HAND].name == "Longsword"
+        assert pc.action_budget.weapon_swapped_this_turn is False
+        msg = interaction.response.send_message.call_args
+        assert msg[1]["ephemeral"] is True
+
+    @pytest.mark.asyncio()
+    async def test_second_swap_same_turn_refused(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        char = _make_character()
+        inv = _make_inventory_sword_equipped_dagger_in_pack()
+        session, pc = _combat_session(char, inv, player_turn=True)
+        pc.action_budget.weapon_swapped_this_turn = True
+        cog.bot.get_session.return_value = session
+
+        await cog.equip.callback(cog, interaction, item="Dagger", slot="Main Hand")
+
+        assert inv.equipped[EquipmentSlot.MAIN_HAND].name == "Longsword"
+
+    @pytest.mark.asyncio()
+    async def test_non_weapon_slot_refused_in_combat(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        char = _make_character()
+        inv = _make_inventory_sword_equipped_dagger_in_pack()
+        session, _pc = _combat_session(char, inv, player_turn=True)
+        cog.bot.get_session.return_value = session
+        ac_before = char.ac
+
+        await cog.equip.callback(cog, interaction, item="Dagger", slot="Armor")
+
+        assert char.ac == ac_before
+        msg = interaction.response.send_message.call_args
+        assert "combat" in msg[0][0].lower()
+
+    @pytest.mark.asyncio()
+    async def test_equip_refused_while_action_lock_busy(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        char = _make_character()
+        inv = _make_inventory_sword_equipped_dagger_in_pack()
+        session, _pc = _combat_session(char, inv, player_turn=True)
+        cog.bot.get_session.return_value = session
+
+        await session.action_lock.acquire()
+        try:
+            await cog.equip.callback(
+                cog, interaction, item="Dagger", slot="Main Hand",
+            )
+        finally:
+            session.action_lock.release()
+
+        assert inv.equipped[EquipmentSlot.MAIN_HAND].name == "Longsword"
+        msg = interaction.response.send_message.call_args
+        assert "en cours" in msg[0][0]
+
+
+class TestUnequipDuringCombat:
+    @pytest.mark.asyncio()
+    async def test_unequip_refused_in_combat(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        char = _make_character()
+        inv = _make_inventory_sword_equipped_dagger_in_pack()
+        session, _pc = _combat_session(char, inv, player_turn=True)
+        cog.bot.get_session.return_value = session
+
+        await cog.unequip.callback(cog, interaction, slot="Main Hand")
+
+        assert EquipmentSlot.MAIN_HAND in inv.equipped
+        msg = interaction.response.send_message.call_args
+        assert "combat" in msg[0][0].lower()
+        assert msg[1]["ephemeral"] is True
+
+
+# ===========================================================================
 # /use_item
 # ===========================================================================
 
