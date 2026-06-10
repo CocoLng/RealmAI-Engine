@@ -268,8 +268,27 @@ def location_to_db(location: Location, campaign_id: str) -> LocationRow:
 
 
 def location_from_db(row: LocationRow) -> Location:
-    """Convert a LocationRow to a Location domain model."""
-    return Location(
+    """Convert a LocationRow to a Location domain model.
+
+    Combat zones are all-or-nothing (H4): dropping a single invalid zone
+    would leave orphan adjacency references behind, and the Location graph
+    validator would then make the whole row unloadable — crashing /resume
+    and MOVE. If any zone entry is invalid, or the zone graph itself no
+    longer validates, ALL zones are disabled and the location loads
+    zone-less (combat falls back to the legacy spatial-free flow).
+    """
+    zones: list[Zone] = []
+    if row.combat_zones:
+        try:
+            zones = [Zone.model_validate(z) for z in row.combat_zones]
+        except ValidationError as exc:
+            logger.warning(
+                "Combat zones disabled for location %r: invalid zone entry: %s",
+                row.name, exc,
+            )
+            zones = []
+
+    fields: dict = dict(
         name=row.name,
         description=row.description,
         arrival_hook=row.arrival_hook or "",
@@ -284,9 +303,6 @@ def location_from_db(row: LocationRow) -> Location:
         state_flags=dict(row.state_flags) if row.state_flags else {},
         unlocked_exits=list(row.unlocked_exits) if row.unlocked_exits else [],
         generated=bool(row.generated),
-        combat_zones=_validate_list(
-            Zone, row.combat_zones, context=f"Location combat_zones name={row.name!r}",
-        ),
         combat_triggers=_validate_dict(
             CombatTriggerDef,
             row.combat_triggers,
@@ -297,6 +313,16 @@ def location_from_db(row: LocationRow) -> Location:
             for key, value in (row.npc_roles or {}).items()
         },
     )
+    try:
+        return Location(**fields, combat_zones=zones)
+    except ValidationError as exc:
+        if not zones:
+            raise  # not a zone problem — genuine corruption, surface it
+        logger.warning(
+            "Combat zones disabled for location %r: inconsistent zone graph: %s",
+            row.name, exc,
+        )
+        return Location(**fields, combat_zones=[])
 
 
 # ---------------------------------------------------------------------------

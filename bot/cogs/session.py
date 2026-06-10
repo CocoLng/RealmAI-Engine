@@ -74,6 +74,42 @@ class _CampaignChannelArcStore:
             db_session.close()
 
 
+def _sanitize_combat_zones(combat_state: Any, location: Any) -> int:
+    """Realign every ``combatant.current_zone`` with the loaded location (H4).
+
+    A combat state can reference zones that no longer exist — either the
+    location's zones were dropped wholesale by ``location_from_db`` (one
+    invalid entry disables them all) or the location itself changed. Orphan
+    zone names would crash range checks and zone moves mid-combat.
+
+    Zone-less location → every combatant goes zone-less. Otherwise orphans
+    are re-seated like the initial layout: players in the first zone,
+    enemies in the last. Returns the number of combatants fixed.
+    """
+    from engine.combat import CombatSide
+
+    fixed = 0
+    zones = list(location.combat_zones) if location is not None else []
+    if not zones:
+        for combatant in combat_state.combatants:
+            if combatant.current_zone is not None:
+                combatant.current_zone = None
+                fixed += 1
+        return fixed
+
+    valid_names = {zone.name for zone in zones}
+    for combatant in combat_state.combatants:
+        zone_name = combatant.current_zone
+        if zone_name is not None and zone_name not in valid_names:
+            combatant.current_zone = (
+                zones[0].name
+                if combatant.side == CombatSide.PLAYER
+                else zones[-1].name
+            )
+            fixed += 1
+    return fixed
+
+
 class SessionCog(commands.Cog):
     """Campaign lifecycle: start, resume, save, end, settings."""
 
@@ -1049,6 +1085,17 @@ class SessionCog(commands.Cog):
                 logger.warning(
                     "resume: dropping unparseable combat_state campaign=%s",
                     campaign_id, exc_info=True,
+                )
+
+        # H4 — the location may have loaded zone-less (invalid zones are
+        # dropped wholesale by location_from_db). Realign every combatant's
+        # current_zone with the zones that actually exist.
+        if combat_state is not None:
+            fixed = _sanitize_combat_zones(combat_state, location)
+            if fixed:
+                logger.warning(
+                    "resume: realigned %d combatant zone(s) campaign=%s",
+                    fixed, campaign_id,
                 )
 
         # Rebuild in-memory session. ``creator_id`` is set from the resumer

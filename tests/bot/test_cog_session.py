@@ -238,18 +238,33 @@ class TestResume:
         assert interaction.followup.send.call_args[1].get("ephemeral") is True
 
 
-def _make_combat_state(*, is_active: bool = True) -> CombatState:
-    """An active (or finished) single-PC combat state for resume tests."""
+def _make_combat_state(
+    *,
+    is_active: bool = True,
+    pc_zone: str | None = None,
+    enemy_zone: str | None = None,
+) -> CombatState:
+    """An active (or finished) PC-vs-goblin combat state for resume tests."""
     char = create_character(
         "Hero", Race.HUMAN, CharacterClass.FIGHTER,
         AbilityScores(STR=16, DEX=12, CON=14, INT=10, WIS=13, CHA=8),
     )
-    combatant = Combatant(
+    pc = Combatant(
         name="Hero", side=CombatSide.PLAYER,
         character=char, inventory=create_inventory(), initiative=15,
+        current_zone=pc_zone,
+    )
+    goblin_char = create_character(
+        "Goblin", Race.HUMAN, CharacterClass.FIGHTER,
+        AbilityScores(STR=10, DEX=12, CON=10, INT=8, WIS=8, CHA=6),
+    )
+    goblin = Combatant(
+        name="Goblin", side=CombatSide.ENEMY,
+        character=goblin_char, inventory=create_inventory(), initiative=10,
+        current_zone=enemy_zone,
     )
     return CombatState(
-        combatants=[combatant],
+        combatants=[pc, goblin],
         round_number=2,
         current_turn_index=0,
         is_active=is_active,
@@ -345,6 +360,83 @@ class TestResumeCombatRebuild:
 
         assert CHANNEL_ID in cog.bot.sessions
         assert cog.bot.sessions[CHANNEL_ID].combat_turn_manager is None
+
+
+class TestResumeZoneSanitation:
+    """H4 — combatant.current_zone must match the zones actually loaded."""
+
+    def _arm_combat_cog(self, cog: SessionCog) -> None:
+        turn_manager = MagicMock()
+        turn_manager._prompt_turn = AsyncMock()
+        combat_cog = MagicMock()
+        combat_cog.build_turn_manager = MagicMock(return_value=turn_manager)
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_orphan_zone_reassigned_by_side(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """PC lands in the first zone, enemy in the last — initial layout."""
+        from world.combat_zone import Zone
+
+        loc = Location(
+            name="Bridge",
+            combat_zones=[
+                Zone(name="Front", adjacent_zone_names=["Back"]),
+                Zone(name="Back", adjacent_zone_names=["Front"]),
+            ],
+        )
+        LocationRepository(db_session).save(loc, persisted_campaign.id)
+        persisted_campaign.current_location = "Bridge"
+        persisted_campaign.combat_state_json = _make_combat_state(
+            pc_zone="Disparue", enemy_zone="Disparue",
+        ).model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+        self._arm_combat_cog(cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        state = cog.bot.sessions[CHANNEL_ID].combat_state
+        assert state is not None
+        zones = {c.name: c.current_zone for c in state.combatants}
+        assert zones["Hero"] == "Front"
+        assert zones["Goblin"] == "Back"
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_zones_cleared_when_location_has_none(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """Zone-less location (e.g. zones dropped by H4) → zone-less combat."""
+        loc = Location(name="Cellar", description="No zones here")
+        LocationRepository(db_session).save(loc, persisted_campaign.id)
+        persisted_campaign.current_location = "Cellar"
+        persisted_campaign.combat_state_json = _make_combat_state(
+            pc_zone="Ghost", enemy_zone="Ghost",
+        ).model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+        self._arm_combat_cog(cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        state = cog.bot.sessions[CHANNEL_ID].combat_state
+        assert state is not None
+        assert all(c.current_zone is None for c in state.combatants)
 
 
 class TestResumeCorruptBlobs:

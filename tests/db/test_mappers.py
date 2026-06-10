@@ -296,15 +296,45 @@ class TestCorruptedDataResilience:
         assert len(restored.objectives) == 2
         assert restored.objectives[0].description == sample_quest.objectives[0].description
 
-    def test_corrupted_zone_is_skipped(self) -> None:
+    def test_corrupted_zone_drops_all_zones(self) -> None:
+        """H4 — one bad zone disables ALL zones for the location.
+
+        Dropping a single zone would leave orphan adjacency references and
+        make the whole Location unloadable (graph validator raises). The
+        location must load zone-less instead.
+        """
         from world.combat_zone import Zone
-        loc = Location(name="Hall", combat_zones=[Zone(name="Z1")])
+
+        loc = Location(
+            name="Hall",
+            combat_zones=[
+                Zone(name="Front", adjacent_zone_names=["Back"]),
+                Zone(name="Back", adjacent_zone_names=["Front"]),
+            ],
+        )
         row = location_to_db(loc, "c")
-        # Inject a bogus zone dict
         row.combat_zones = [row.combat_zones[0], {"bogus": "fields"}]  # missing name
         restored = location_from_db(row)
-        assert len(restored.combat_zones) == 1
-        assert restored.combat_zones[0].name == "Z1"
+        assert restored.combat_zones == []
+        assert restored.name == "Hall"
+
+    def test_orphan_adjacency_drops_all_zones(self) -> None:
+        """H4 — individually-valid zones with a broken graph load zone-less.
+
+        A zone referencing a neighbour that no longer exists used to crash
+        the whole Location load (ValueError from _validate_zones_graph) —
+        bricking /resume and MOVE for that campaign.
+        """
+        from world.combat_zone import Zone
+
+        loc = Location(name="Crypt", combat_zones=[Zone(name="Nave")])
+        row = location_to_db(loc, "c")
+        row.combat_zones = [
+            {"name": "Nave", "adjacent_zone_names": ["Ghost"]},  # orphan ref
+        ]
+        restored = location_from_db(row)
+        assert restored.combat_zones == []
+        assert restored.name == "Crypt"
 
     def test_corrupted_dialogue_entry_is_skipped(self) -> None:
         npc = NPC(
