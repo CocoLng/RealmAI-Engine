@@ -921,6 +921,9 @@ def resolve_cast_spell(
                 player_intent=intent,
             )
 
+    caster_hp_before = caster.character.hp
+    target_hp_before = target.character.hp if target is not None else 0
+
     try:
         result = resolve_spell(caster, spell, target=target)
     except ValueError as exc:
@@ -946,20 +949,28 @@ def resolve_cast_spell(
 
     target_label = f" sur {target.name}" if target is not None else ""
     effects: list[str] = []
-    hp_delta: dict[str, int] = {}
     target_defeated: str | None = None
+
+    # hp_delta carries the ACTUAL HP change, not the rolled amount —
+    # healing clamps at max_hp and damage clamps at 0.
+    hp_delta: dict[str, int] = {}
+    if target is not None:
+        target_delta = target.character.hp - target_hp_before
+        if target_delta:
+            hp_delta[target.name] = target_delta
+    if target is None or target.name != caster.name:
+        caster_delta = caster.character.hp - caster_hp_before
+        if caster_delta:
+            hp_delta[caster.name] = caster_delta
 
     if result.damage > 0 and target is not None:
         effects.append(f"{result.damage} dégâts")
-        hp_delta[target.name] = -result.damage
         if not target.is_alive:
             target_defeated = target.name
     if result.healing > 0:
         heal_recipient = target if target is not None else caster
-        effects.append(f"{result.healing} PV rendus")
-        hp_delta[heal_recipient.name] = (
-            hp_delta.get(heal_recipient.name, 0) + result.healing
-        )
+        actual_healed = max(0, hp_delta.get(heal_recipient.name, 0))
+        effects.append(f"{actual_healed} PV rendus")
     if result.condition_applied and target is not None:
         effects.append(f"{target.name} est {result.condition_applied}")
 

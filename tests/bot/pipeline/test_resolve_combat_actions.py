@@ -204,6 +204,23 @@ class TestResolveCastSpell:
         assert wizard.spellcaster.spell_slots_remaining[1] == 1
 
     @pytest.mark.asyncio()
+    async def test_overhealing_reports_actual_hp_delta(self) -> None:
+        # Missing 1 HP, 1d8 heal: the roll may be up to 8 but the ACTUAL
+        # change is +1 — hp_delta must report the clamped value.
+        wizard = _wizard()
+        wizard.character.hp = wizard.character.max_hp - 1
+        state = _combat(wizard, _goblin())
+        action = _action(
+            ActionType.CAST_SPELL,
+            spell_name="Cure Wounds",
+        )
+
+        outcome, _side = await _run(action, state)
+
+        assert wizard.character.hp == wizard.character.max_hp
+        assert outcome.public_effects.hp_delta == {"Elara": 1}
+
+    @pytest.mark.asyncio()
     async def test_bonus_action_spell_spends_bonus_slot(self) -> None:
         wizard = _wizard()
         wizard.character.hp = 1
