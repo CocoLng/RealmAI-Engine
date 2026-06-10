@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Callable
 
 import discord
@@ -89,6 +90,24 @@ _NON_CONSUMING_ACTION_TYPES: frozenset[ActionType] = frozenset({
     ActionType.QUESTION,
     ActionType.LOOK,
 })
+
+# Internal '[Tag] …' diagnostic segments occasionally leaked into NPC
+# summaries by executors (audit H14). Matches the bracket tag and the rest
+# of its ';'-separated segment so the whole internal message disappears.
+_INTERNAL_TAG_RE = re.compile(r"\s*\[[^\]]*\][^;]*(?:;\s*|$)")
+
+
+def _strip_internal_tags(summary: str) -> str:
+    """Remove engine-internal '[Tag] …' segments from a player-visible summary.
+
+    Defense in depth for the NPC turn recap: executors must not emit such
+    tags anymore, but a leaked diagnostic must never reach the Discord
+    channel either way. Leftover separators and double spaces are tidied.
+    """
+    cleaned = _INTERNAL_TAG_RE.sub(" ", summary)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip(" ;:")
+
 
 # Labels for the hub-freeze message after combat ends. Displayed on the
 # edited hub above the final CombatState embed.
@@ -422,6 +441,10 @@ class TurnManager:
             summary = getattr(self, "_last_npc_summary", "") or (
                 f"{combatant.name} → {plan.target_name or '?'}"
             )
+
+        # The summary is posted verbatim and recorded for the narrator —
+        # scrub any internal '[Tag] …' diagnostic before it leaves (H14).
+        summary = _strip_internal_tags(summary)
 
         await self._safe_send(content=f"📜 {summary}")
         if dice_embed is not None:

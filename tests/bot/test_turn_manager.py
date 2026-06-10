@@ -845,6 +845,64 @@ class TestSurpriseSkip:
 
 
 # ---------------------------------------------------------------------------
+# H14 — NPC turn summaries must reach players clean (no internal tags)
+# ---------------------------------------------------------------------------
+
+
+class TestNPCSummarySanitization:
+    @pytest.mark.asyncio
+    async def test_internal_bracket_tags_stripped_before_send(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Defense in depth: even if an executor leaks an internal
+        '[Tag] …' diagnostic into the summary, the TurnManager must strip
+        it before posting / recording (audit H14)."""
+        from engine.npc_ai.scripted import NPCActionPlan
+
+        pc = _pc()
+        goblin = _enemy(tier=NPCTier.MINION)
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+        tm._dispatch_npc_brain = MagicMock(  # type: ignore[method-assign]
+            return_value=NPCActionPlan(
+                action_type=ActionType.DEFEND,
+                rationale="test",
+            ),
+        )
+
+        tainted = (
+            "Gobelin utilise Nova : [Nova] aoe_damage not implemented — "
+            "fallback to standard attack; Aragorn subit 5 dégâts"
+        )
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.execute_action_plan",
+            MagicMock(return_value=tainted),
+        )
+
+        await tm._resolve_npc_turn(goblin)
+
+        posted = [
+            call.kwargs.get("content", "") or ""
+            for call in channel.send.await_args_list
+        ]
+        summary_posts = [c for c in posted if c.startswith("📜")]
+        assert summary_posts, "no NPC summary was posted"
+        for content in summary_posts:
+            assert "[" not in content, content
+            assert "not implemented" not in content, content
+            assert "fallback" not in content, content
+        # The clean part of the summary survived.
+        assert any("Aragorn subit 5 dégâts" in c for c in summary_posts)
+        # The recorded combat event is the same sanitized text.
+        assert session.combat_state is not None
+        assert all(
+            "[" not in ev for ev in session.combat_state.recent_events
+        )
+
+
+# ---------------------------------------------------------------------------
 # C3 — the turn must only advance when the current combatant actually
 # consumed their action
 # ---------------------------------------------------------------------------

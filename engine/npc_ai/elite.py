@@ -280,9 +280,13 @@ def execute_signature_ability(
 
     Handles the MVP effect kinds (``damage``, ``heal``, ``condition``) in
     place. Non-MVP kinds (``aoe_damage``, ``buff``, ``debuff``, ``move``)
-    are not implemented yet — they log a WARNING and produce a fallback
-    summary. Callers that depend on those kinds should fall back on a
-    standard ``NPCAttack`` via :func:`engine.combat.resolve_npc_attack`.
+    are not implemented yet — they log a WARNING and are skipped silently:
+    the summaries are player-visible (the TurnManager posts them as the
+    NPC turn recap), so internal degradation messages must never appear
+    there (audit H14). Same for authoring errors on condition effects.
+
+    Summaries are written in French — they reach the Discord channel
+    verbatim.
 
     ``uses_remaining`` is decremented when it is an integer (limited
     usage). ``at_will`` signatures leave it at ``None``.
@@ -294,14 +298,10 @@ def execute_signature_ability(
     for effect in signature.effects:
         if effect.kind not in _MVP_EFFECT_KINDS:
             logger.warning(
-                "Signature %s effect kind %r is not MVP — falling back to "
-                "standard attack.",
+                "Signature %s effect kind %r is not MVP — skipped "
+                "(players see only the resolved MVP effects).",
                 signature.name,
                 effect.kind,
-            )
-            summaries.append(
-                f"[{signature.name}] {effect.kind} not implemented — "
-                "fallback to standard attack."
             )
             continue
 
@@ -328,7 +328,7 @@ def _apply_damage_effect(
         rolled = roll(dice_expr).total
         damage = max(0, rolled)
         apply_damage(target, damage, state=state)
-        summaries.append(f"{target.name} takes {damage} damage")
+        summaries.append(f"{target.name} subit {damage} dégâts")
     return summaries
 
 
@@ -343,7 +343,7 @@ def _apply_heal_effect(
             continue
         healing = max(0, roll(dice_expr).total)
         apply_healing(target, healing)
-        summaries.append(f"{target.name} healed {healing} HP")
+        summaries.append(f"{target.name} récupère {healing} PV")
     return summaries
 
 
@@ -353,11 +353,13 @@ def _apply_condition_effect(
     targets: list[Combatant],
 ) -> list[str]:
     if effect.condition_name is None:
+        # Authoring bug — log for the operator, nothing for the players
+        # (these summaries are posted verbatim in the combat channel).
         logger.warning(
             "Signature %s condition effect missing condition_name — skipping.",
             signature.name,
         )
-        return [f"[{signature.name}] missing condition_name"]
+        return []
 
     try:
         cond_type = ConditionType[effect.condition_name.upper()]
@@ -367,7 +369,7 @@ def _apply_condition_effect(
             signature.name,
             effect.condition_name,
         )
-        return [f"[{signature.name}] unknown condition {effect.condition_name!r}"]
+        return []
 
     summaries: list[str] = []
     for target in targets:
@@ -376,7 +378,7 @@ def _apply_condition_effect(
         if effect.save_ability is not None and effect.save_dc is not None:
             save_result = _roll_signature_save(target, effect.save_ability, effect.save_dc)
             if save_result.outcome == RollOutcome.SUCCESS or save_result.total >= effect.save_dc:
-                summaries.append(f"{target.name} resists {signature.name}")
+                summaries.append(f"{target.name} résiste à {signature.name}")
                 continue
         apply_condition(
             target.conditions,
@@ -386,7 +388,7 @@ def _apply_condition_effect(
                 duration_rounds=effect.condition_duration_rounds,
             ),
         )
-        summaries.append(f"{target.name} is now {effect.condition_name}")
+        summaries.append(f"{target.name} est maintenant {effect.condition_name}")
     return summaries
 
 
