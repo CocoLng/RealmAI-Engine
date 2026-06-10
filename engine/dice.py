@@ -23,8 +23,15 @@ class DiceResult(BaseModel):
     total: int
 
 
-# Pattern: count 'd' sides, optional +/- modifier
-_DICE_RE = re.compile(r"^(\d+)d(\d+)([+-]\d+)?$")
+# Pattern: count 'd' sides, optional +/- modifier. Digit runs are capped at
+# 9 so absurd inputs are rejected by the regex before any int() conversion.
+_DICE_RE = re.compile(r"^(\d{1,9})d(\d{1,9})([+-]\d{1,9})?$")
+
+# Anti-DoS bounds (audit H20). The rolls list is materialised synchronously
+# on the event loop, so an unbounded count would freeze the bot. These caps
+# protect every dice path: /roll, heal dice, LLM-authored stat blocks.
+MAX_NUM_DICE: int = 100
+MAX_NUM_SIDES: int = 1000
 
 
 def parse_dice(expression: str) -> tuple[int, int, int]:
@@ -39,7 +46,8 @@ def parse_dice(expression: str) -> tuple[int, int, int]:
         Tuple of (num_dice, num_sides, modifier).
 
     Raises:
-        ValueError: If the expression is not valid dice notation.
+        ValueError: If the expression is not valid dice notation, or exceeds
+            the MAX_NUM_DICE / MAX_NUM_SIDES bounds.
     """
     cleaned = expression.replace(" ", "")
     match = _DICE_RE.match(cleaned)
@@ -52,6 +60,15 @@ def parse_dice(expression: str) -> tuple[int, int, int]:
 
     if num_dice < 1 or num_sides < 1:
         raise ValueError(f"Invalid dice expression: '{expression}'")
+    if num_dice > MAX_NUM_DICE:
+        raise ValueError(
+            f"Too many dice in '{expression}': {num_dice} (max {MAX_NUM_DICE})"
+        )
+    if num_sides > MAX_NUM_SIDES:
+        raise ValueError(
+            f"Die size too large in '{expression}': d{num_sides} "
+            f"(max {MAX_NUM_SIDES})"
+        )
 
     return (num_dice, num_sides, modifier)
 
@@ -66,20 +83,11 @@ def roll(expression: str) -> DiceResult:
         DiceResult with individual rolls, modifier, and total.
 
     Raises:
-        ValueError: If the expression is not valid dice notation.
+        ValueError: If the expression is not valid dice notation, or exceeds
+            the MAX_NUM_DICE / MAX_NUM_SIDES bounds.
     """
     cleaned = expression.replace(" ", "")
-    match = _DICE_RE.match(cleaned)
-    if not match:
-        raise ValueError(f"Invalid dice expression: '{expression}'")
-
-    num_dice = int(match.group(1))
-    num_sides = int(match.group(2))
-
-    if num_dice < 1 or num_sides < 1:
-        raise ValueError(f"Invalid dice expression: '{expression}'")
-
-    modifier = int(match.group(3)) if match.group(3) else 0
+    num_dice, num_sides, modifier = parse_dice(cleaned)
 
     rolls = [random.randint(1, num_sides) for _ in range(num_dice)]
     total = sum(rolls) + modifier

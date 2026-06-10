@@ -6,9 +6,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from engine.dice import roll
+from engine.dice import MAX_NUM_DICE, MAX_NUM_SIDES, roll
 
 logger = logging.getLogger(__name__)
+
+# Individual rolls listed in the reply before the rest is summarised.
+_MAX_ROLLS_SHOWN = 20
 
 
 class RollsCog(commands.Cog):
@@ -25,7 +28,8 @@ class RollsCog(commands.Cog):
             result = roll(expression)
         except (ValueError, AttributeError):
             await interaction.response.send_message(
-                f"Expression invalide: `{expression}`. Utilise le format `NdX+M` (ex: 2d6+3).",
+                f"Expression invalide: `{expression}`. Utilise le format `NdX+M` "
+                f"(ex: 2d6+3, max {MAX_NUM_DICE}d{MAX_NUM_SIDES}).",
                 ephemeral=True,
             )
             return
@@ -33,7 +37,10 @@ class RollsCog(commands.Cog):
         logger.info("CMD roll user=%s expression=%s result=%d", interaction.user, expression, result.total)
 
         # Format: 2d6+3 → [4, 5] + 3 = 12
-        rolls_str = ", ".join(str(r) for r in result.rolls)
+        rolls_str = ", ".join(str(r) for r in result.rolls[:_MAX_ROLLS_SHOWN])
+        hidden = len(result.rolls) - _MAX_ROLLS_SHOWN
+        if hidden > 0:
+            rolls_str += f", … (+{hidden} dés)"
         if result.modifier != 0:
             sign = "+" if result.modifier > 0 else ""
             msg = f"\U0001f3b2 **{result.expression}** \u2192 [{rolls_str}] {sign}{result.modifier} = **{result.total}**"

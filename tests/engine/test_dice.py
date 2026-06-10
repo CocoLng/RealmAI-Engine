@@ -8,6 +8,8 @@ from engine.dice import (
     MARGIN_HARD_FAIL,
     MARGIN_PASS,
     MARGIN_SOLID_SUCCESS,
+    MAX_NUM_DICE,
+    MAX_NUM_SIDES,
     RollOutcome,
     _compute_outcome,
     parse_dice,
@@ -145,6 +147,53 @@ class TestRollEdgeCases:
     def test_negative_dice_raises(self) -> None:
         with pytest.raises(ValueError, match="Invalid dice expression"):
             roll("-1d6")
+
+
+class TestRollBounds:
+    """Anti-DoS clamps (audit H20): dice count and die size are bounded.
+
+    An unbounded expression like "999999999d999999999" used to materialise
+    the full rolls list synchronously — these bounds reject it upfront with
+    a clear message, protecting /roll, heal dice, and LLM stat blocks alike.
+    """
+
+    def test_bounds_constants(self) -> None:
+        assert MAX_NUM_DICE == 100
+        assert MAX_NUM_SIDES == 1000
+
+    def test_max_dice_accepted(self) -> None:
+        result = roll(f"{MAX_NUM_DICE}d6")
+        assert len(result.rolls) == MAX_NUM_DICE
+
+    def test_too_many_dice_raises(self) -> None:
+        with pytest.raises(ValueError, match="max 100"):
+            roll("101d6")
+
+    def test_max_sides_accepted(self) -> None:
+        result = roll(f"1d{MAX_NUM_SIDES}")
+        assert 1 <= result.total <= MAX_NUM_SIDES
+
+    def test_too_many_sides_raises(self) -> None:
+        with pytest.raises(ValueError, match="max 1000"):
+            roll("1d1001")
+
+    def test_dos_expression_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            roll("999999999d999999999")
+
+    def test_absurd_digit_count_rejected(self) -> None:
+        # So many digits that even int() conversion would be costly —
+        # must be rejected by the parser, not converted.
+        with pytest.raises(ValueError, match="Invalid dice expression"):
+            roll("9" * 5000 + "d6")
+
+    def test_parse_dice_rejects_excess_dice(self) -> None:
+        with pytest.raises(ValueError, match="max 100"):
+            parse_dice("101d6")
+
+    def test_parse_dice_rejects_excess_sides(self) -> None:
+        with pytest.raises(ValueError, match="max 1000"):
+            parse_dice("1d1001")
 
 
 # ---------------------------------------------------------------------------
