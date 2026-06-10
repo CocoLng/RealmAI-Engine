@@ -355,3 +355,45 @@ def test_debug_mode_off_by_default(
     debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
     content_logs = [m for m in debug_msgs if "prompt[200]" in m or "resp[200]" in m]
     assert content_logs == [], f"Unexpected content debug logs: {content_logs}"
+
+
+# ---------------------------------------------------------------------------
+# keep_alive per model (M8)
+# ---------------------------------------------------------------------------
+
+
+def _send_chat(httpx_mock: HTTPXMock, client: OllamaClient, **kwargs) -> dict:
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response({"ok": "yes"}))
+    client.chat_json(messages=[{"role": "user", "content": "hi"}], **kwargs)
+    return json.loads(httpx_mock.get_requests()[-1].content)
+
+
+def test_keep_alive_short_for_interpreter_model(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    """M8 — the 4b must NOT stay resident alongside the 9b (18 GB budget)."""
+    body = _send_chat(httpx_mock, ollama_client, model="qwen3.5:4b")
+    assert body["keep_alive"] == "2m"
+
+
+def test_keep_alive_long_for_narrator_model(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    body = _send_chat(httpx_mock, ollama_client, model="qwen3.5:9b")
+    assert body["keep_alive"] == "10m"
+
+
+def test_keep_alive_explicit_override_wins(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    body = _send_chat(
+        httpx_mock, ollama_client, model="qwen3.5:4b", keep_alive="30s",
+    )
+    assert body["keep_alive"] == "30s"
+
+
+def test_keep_alive_defaults_for_unknown_model(
+    httpx_mock: HTTPXMock, ollama_client: OllamaClient,
+) -> None:
+    body = _send_chat(httpx_mock, ollama_client, model="some-other:7b")
+    assert body["keep_alive"] == "10m"
