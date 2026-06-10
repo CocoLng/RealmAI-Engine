@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from db.repositories import (
     CampaignRepository,
+    LocationRepository,
     NPCRepository,
     PlayerCharacterRepository,
     QuestRepository,
@@ -40,6 +41,14 @@ def persist_session(db_factory: Callable[[], Any], session: GameSession) -> None
         )
         camp_repo = CampaignRepository(db_session)
         camp_repo.update(session.campaign)
+
+        # Current location — beat effects mutate it in memory (unlocked
+        # exits, state flags, spawned NPCs/items) while the advanced arc is
+        # persisted below. Saving both in the same transaction keeps world
+        # and story in lockstep across restarts (H5).
+        if session.current_location is not None:
+            loc_repo = LocationRepository(db_session)
+            loc_repo.upsert(session.current_location, session.campaign.id)
 
         # Player characters
         pc_repo = PlayerCharacterRepository(db_session)

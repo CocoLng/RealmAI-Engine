@@ -779,6 +779,43 @@ def db_factory():
 class TestPersistSessionRoundTrip:
     """Full save -> load round-trip through real DB."""
 
+    def test_location_mutations_roundtrip(self, db_factory):
+        """H5 — beat effects mutate the live location; /save must persist it.
+
+        The orchestrator unlocks exits, sets state flags, and spawns
+        NPCs/items on the in-memory location while persisting the advanced
+        arc. Without the location in the same save, a restart regresses the
+        world but not the story — soft-locking the arc.
+        """
+        from bot.persistence import persist_session
+
+        campaign = Campaign(id="rt-loc", name="Loc Persist", current_location="Plaza")
+        loc = Location(name="Plaza", description="Open square")
+
+        db = db_factory()
+        CampaignRepository(db).save(campaign)
+        LocationRepository(db).save(loc, campaign.id)
+        db.commit()
+        db.close()
+
+        session = GameSession(campaign=campaign, current_location=loc)
+        # Orchestrator-style beat-effect mutations (in memory only).
+        loc.unlocked_exits.append("Crypte")
+        loc.state_flags["porte_ouverte"] = True
+        loc.npcs_present.append("Gardien")
+        loc.items_available.append("Clef ancienne")
+
+        persist_session(db_factory, session)
+
+        db = db_factory()
+        restored = LocationRepository(db).get_by_name("Plaza", campaign.id)
+        db.close()
+        assert restored is not None
+        assert "Crypte" in restored.unlocked_exits
+        assert restored.state_flags.get("porte_ouverte") is True
+        assert "Gardien" in restored.npcs_present
+        assert "Clef ancienne" in restored.items_available
+
     def test_combat_state_roundtrip(self, db_factory):
         """Save a session with combat, reload campaign, verify combat JSON."""
         campaign = Campaign(id="rt-1", name="Round Trip")
