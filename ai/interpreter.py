@@ -7,6 +7,7 @@ from pathlib import Path
 from ai.client import LLMParseError, OllamaClient
 from ai.language import language_instruction
 from ai.models import InterpretedAction
+from ai.prompt_safety import PLAYER_DATA_INSTRUCTION, delimited_player_block
 from ai.scene_context import SceneContext
 from engine.validators import ActionType
 
@@ -76,7 +77,12 @@ class Interpreter:
         messages = [
             {
                 "role": "system",
-                "content": language_instruction(language) + _SYSTEM_PROMPT,
+                "content": (
+                    language_instruction(language)
+                    + _SYSTEM_PROMPT
+                    + "\n\n"
+                    + PLAYER_DATA_INSTRUCTION
+                ),
             },
             {"role": "user", "content": user_content},
         ]
@@ -263,7 +269,7 @@ class Interpreter:
         lines.append(f"Character name: {actor_name}")
         lines.append("")
         lines.append("## Player input")
-        lines.append(player_text)
+        lines.append(delimited_player_block(player_text))
 
         return "\n".join(lines)
 

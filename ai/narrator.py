@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from ai.client import LLMParseError, OllamaClient, OllamaUnavailableError
 from ai.language import language_instruction
 from ai.models import DirectorNote, NarrativeResult, Tone
+from ai.prompt_safety import PLAYER_DATA_INSTRUCTION, delimited_player_block
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +253,9 @@ class Narrator:
         sections.extend([context_prompt, f"## What happened\n{action_result_text}"])
         if not simplified:
             if player_intent:
-                sections.append(f"## Player framing\n{player_intent}")
+                sections.append(
+                    f"## Player framing\n{delimited_player_block(player_intent)}"
+                )
             if outcome_facts:
                 sections.append(f"## State changes\n{outcome_facts}")
             if has_npc_dialogue:
@@ -263,7 +266,12 @@ class Narrator:
                     "speech. Do NOT write any spoken words."
                 )
         user_content = "\n\n".join(sections)
-        system_prompt = language_instruction(language) + _SYSTEM_PROMPT
+        system_prompt = (
+            language_instruction(language)
+            + _SYSTEM_PROMPT
+            + "\n\n"
+            + PLAYER_DATA_INSTRUCTION
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
