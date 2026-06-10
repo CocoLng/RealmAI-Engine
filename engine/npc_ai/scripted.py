@@ -15,6 +15,7 @@ remains the sole arbiter of dice and damage.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,8 @@ from engine.validators import ActionType
 
 if TYPE_CHECKING:
     from world.location import Location
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +163,14 @@ def execute_action_plan(
     consume the Action slot.
 
     The function never raises on a badly pointed plan — if the target or
-    the weapon is not found, it returns a descriptive summary without
-    mutating anything. Validation errors from the engine (insufficient
-    movement, non-adjacent zone, etc.) do propagate.
+    the weapon is not found, it logs the diagnostic and returns a clean
+    summary without mutating anything. Validation errors from the engine
+    (insufficient movement, non-adjacent zone, etc.) do propagate.
+
+    Summaries are written in French — the TurnManager posts them verbatim
+    in the Discord channel as the NPC turn recap (audit H14). Internal
+    diagnostics (unknown target, missing attack, unsupported action type)
+    go to the log, never to the players.
     """
     if plan.action_type == ActionType.ATTACK:
         if plan.signature_name is not None:
@@ -172,8 +180,13 @@ def execute_action_plan(
         return _execute_move(combatant, plan, state, location)
     if plan.action_type == ActionType.DEFEND:
         consume_action(combatant)
-        return f"{combatant.name} dodges"
-    return f"{combatant.name} does nothing ({plan.action_type.value})"
+        return f"{combatant.name} esquive"
+    logger.warning(
+        "NPC %s planned unsupported action type %r — no-op.",
+        combatant.name,
+        plan.action_type.value,
+    )
+    return f"{combatant.name} ne fait rien"
 
 
 def _execute_signature(
@@ -190,7 +203,12 @@ def _execute_signature(
     :func:`engine.npc_ai.elite.execute_signature_ability`.
     """
     if combatant.stat_block is None:
-        return f"{combatant.name} has no stat block to resolve {plan.signature_name!r}"
+        logger.warning(
+            "NPC %s has no stat block to resolve signature %r — no-op.",
+            combatant.name,
+            plan.signature_name,
+        )
+        return f"{combatant.name} ne peut pas utiliser {plan.signature_name}"
 
     signature: SignatureAbility | None = None
     for sig in combatant.stat_block.signature_abilities:
@@ -198,9 +216,12 @@ def _execute_signature(
             signature = sig
             break
     if signature is None:
-        return (
-            f"{combatant.name} has no signature named {plan.signature_name!r}"
+        logger.warning(
+            "NPC %s has no signature named %r — no-op.",
+            combatant.name,
+            plan.signature_name,
         )
+        return f"{combatant.name} ne peut pas utiliser {plan.signature_name}"
 
     target = _find_by_name(plan.target_name, state)
     targets: list[Combatant] = [target] if target is not None else [combatant]
@@ -209,8 +230,8 @@ def _execute_signature(
 
     consume_action(combatant)
     summaries = execute_signature_ability(combatant, signature, targets, state)
-    joined = "; ".join(summaries) if summaries else "no effect"
-    return f"{combatant.name} uses {signature.name}: {joined}"
+    joined = "; ".join(summaries) if summaries else "aucun effet"
+    return f"{combatant.name} utilise {signature.name} : {joined}"
 
 
 # ---------------------------------------------------------------------------
@@ -225,23 +246,30 @@ def _execute_attack(
 ) -> str:
     target = _find_by_name(plan.target_name, state)
     if target is None:
-        return f"{combatant.name} could not find target {plan.target_name!r}"
+        logger.warning(
+            "NPC %s could not find attack target %r — no-op.",
+            combatant.name,
+            plan.target_name,
+        )
+        return f"{combatant.name} ne trouve aucune cible"
 
     npc_attack = _find_npc_attack(combatant, plan.weapon_name)
     if npc_attack is None:
-        return (
-            f"{combatant.name} has no stat-block attack named "
-            f"{plan.weapon_name!r}"
+        logger.warning(
+            "NPC %s has no stat-block attack named %r — no-op.",
+            combatant.name,
+            plan.weapon_name,
         )
+        return f"{combatant.name} ne peut pas attaquer"
 
     consume_action(combatant)
     result = resolve_npc_attack(combatant, target, npc_attack)
     if result.hit:
         return (
-            f"{combatant.name} hits {target.name} with {npc_attack.name} "
-            f"for {result.damage} damage"
+            f"{combatant.name} touche {target.name} avec {npc_attack.name} "
+            f"— {result.damage} dégâts"
         )
-    return f"{combatant.name} misses {target.name} with {npc_attack.name}"
+    return f"{combatant.name} rate {target.name} avec {npc_attack.name}"
 
 
 def _execute_move(
@@ -251,9 +279,9 @@ def _execute_move(
     location: "Location | None",
 ) -> str:
     if plan.move_to_zone is None or location is None:
-        return f"{combatant.name} cannot move"
+        return f"{combatant.name} ne peut pas se déplacer"
     move_combatant_to_zone(state, combatant, plan.move_to_zone, location)
-    return f"{combatant.name} moves to {plan.move_to_zone}"
+    return f"{combatant.name} se déplace vers {plan.move_to_zone}"
 
 
 # ---------------------------------------------------------------------------

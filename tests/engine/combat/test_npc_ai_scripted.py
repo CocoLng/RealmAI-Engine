@@ -43,6 +43,8 @@ from engine.npc_stat_block import (
     NPCAttack,
     NPCStatBlock,
     NPCTier,
+    SignatureAbility,
+    SignatureAbilityEffect,
 )
 from engine.validators import ActionType
 from world.combat_zone import Zone
@@ -330,3 +332,289 @@ class TestExecuteActionPlan:
         execute_action_plan(goblin, plan, state, location=None)
 
         assert goblin.action_budget.action_used is True
+
+
+# ---------------------------------------------------------------------------
+# Tests — execution summaries (H14 reliquat)
+# ---------------------------------------------------------------------------
+
+
+def _make_elite_with_signature(
+    name: str = "Brute",
+    signature: SignatureAbility | None = None,
+) -> Combatant:
+    """Elite-tier combatant carrying one signature ability (or none)."""
+    scores = AbilityScores(STR=14, DEX=12, CON=14, INT=10, WIS=10, CHA=10)
+    char = create_character(name, Race.HUMAN, CharacterClass.FIGHTER, scores)
+    inv = create_inventory()
+    stat_block = NPCStatBlock(
+        tier=NPCTier.ELITE,
+        archetype="brute",
+        multiattack_count=1,
+        attacks=[
+            NPCAttack(
+                name="Maul",
+                damage_dice="2d6+3",
+                damage_type=DamageType.BLUDGEONING,
+                to_hit_bonus=5,
+                range_type="melee",
+            ),
+        ],
+        signature_abilities=[signature] if signature is not None else [],
+    )
+    return Combatant(
+        name=name,
+        side=CombatSide.ENEMY,
+        character=char,
+        inventory=inv,
+        stat_block=stat_block,
+    )
+
+
+def _damage_signature(name: str = "Cleave") -> SignatureAbility:
+    return SignatureAbility(
+        name=name,
+        description="A heavy swing.",
+        usage="per_combat",
+        uses_remaining=1,
+        effects=[
+            SignatureAbilityEffect(
+                kind="damage",
+                dice="2d8+3",
+                damage_type=DamageType.SLASHING,
+                target_scope="single",
+            ),
+        ],
+    )
+
+
+class TestExecutionSummariesFrench:
+    """H14 (reliquat scripted.py) — execute_action_plan summaries are
+    player-visible: the TurnManager posts them verbatim in the Discord
+    channel (📜 prefix). They must be clean French — no English, no
+    internal enum values or repr diagnostics."""
+
+    def test_dodge_summary_is_french(self) -> None:
+        goblin = _make_melee_goblin()
+        pc = _make_pc("Thorin")
+        state = _make_zoneless_state([goblin, pc])
+
+        plan = NPCActionPlan(action_type=ActionType.DEFEND, rationale="blocked")
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert summary == "Goblin esquive"
+
+    def test_unsupported_action_summary_is_french_without_internal_value(
+        self,
+    ) -> None:
+        """Unsupported plan types degrade to a clean French no-op line —
+        the internal ActionType value must not leak to the channel."""
+        goblin = _make_melee_goblin()
+        pc = _make_pc("Thorin")
+        state = _make_zoneless_state([goblin, pc])
+
+        plan = NPCActionPlan(action_type=ActionType.TALK, rationale="?")
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert summary == "Goblin ne fait rien"
+        assert "does nothing" not in summary
+        assert ActionType.TALK.value not in summary
+
+    def test_attack_hit_summary_is_french(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Hit wording mirrors the TurnManager embed path: 'X touche Y
+        avec Z — N dégâts'."""
+        goblin = _make_melee_goblin()
+        pc = _make_pc("Thorin", hp=20, ac=10)
+        state = _make_zoneless_state([goblin, pc])
+
+        from engine.dice import D20CheckResult, RollOutcome
+
+        monkeypatch.setattr(
+            "engine.combat.roll_check",
+            lambda expr, dc: D20CheckResult(
+                expression=expr, rolls=[15], modifier=4, total=19,
+                dc=dc, outcome=RollOutcome.SUCCESS, margin=19 - dc,
+            ),
+        )
+        monkeypatch.setattr(
+            "engine.combat.roll",
+            lambda expr: DiceResult(expression=expr, rolls=[5], total=5),
+        )
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            weapon_name="Scimitar",
+            rationale="test",
+        )
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert summary == "Goblin touche Thorin avec Scimitar — 5 dégâts"
+
+    def test_attack_miss_summary_is_french(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        goblin = _make_melee_goblin()
+        pc = _make_pc("Thorin", hp=20, ac=18)
+        state = _make_zoneless_state([goblin, pc])
+
+        from engine.dice import D20CheckResult, RollOutcome
+
+        monkeypatch.setattr(
+            "engine.combat.roll_check",
+            lambda expr, dc: D20CheckResult(
+                expression=expr, rolls=[3], modifier=4, total=7,
+                dc=dc, outcome=RollOutcome.FAILURE, margin=7 - dc,
+            ),
+        )
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            weapon_name="Scimitar",
+            rationale="test",
+        )
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert summary == "Goblin rate Thorin avec Scimitar"
+
+    def test_attack_unknown_target_summary_is_french(self) -> None:
+        """A badly pointed plan degrades to clean French — the repr
+        diagnostic goes to the log, not to the players."""
+        goblin = _make_melee_goblin()
+        pc = _make_pc("Thorin")
+        state = _make_zoneless_state([goblin, pc])
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Fantôme",
+            weapon_name="Scimitar",
+            rationale="test",
+        )
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert summary == "Goblin ne trouve aucune cible"
+        assert "could not find" not in summary
+
+    def test_attack_unknown_weapon_summary_is_french(self) -> None:
+        goblin = _make_melee_goblin()
+        pc = _make_pc("Thorin")
+        state = _make_zoneless_state([goblin, pc])
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            weapon_name="Halberd",
+            rationale="test",
+        )
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert summary == "Goblin ne peut pas attaquer"
+        assert "has no" not in summary
+
+    def test_move_summary_is_french(self) -> None:
+        location = _make_linear_location(zone_count=2)
+        goblin = _make_melee_goblin(zone="Z1")
+        pc = _make_pc("Thorin", zone="Z2")
+        state = _make_zoneless_state([goblin, pc])
+
+        plan = NPCActionPlan(
+            action_type=ActionType.MOVE, move_to_zone="Z2", rationale="test",
+        )
+        summary = execute_action_plan(goblin, plan, state, location=location)
+
+        assert summary == "Goblin se déplace vers Z2"
+
+    def test_blocked_move_summary_is_french(self) -> None:
+        goblin = _make_melee_goblin()
+        pc = _make_pc("Thorin")
+        state = _make_zoneless_state([goblin, pc])
+
+        plan = NPCActionPlan(action_type=ActionType.MOVE, rationale="test")
+        summary = execute_action_plan(goblin, plan, state, location=None)
+
+        assert summary == "Goblin ne peut pas se déplacer"
+        assert "cannot" not in summary
+
+    def test_signature_wrapper_summary_is_french(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The wrapper around elite.py's French summaries must be French
+        too: 'X utilise Y : ...'."""
+        brute = _make_elite_with_signature(signature=_damage_signature())
+        pc = _make_pc("Thorin", hp=20)
+        state = _make_zoneless_state([brute, pc])
+
+        monkeypatch.setattr(
+            "engine.npc_ai.elite.roll",
+            lambda expr: DiceResult(expression=expr, rolls=[11], total=11),
+        )
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            signature_name="Cleave",
+            rationale="test",
+        )
+        summary = execute_action_plan(brute, plan, state, location=None)
+
+        assert summary == "Brute utilise Cleave : Thorin subit 11 dégâts"
+        assert "uses" not in summary
+
+    def test_signature_without_effect_summary_is_french(self) -> None:
+        """An empty-effects signature reads 'aucun effet', not 'no effect'."""
+        empty_sig = SignatureAbility(
+            name="Posture",
+            description="Does nothing mechanical.",
+            usage="at_will",
+            effects=[],
+        )
+        brute = _make_elite_with_signature(signature=empty_sig)
+        pc = _make_pc("Thorin")
+        state = _make_zoneless_state([brute, pc])
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            signature_name="Posture",
+            rationale="test",
+        )
+        summary = execute_action_plan(brute, plan, state, location=None)
+
+        assert summary == "Brute utilise Posture : aucun effet"
+        assert "no effect" not in summary
+
+    def test_signature_unknown_name_summary_is_french(self) -> None:
+        brute = _make_elite_with_signature(signature=_damage_signature())
+        pc = _make_pc("Thorin")
+        state = _make_zoneless_state([brute, pc])
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            signature_name="Tornade",
+            rationale="test",
+        )
+        summary = execute_action_plan(brute, plan, state, location=None)
+
+        assert summary == "Brute ne peut pas utiliser Tornade"
+        assert "has no signature" not in summary
+
+    def test_signature_without_stat_block_summary_is_french(self) -> None:
+        pc_like = _make_pc("Imposteur")
+        pc_like.side = CombatSide.ENEMY
+        target = _make_pc("Thorin")
+        state = _make_zoneless_state([pc_like, target])
+
+        plan = NPCActionPlan(
+            action_type=ActionType.ATTACK,
+            target_name="Thorin",
+            signature_name="Cleave",
+            rationale="test",
+        )
+        summary = execute_action_plan(pc_like, plan, state, location=None)
+
+        assert summary == "Imposteur ne peut pas utiliser Cleave"
+        assert "stat block" not in summary
