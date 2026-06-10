@@ -12,11 +12,24 @@ from discord.ext import commands
 from bot.embeds.inventory_embed import build_inventory_embed
 from engine.character import compute_modifier
 from engine.inventory import EquipmentSlot, compute_ac_from_equipment, equip_item, remove_item, unequip_item
+from engine.validators import Action, ActionType, validate_equip
 
 if TYPE_CHECKING:
+    from engine.combat import CombatState
+    from bot.game_session import GameSession
     from bot.bot import RealmBot
 
 logger = logging.getLogger(__name__)
+
+_LOCK_BUSY_MSG = "⏳ Une action est déjà en cours — réessaie dans un instant."
+
+
+def _active_combat(session: GameSession) -> "CombatState | None":
+    """Return the session's combat state when a combat is live."""
+    state = session.combat_state
+    if state is not None and state.is_active:
+        return state
+    return None
 
 
 class InventoryCog(commands.Cog):
@@ -72,17 +85,61 @@ class InventoryCog(commands.Cog):
             )
             return
 
-        try:
-            inv = equip_item(inv, item, eq_slot)
-        except (ValueError, KeyError) as e:
-            await interaction.response.send_message(f"Erreur: {e}", ephemeral=True)
+        # In combat, /equip must respect the ActionValidator (audit H21):
+        # only the once-per-turn MAIN_HAND weapon swap is allowed, on the
+        # actor's turn — anything else (armor swap mid-fight, off-turn
+        # AC boosting) is refused.
+        combat = _active_combat(session)
+        if combat is not None:
+            if eq_slot != EquipmentSlot.MAIN_HAND:
+                await interaction.response.send_message(
+                    "Impossible de changer d'équipement en plein combat — "
+                    "seul un changement d'arme (Main Hand) est permis.",
+                    ephemeral=True,
+                )
+                return
+            verdict = validate_equip(
+                Action(
+                    actor_name=char.name,
+                    action_type=ActionType.EQUIP,
+                    item_name=item,
+                ),
+                combat,
+            )
+            if not verdict.is_valid:
+                await interaction.response.send_message(
+                    f"Action refusée : {verdict.error_message}", ephemeral=True,
+                )
+                return
+
+        # The Combatants reference the same Character/Inventory objects as
+        # the session — serialize the mutation behind the session's action
+        # lock so it cannot interleave with a running pipeline.
+        if session.action_lock.locked():
+            await interaction.response.send_message(
+                _LOCK_BUSY_MSG, ephemeral=True,
+            )
             return
+        async with session.action_lock:
+            try:
+                inv = equip_item(inv, item, eq_slot)
+            except (ValueError, KeyError) as e:
+                await interaction.response.send_message(f"Erreur: {e}", ephemeral=True)
+                return
 
-        # Recompute AC
-        dex_mod = compute_modifier(char.ability_scores.DEX)
-        char.ac = compute_ac_from_equipment(inv.equipped, dex_mod)
+            # Recompute AC
+            dex_mod = compute_modifier(char.ability_scores.DEX)
+            char.ac = compute_ac_from_equipment(inv.equipped, dex_mod)
 
-        session.inventories[user_id] = inv
+            if combat is not None:
+                combatant = next(
+                    (c for c in combat.combatants if c.name == char.name),
+                    None,
+                )
+                if combatant is not None:
+                    combatant.action_budget.weapon_swapped_this_turn = True
+
+            session.inventories[user_id] = inv
         await interaction.response.send_message(
             f"**{item}** equipe en **{eq_slot.value}**.", ephemeral=True,
         )
@@ -112,16 +169,31 @@ class InventoryCog(commands.Cog):
             )
             return
 
-        try:
-            inv = unequip_item(inv, eq_slot)
-        except (ValueError, KeyError) as e:
-            await interaction.response.send_message(f"Erreur: {e}", ephemeral=True)
+        # Stripping gear mid-fight has no 5e free-action equivalent and
+        # the Combatants share these objects — refuse outright (audit H21).
+        if _active_combat(session) is not None:
+            await interaction.response.send_message(
+                "Impossible de modifier l'équipement en plein combat.",
+                ephemeral=True,
+            )
             return
 
-        dex_mod = compute_modifier(char.ability_scores.DEX)
-        char.ac = compute_ac_from_equipment(inv.equipped, dex_mod)
+        if session.action_lock.locked():
+            await interaction.response.send_message(
+                _LOCK_BUSY_MSG, ephemeral=True,
+            )
+            return
+        async with session.action_lock:
+            try:
+                inv = unequip_item(inv, eq_slot)
+            except (ValueError, KeyError) as e:
+                await interaction.response.send_message(f"Erreur: {e}", ephemeral=True)
+                return
 
-        session.inventories[user_id] = inv
+            dex_mod = compute_modifier(char.ability_scores.DEX)
+            char.ac = compute_ac_from_equipment(inv.equipped, dex_mod)
+
+            session.inventories[user_id] = inv
         await interaction.response.send_message(
             f"Emplacement **{eq_slot.value}** libere.", ephemeral=True,
         )
