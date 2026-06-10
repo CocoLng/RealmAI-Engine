@@ -1,5 +1,6 @@
 """Tests for the Arc Generator module."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -1348,3 +1349,146 @@ class TestNoLegacyMigrationNeeded:
                 f"beat {beat.beat_number} has empty objectives — would need "
                 f"legacy migration"
             )
+
+
+# ---------------------------------------------------------------------------
+# Slim generation (chantier I / H8 latency)
+#
+# The LLM only emits narrative fields; objectives, villain_stat_block and
+# on_complete effects are scaffolded deterministically. Output is capped
+# with num_predict so a runaway generation cannot block the event loop for
+# minutes.
+# ---------------------------------------------------------------------------
+
+
+def _last_chat_payload(httpx_mock: HTTPXMock) -> dict:
+    """Parse the JSON body of the last request sent to the Ollama mock."""
+    request = httpx_mock.get_requests()[-1]
+    return json.loads(request.content)
+
+
+class TestSlimGeneration:
+    def test_generate_caps_output_tokens(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """The arc call must carry a hard num_predict cap, not -1/unlimited."""
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(_make_arc_data(10)),
+        )
+        generator.generate(theme="dark fantasy", player_count=4)
+
+        payload = _last_chat_payload(httpx_mock)
+        assert payload["options"]["num_predict"] == ArcGenerator.NUM_PREDICT_CAP
+        assert ArcGenerator.NUM_PREDICT_CAP > 0
+
+    def test_prompt_does_not_request_mechanical_fields(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """The slim prompt no longer asks the LLM for engine-owned fields.
+
+        Objectives, judge rubrics and the villain stat block are scaffolded
+        in Python — paying ~3000 output tokens for them was the root cause
+        of the 355-401 s arc generation (finding H8).
+        """
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(_make_arc_data(10)),
+        )
+        generator.generate(
+            theme="dark fantasy", player_count=4, recipe=_make_recipe(),
+        )
+
+        payload = _last_chat_payload(httpx_mock)
+        all_text = "\n".join(m["content"] for m in payload["messages"])
+        assert "villain_stat_block" not in all_text
+        assert "legendary_actions" not in all_text
+        assert "judge_rubric" not in all_text
+        assert "advance_rule" not in all_text
+
+    def test_missing_on_complete_scaffolds_unlock_exit_to_next_beat(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """Each beat unlocks the exit toward the next beat's location."""
+        arc_data = _make_arc_data(10)  # location_hint = "Lieu 1".."Lieu 10"
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        for i, beat in enumerate(arc.beats[:-1]):
+            next_hint = arc.beats[i + 1].location_hint
+            assert beat.on_complete.unlock_exits == [next_hint], (
+                f"beat {beat.beat_number} should unlock {next_hint!r}"
+            )
+
+    def test_last_beat_gets_no_unlock_exit(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        arc_data = _make_arc_data(10)
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        assert arc.beats[-1].on_complete.unlock_exits == []
+
+    def test_unlock_exit_not_added_when_next_beat_same_location(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """Two consecutive beats in the same place need no exit unlock."""
+        arc_data = _make_arc_data(10)
+        arc_data["beats"][2]["location_hint"] = arc_data["beats"][1]["location_hint"]
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        assert arc.beats[1].on_complete.unlock_exits == []
+
+    def test_llm_provided_on_complete_preserved(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """Legacy/simulation payloads that DO carry on_complete win over scaffold."""
+        arc_data = _make_arc_data(10)
+        arc_data["beats"][0]["on_complete"] = {
+            "unlock_exits": ["Porte secrète"],
+            "state_flags": {"alarme_levee": True},
+            "narrative_hint": "La porte grince.",
+        }
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        assert arc.beats[0].on_complete.unlock_exits == ["Porte secrète"]
+        assert arc.beats[0].on_complete.narrative_hint == "La porte grince."
+
+    def test_has_item_gate_seeds_item_into_previous_beat(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """A scaffolded HAS_ITEM gate must be satisfiable: the gated item is
+        granted by the previous beat's on_complete.add_items."""
+        arc_data = _make_arc_data(10)
+        arc_data["beats"][4]["encounter_type"] = "puzzle"
+        arc_data["beats"][4]["encounter_subtype"] = "ritual"
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        ritual_beat = arc.beats[4]
+        gated_items = [
+            obj.gate.value
+            for obj in ritual_beat.objectives
+            if obj.gate is not None and obj.gate.kind.value == "has_item"
+        ]
+        assert gated_items, "ritual beat should carry a HAS_ITEM gate"
+        for item in gated_items:
+            assert item in arc.beats[3].on_complete.add_items
+
+    def test_has_item_gate_on_first_beat_does_not_crash(
+        self, httpx_mock: HTTPXMock, generator: ArcGenerator,
+    ) -> None:
+        """No previous beat to seed — generation still succeeds."""
+        arc_data = _make_arc_data(10)
+        arc_data["beats"][0]["encounter_type"] = "puzzle"
+        arc_data["beats"][0]["encounter_subtype"] = "ritual"
+        httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(arc_data))
+
+        arc = generator.generate(theme="dark fantasy", player_count=4)
+
+        assert arc.beats[0].encounter_type == "puzzle"
