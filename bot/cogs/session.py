@@ -1231,9 +1231,9 @@ class SessionCog(commands.Cog):
                 except Exception:
                     logger.warning("Failed to send AI warning to channel %s", channel_id)
 
-        if combat_state_dropped and interaction.channel is not None:
+        if combat_state_dropped:
             try:
-                await interaction.channel.send(
+                await interaction.followup.send(
                     "⚠️ L'état du combat sauvegardé était illisible — combat "
                     "abandonné, l'exploration continue.",
                 )

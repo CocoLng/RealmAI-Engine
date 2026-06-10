@@ -57,9 +57,13 @@ class CorruptSaveError(Exception):
         self.entity = entity
         self.context = context
         errors = exc.errors()
-        first = errors[0] if errors else {}
-        self.field = ".".join(str(part) for part in first.get("loc", ())) or "?"
-        self.detail = str(first.get("msg", exc))
+        if errors:
+            first = errors[0]
+            self.field = ".".join(str(part) for part in first.get("loc", ())) or "?"
+            self.detail = str(first.get("msg", exc))
+        else:
+            self.field = "?"
+            self.detail = str(exc)
         super().__init__(
             f"{entity} ({context}): champ '{self.field}' — {self.detail}",
         )

@@ -457,7 +457,6 @@ class TestResumeCorruptBlobs:
         persisted_campaign.combat_state_json = '{"combatants": "nope"}'
         CampaignRepository(db_session).update(persisted_campaign)
         db_session.flush()
-        interaction.channel = AsyncMock()
 
         await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
 
@@ -465,12 +464,11 @@ class TestResumeCorruptBlobs:
         session = cog.bot.sessions[CHANNEL_ID]
         assert session.combat_state is None
         assert session.campaign.combat_state_json is None
-        msg = interaction.followup.send.call_args[0][0]
-        assert "combat en cours" not in msg
-        warnings = [
-            str(c.args[0]) for c in interaction.channel.send.call_args_list if c.args
+        sent = [
+            str(c.args[0]) for c in interaction.followup.send.call_args_list if c.args
         ]
-        assert any("illisible" in w for w in warnings)
+        assert all("combat en cours" not in m for m in sent)
+        assert any("illisible" in m for m in sent)
 
     @pytest.mark.asyncio
     @patch("bot.cogs.session.create_ai_services")
