@@ -10,12 +10,65 @@ narration.
 Pure Python, no LLM calls.
 """
 
+import logging
+import re
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from engine.inventory import DamageType
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LLM-number clamps (audit M12)
+# ---------------------------------------------------------------------------
+#
+# Stat blocks are authored by the 9b narrator model — every number on them
+# is untrusted. Out-of-band values are CLAMPED, not rejected, so one wild
+# field never voids a whole generated stat block.
+
+MAX_DICE_COUNT: int = 10
+MAX_DIE_SIZE: int = 12
+MAX_DICE_MODIFIER: int = 10
+MIN_TO_HIT_BONUS: int = 0
+MAX_TO_HIT_BONUS: int = 15
+MIN_SAVE_DC: int = 8
+MAX_SAVE_DC: int = 20
+
+_FALLBACK_DICE: str = "1d6"
+
+# Digit runs capped at 9 so absurd LLM output never reaches a costly int().
+_STAT_DICE_RE = re.compile(r"^(\d{1,9})d(\d{1,9})([+-]\d{1,9})?$")
+
+
+def _clamp_dice_expression(value: str) -> str:
+    """Coerce a dice string into ≤ 10 dice of ≤ d12 with a ±10 bonus.
+
+    Non-dice strings fall back on ``1d6`` — a degraded attack beats a
+    rejected stat block.
+    """
+    cleaned = value.replace(" ", "")
+    match = _STAT_DICE_RE.match(cleaned)
+    if not match:
+        logger.warning(
+            "Stat block dice %r is not dice notation — replaced with %s",
+            value,
+            _FALLBACK_DICE,
+        )
+        return _FALLBACK_DICE
+
+    count = min(max(int(match.group(1)), 1), MAX_DICE_COUNT)
+    sides = min(max(int(match.group(2)), 1), MAX_DIE_SIZE)
+    modifier = int(match.group(3)) if match.group(3) else 0
+    modifier = min(max(modifier, -MAX_DICE_MODIFIER), MAX_DICE_MODIFIER)
+
+    rebuilt = f"{count}d{sides}{modifier:+d}" if modifier else f"{count}d{sides}"
+    if rebuilt != cleaned:
+        logger.warning("Stat block dice %r clamped to %r", value, rebuilt)
+    return rebuilt
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +144,16 @@ class NPCAttack(BaseModel):
     range_type: RangeType = "melee"
     range_value: int | None = None  # feet for ranged attacks
 
+    @field_validator("damage_dice")
+    @classmethod
+    def _clamp_damage_dice(cls, value: str) -> str:
+        return _clamp_dice_expression(value)
+
+    @field_validator("to_hit_bonus")
+    @classmethod
+    def _clamp_to_hit(cls, value: int) -> int:
+        return min(max(value, MIN_TO_HIT_BONUS), MAX_TO_HIT_BONUS)
+
 
 class SignatureAbilityEffect(BaseModel):
     """One deterministic effect produced by a signature ability.
@@ -108,6 +171,18 @@ class SignatureAbilityEffect(BaseModel):
     save_ability: SaveAbilityCode | None = None
     save_dc: int | None = None
     target_scope: TargetScope = "single"
+
+    @field_validator("dice")
+    @classmethod
+    def _clamp_effect_dice(cls, value: str | None) -> str | None:
+        return None if value is None else _clamp_dice_expression(value)
+
+    @field_validator("save_dc")
+    @classmethod
+    def _clamp_save_dc(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        return min(max(value, MIN_SAVE_DC), MAX_SAVE_DC)
 
 
 class SignatureAbility(BaseModel):

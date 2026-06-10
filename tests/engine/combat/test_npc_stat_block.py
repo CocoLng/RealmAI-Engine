@@ -293,3 +293,150 @@ class TestSignatureUsesDefault:
         # phase-transition engine — the default must not resurrect them.
         sig = SignatureAbility(name="Locked", usage="per_combat", uses_remaining=0)
         assert sig.uses_remaining == 0
+
+
+# ---------------------------------------------------------------------------
+# LLM-number clamps (audit M12)
+# ---------------------------------------------------------------------------
+
+
+class TestDamageDiceClamp:
+    """``damage_dice`` is corrected into 1-10 dice of d12 max, bonus ±10.
+
+    The 9b literally wrote the boss's damage — out-of-band values are
+    clamped (not rejected) so one wild field never voids a whole
+    generated stat block.
+    """
+
+    def _attack(self, dice: str) -> NPCAttack:
+        return NPCAttack(name="Claw", damage_dice=dice, damage_type=DamageType.SLASHING)
+
+    def test_valid_dice_untouched(self) -> None:
+        assert self._attack("1d8+2").damage_dice == "1d8+2"
+        assert self._attack("3d6").damage_dice == "3d6"
+        assert self._attack("2d6-1").damage_dice == "2d6-1"
+
+    def test_excess_count_and_size_clamped(self) -> None:
+        assert self._attack("40d100+50").damage_dice == "10d12+10"
+
+    def test_negative_bonus_clamped(self) -> None:
+        assert self._attack("2d6-99").damage_dice == "2d6-10"
+
+    def test_huge_numbers_clamped(self) -> None:
+        assert self._attack("999999999d999999999").damage_dice == "10d12"
+
+    def test_garbage_replaced_with_fallback(self) -> None:
+        assert self._attack("beaucoup de dégâts").damage_dice == "1d6"
+
+    def test_zero_dice_corrected(self) -> None:
+        assert self._attack("0d6").damage_dice == "1d6"
+
+    def test_whitespace_normalised(self) -> None:
+        assert self._attack("2 d 6 + 3").damage_dice == "2d6+3"
+
+
+class TestToHitBonusClamp:
+    """``to_hit_bonus`` is clamped into [0, 15]."""
+
+    def _attack(self, bonus: int) -> NPCAttack:
+        return NPCAttack(
+            name="Claw",
+            damage_dice="1d6",
+            damage_type=DamageType.SLASHING,
+            to_hit_bonus=bonus,
+        )
+
+    def test_in_range_untouched(self) -> None:
+        assert self._attack(7).to_hit_bonus == 7
+        assert self._attack(0).to_hit_bonus == 0
+        assert self._attack(15).to_hit_bonus == 15
+
+    def test_excess_clamped(self) -> None:
+        assert self._attack(42).to_hit_bonus == 15
+
+    def test_negative_clamped(self) -> None:
+        assert self._attack(-3).to_hit_bonus == 0
+
+
+class TestSignatureEffectClamps:
+    """Signature effect dice and save DCs carry the same bounds."""
+
+    def test_dice_clamped(self) -> None:
+        effect = SignatureAbilityEffect(kind="damage", dice="99d99+99")
+        assert effect.dice == "10d12+10"
+
+    def test_dice_none_stays_none(self) -> None:
+        effect = SignatureAbilityEffect(kind="condition")
+        assert effect.dice is None
+
+    def test_dice_valid_untouched(self) -> None:
+        effect = SignatureAbilityEffect(kind="heal", dice="2d8+2")
+        assert effect.dice == "2d8+2"
+
+    def test_save_dc_clamped_high(self) -> None:
+        effect = SignatureAbilityEffect(kind="condition", save_ability="WIS", save_dc=35)
+        assert effect.save_dc == 20
+
+    def test_save_dc_clamped_low(self) -> None:
+        effect = SignatureAbilityEffect(kind="condition", save_ability="WIS", save_dc=3)
+        assert effect.save_dc == 8
+
+    def test_save_dc_in_range_untouched(self) -> None:
+        effect = SignatureAbilityEffect(kind="condition", save_ability="WIS", save_dc=15)
+        assert effect.save_dc == 15
+
+    def test_save_dc_none_stays_none(self) -> None:
+        effect = SignatureAbilityEffect(kind="damage", dice="1d6")
+        assert effect.save_dc is None
+
+
+class TestModelValidateAppliesClamps:
+    """``NPCStatBlock.model_validate`` (the arc-generator path) clamps deep."""
+
+    def test_nested_clamps_through_model_validate(self) -> None:
+        block = NPCStatBlock.model_validate(
+            {
+                "tier": "boss",
+                "archetype": "demon_lord",
+                "attacks": [
+                    {
+                        "name": "Annihilation",
+                        "damage_dice": "66d66+66",
+                        "damage_type": "Fire",
+                        "to_hit_bonus": 66,
+                    },
+                ],
+                "signature_abilities": [
+                    {
+                        "name": "Doom",
+                        "usage": "per_combat",
+                        "effects": [
+                            {
+                                "kind": "aoe_damage",
+                                "dice": "30d20",
+                                "damage_type": "Necrotic",
+                                "save_ability": "DEX",
+                                "save_dc": 30,
+                            },
+                        ],
+                    },
+                ],
+                "legendary_actions": [
+                    {
+                        "name": "Tail Swipe",
+                        "cost": 1,
+                        "effects": [
+                            {"kind": "damage", "dice": "20d20+20", "damage_type": "Fire"},
+                        ],
+                    },
+                ],
+            }
+        )
+        assert block.attacks[0].damage_dice == "10d12+10"
+        assert block.attacks[0].to_hit_bonus == 15
+        sig_effect = block.signature_abilities[0].effects[0]
+        assert sig_effect.dice == "10d12"
+        assert sig_effect.save_dc == 20
+        assert block.legendary_actions[0].effects[0].dice == "10d12+10"
+        # H19 default: per_combat without explicit budget → 1 use.
+        assert block.signature_abilities[0].uses_remaining == 1
