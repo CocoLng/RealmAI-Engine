@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ai.models import InterpretedAction
+from bot.action_pipeline import ActionPipelineResult, UnknownEntityResult
 from bot.combat_turn_manager import TurnManager
 from engine.character import (
     AbilityScores,
@@ -167,6 +169,40 @@ def _turn_manager(
         session=session,
         pipeline_factory=pipeline_factory or MagicMock(),
         db_factory=db_factory,
+    )
+
+
+def _pipeline_result(
+    actor_name: str,
+    action_type: ActionType = ActionType.ATTACK,
+    *,
+    is_question: bool = False,
+    is_free_action: bool = False,
+) -> ActionPipelineResult:
+    return ActionPipelineResult(
+        narrative="Quelque chose se passe.",
+        tone="tense",
+        mechanics_text="MECANIQUE",
+        interpreted_action=InterpretedAction(
+            action_type=action_type,
+            actor_name=actor_name,
+            raw_input="action de test",
+        ),
+        is_question=is_question,
+        is_free_action=is_free_action,
+    )
+
+
+def _unknown_result(actor_name: str) -> UnknownEntityResult:
+    return UnknownEntityResult(
+        field_name="target_name",
+        raw_value="le dragon invisible",
+        partial_action=InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name=actor_name,
+            raw_input="j'attaque le dragon invisible",
+        ),
+        refusal_narrative="Tu ne vois rien de tel ici.",
     )
 
 
@@ -371,6 +407,95 @@ class TestPersistState:
         tm = _turn_manager(session, _fake_channel(), db_factory=db_factory)
         # Must not raise — auto-checkpoint failure is logged and swallowed.
         await tm._persist_state()
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_failure_warns_in_channel_once(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M5 — players must learn their progress is not being saved, but
+        only once per failure streak (no warning spam every turn)."""
+        session = _fake_session([_pc()])
+        channel = _fake_channel()
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session",
+            MagicMock(side_effect=RuntimeError("db unavailable")),
+        )
+
+        tm = _turn_manager(session, channel, db_factory=MagicMock())
+        await tm._persist_state()
+        await tm._persist_state()  # still failing — no second warning
+
+        warnings = [
+            call.kwargs.get("content", "") or ""
+            for call in channel.send.await_args_list
+            if "sauvegarde" in (call.kwargs.get("content", "") or "").lower()
+        ]
+        assert len(warnings) == 1, (
+            f"expected exactly one checkpoint warning, got {warnings!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_dirty_flag_set_on_failure_cleared_on_success(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M5 — a failed checkpoint flags the state dirty; the next
+        successful checkpoint (which persists the full session anyway)
+        clears it."""
+        session = _fake_session([_pc()])
+        calls = {"fail": True}
+
+        def persist(factory, sess):
+            if calls["fail"]:
+                raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session", persist,
+        )
+
+        tm = _turn_manager(session, _fake_channel(), db_factory=MagicMock())
+        assert tm.checkpoint_dirty is False
+
+        await tm._persist_state()
+        assert tm.checkpoint_dirty is True
+
+        calls["fail"] = False
+        await tm._persist_state()
+        assert tm.checkpoint_dirty is False
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_warns_again_after_recovery(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """M5 — a NEW failure streak after a successful checkpoint warns
+        again (the once-only guard is per streak, not per combat)."""
+        session = _fake_session([_pc()])
+        channel = _fake_channel()
+        calls = {"fail": True}
+
+        def persist(factory, sess):
+            if calls["fail"]:
+                raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.persist_session", persist,
+        )
+
+        tm = _turn_manager(session, channel, db_factory=MagicMock())
+        await tm._persist_state()   # fail → warn #1
+        calls["fail"] = False
+        await tm._persist_state()   # recovery
+        calls["fail"] = True
+        await tm._persist_state()   # new streak → warn #2
+
+        warnings = [
+            call.kwargs.get("content", "") or ""
+            for call in channel.send.await_args_list
+            if "sauvegarde" in (call.kwargs.get("content", "") or "").lower()
+        ]
+        assert len(warnings) == 2, (
+            f"expected two checkpoint warnings, got {warnings!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_finalize_persists_final_state(
@@ -806,3 +931,277 @@ class TestSurpriseSkip:
         state = session.combat_state
         assert state is not None
         assert any("surpris" in ev.lower() for ev in state.recent_events)
+
+
+# ---------------------------------------------------------------------------
+# NPC brain must not block the event loop (boss tier = synchronous LLM call)
+# ---------------------------------------------------------------------------
+
+
+class TestNPCBrainOffLoop:
+    @pytest.mark.asyncio
+    async def test_npc_brain_runs_off_the_event_loop(self) -> None:
+        """Boss-tier decisions go through a synchronous httpx LLM call —
+        run in-loop it freezes the whole bot (gateway heartbeat included)
+        for the entire generation (audit H2, boss branch).
+
+        The fake brain below blocks until a loop-side task manages to
+        run: a synchronous in-loop call starves that task and times out;
+        via ``asyncio.to_thread`` the loop stays free and sets the event.
+        """
+        import threading
+
+        from engine.npc_ai.scripted import NPCActionPlan
+
+        pc = _pc()
+        goblin = _enemy(tier=NPCTier.MINION)
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+
+        loop_alive = threading.Event()
+        loop_ran_during_brain = {"value": False}
+
+        def blocking_brain(combatant, state):  # type: ignore[no-untyped-def]
+            loop_ran_during_brain["value"] = loop_alive.wait(timeout=1.0)
+            return NPCActionPlan(action_type=ActionType.DEFEND, rationale="t")
+
+        tm._dispatch_npc_brain = blocking_brain  # type: ignore[method-assign]
+
+        async def _heartbeat() -> None:
+            await asyncio.sleep(0.05)
+            loop_alive.set()
+
+        hb = asyncio.create_task(_heartbeat())
+        await tm._resolve_npc_turn(goblin)
+        await hb
+
+        assert loop_ran_during_brain["value"], (
+            "the NPC brain blocked the event loop — boss LLM calls must "
+            "run via asyncio.to_thread"
+        )
+
+
+# ---------------------------------------------------------------------------
+# H14 — NPC turn summaries must reach players clean (no internal tags)
+# ---------------------------------------------------------------------------
+
+
+class TestNPCSummarySanitization:
+    @pytest.mark.asyncio
+    async def test_internal_bracket_tags_stripped_before_send(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Defense in depth: even if an executor leaks an internal
+        '[Tag] …' diagnostic into the summary, the TurnManager must strip
+        it before posting / recording (audit H14)."""
+        from engine.npc_ai.scripted import NPCActionPlan
+
+        pc = _pc()
+        goblin = _enemy(tier=NPCTier.MINION)
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        tm.on_action_resolved = AsyncMock()  # type: ignore[method-assign]
+        tm._dispatch_npc_brain = MagicMock(  # type: ignore[method-assign]
+            return_value=NPCActionPlan(
+                action_type=ActionType.DEFEND,
+                rationale="test",
+            ),
+        )
+
+        tainted = (
+            "Gobelin utilise Nova : [Nova] aoe_damage not implemented — "
+            "fallback to standard attack; Aragorn subit 5 dégâts"
+        )
+        monkeypatch.setattr(
+            "bot.combat_turn_manager.execute_action_plan",
+            MagicMock(return_value=tainted),
+        )
+
+        await tm._resolve_npc_turn(goblin)
+
+        posted = [
+            call.kwargs.get("content", "") or ""
+            for call in channel.send.await_args_list
+        ]
+        summary_posts = [c for c in posted if c.startswith("📜")]
+        assert summary_posts, "no NPC summary was posted"
+        for content in summary_posts:
+            assert "[" not in content, content
+            assert "not implemented" not in content, content
+            assert "fallback" not in content, content
+        # The clean part of the summary survived.
+        assert any("Aragorn subit 5 dégâts" in c for c in summary_posts)
+        # The recorded combat event is the same sanitized text.
+        assert session.combat_state is not None
+        assert all(
+            "[" not in ev for ev in session.combat_state.recent_events
+        )
+
+
+# ---------------------------------------------------------------------------
+# C3 — the turn must only advance when the current combatant actually
+# consumed their action
+# ---------------------------------------------------------------------------
+
+
+class TestTurnAdvanceGuard:
+    """``on_action_resolved`` advanced the turn on EVERY pipeline output:
+    refused actions (UnknownEntityResult), off-turn-legal QUESTION/LOOK,
+    and messages from players whose turn it is not. All of those must
+    leave ``current_turn_index`` untouched.
+    """
+
+    def _setup(self) -> tuple[MagicMock, MagicMock, TurnManager, Combatant]:
+        pc = _pc()
+        goblin = _enemy()
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+        tm = _turn_manager(session, channel)
+        session.combat_turn_manager = tm
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+        return session, channel, tm, pc
+
+    @pytest.mark.asyncio
+    async def test_refused_action_does_not_advance_turn(self) -> None:
+        """An UnknownEntityResult must not burn the current combatant's turn."""
+        session, _, tm, pc = self._setup()
+
+        await tm.on_action_resolved(_unknown_result(pc.name))
+
+        assert session.combat_state.current_turn_index == 0
+        tm._prompt_turn.assert_not_awaited()
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_question_does_not_advance_turn_and_rearms_watcher(
+        self,
+    ) -> None:
+        """QUESTION is off-turn-legal and informational — no turn consumed.
+
+        The current PC's auto-dodge watcher was paused on the way into the
+        pipeline; the no-advance path must put the safety net back.
+        """
+        session, _, tm, pc = self._setup()
+
+        await tm.on_action_resolved(
+            _pipeline_result(pc.name, ActionType.QUESTION, is_question=True),
+        )
+
+        assert session.combat_state.current_turn_index == 0
+        tm._prompt_turn.assert_not_awaited()
+        watcher = tm.pending_timeout
+        assert watcher is not None and not watcher.done(), (
+            "watcher not re-armed after a non-consuming action — combat "
+            "would soft-stall with no auto-dodge"
+        )
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_look_does_not_advance_turn(self) -> None:
+        """LOOK is the other off-turn-legal informational action."""
+        session, _, tm, pc = self._setup()
+
+        await tm.on_action_resolved(_pipeline_result(pc.name, ActionType.LOOK))
+
+        assert session.combat_state.current_turn_index == 0
+        tm._prompt_turn.assert_not_awaited()
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_off_turn_actor_does_not_advance_turn(self) -> None:
+        """A teammate's pipeline output must not consume the current turn —
+        and must not disarm the current PC's auto-dodge watcher either.
+        """
+        session, _, tm, _ = self._setup()
+
+        async def _long_sleep() -> None:
+            await asyncio.sleep(60)
+
+        watcher = asyncio.create_task(_long_sleep())
+        tm.pending_timeout = watcher
+
+        await tm.on_action_resolved(
+            _pipeline_result("Bryn", ActionType.ATTACK),
+        )
+
+        assert session.combat_state.current_turn_index == 0
+        tm._prompt_turn.assert_not_awaited()
+        assert tm.pending_timeout is watcher and not watcher.cancelled(), (
+            "off-turn output disarmed the current PC's watcher"
+        )
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_free_action_result_does_not_advance_turn(self) -> None:
+        """EQUIP (free action) re-prompts instead of advancing — the guard
+        must treat it as non-consuming on the free-text path too."""
+        session, _, tm, pc = self._setup()
+
+        await tm.on_action_resolved(
+            _pipeline_result(pc.name, ActionType.EQUIP, is_free_action=True),
+        )
+
+        assert session.combat_state.current_turn_index == 0
+        tm._cancel_timeout()
+
+    @pytest.mark.asyncio
+    async def test_consuming_attack_advances_turn(self) -> None:
+        """Regression guard: a real on-turn ATTACK still advances."""
+        session, _, tm, pc = self._setup()
+
+        await tm.on_action_resolved(_pipeline_result(pc.name, ActionType.ATTACK))
+
+        assert session.combat_state.current_turn_index == 1
+        tm._prompt_turn.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_internal_none_result_advances_turn(self) -> None:
+        """NPC turns and the surprise skip pass ``None`` — trusted callers
+        whose action economy was already enforced engine-side."""
+        session, _, tm, _ = self._setup()
+
+        await tm.on_action_resolved(None)
+
+        assert session.combat_state.current_turn_index == 1
+        tm._prompt_turn.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_refused_action_reprompts_same_combatant(
+        self,
+    ) -> None:
+        """Button path: a refused action must re-prompt the same combatant
+        (the clicked view disabled itself) instead of advancing the turn."""
+        pc = _pc()
+        goblin = _enemy()
+        session = _fake_session([pc, goblin])
+        channel = _fake_channel()
+
+        fake_pipeline = MagicMock()
+        fake_pipeline._pending_dice_embeds = []
+        fake_pipeline.process_interpreted_action = AsyncMock(
+            return_value=_unknown_result(pc.name),
+        )
+        tm = TurnManager(
+            channel=channel,
+            session=session,
+            pipeline_factory=MagicMock(return_value=fake_pipeline),
+        )
+        session.combat_turn_manager = tm
+        tm._prompt_turn = AsyncMock()  # type: ignore[method-assign]
+
+        action = InterpretedAction(
+            action_type=ActionType.ATTACK,
+            actor_name=pc.name,
+            target_name="le dragon invisible",
+            raw_input="bouton attaque",
+        )
+        await asyncio.wait_for(tm.dispatch_action(action), timeout=5.0)
+
+        assert session.combat_state.current_turn_index == 0
+        tm._prompt_turn.assert_awaited_once()
+        (prompted,) = tm._prompt_turn.await_args.args
+        assert prompted.name == pc.name
+        tm._cancel_timeout()

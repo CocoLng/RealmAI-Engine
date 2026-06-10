@@ -330,7 +330,9 @@ def _resolve_npc(
     location_name = location.name if location is not None else None
     present = [
         npc for npc in npcs.values()
-        if npc.location_name is not None and npc.location_name == location_name
+        if npc.is_alive
+        and npc.location_name is not None
+        and npc.location_name == location_name
     ]
     present_names = [npc.name for npc in present]
     aliases_by_name = {npc.name: list(npc.aliases) for npc in present}

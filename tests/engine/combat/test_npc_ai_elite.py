@@ -516,10 +516,13 @@ class TestExecuteSignature:
 
         assert sig.uses_remaining is None
 
-    def test_non_mvp_kind_logs_warning_and_falls_back(
+    def test_non_mvp_kind_logs_warning_silently(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """aoe_damage is not MVP — should log WARNING and return fallback summary."""
+        """aoe_damage is not MVP — log a WARNING, but never leak the internal
+        degradation message into the player-visible summaries (audit H14:
+        '[Firestorm] aoe_damage not implemented — fallback to standard
+        attack.' was posted verbatim in the combat channel)."""
         sig = _aoe_damage_signature()
         caster = _make_elite("Mage", BehaviorProfile.AGGRESSIVE, [sig])
         target = _make_pc("Thorin", hp=20)
@@ -532,10 +535,166 @@ class TestExecuteSignature:
 
         # HP unchanged — effect was NOT applied
         assert target.character.hp == 20
-        # A warning was logged
+        # A warning was logged for the operator
         assert any("aoe_damage" in rec.message for rec in caplog.records)
-        # Fallback summary mentions the degradation
-        assert any("fallback" in s.lower() for s in summaries)
+        # …but the player sees nothing about the internal degradation.
+        assert not any("fallback" in s.lower() for s in summaries)
+        assert not any("not implemented" in s.lower() for s in summaries)
+        assert not any("[" in s for s in summaries)
+
+    def test_missing_condition_name_logs_without_player_visible_tag(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A condition effect without condition_name is an authoring bug —
+        log it, never surface '[Sig] missing condition_name' to players."""
+        sig = SignatureAbility(
+            name="Maléfice",
+            description="Broken condition effect.",
+            usage="per_combat",
+            uses_remaining=1,
+            effects=[
+                SignatureAbilityEffect(
+                    kind="condition",
+                    condition_name=None,
+                    target_scope="single",
+                ),
+            ],
+        )
+        caster = _make_elite("Sorcier", BehaviorProfile.TACTICAL, [sig])
+        target = _make_pc("Thorin", hp=20)
+        state = _state([caster, target])
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="engine.npc_ai.elite"):
+            summaries = execute_signature_ability(caster, sig, [target], state)
+
+        assert any("condition_name" in rec.message for rec in caplog.records)
+        assert not any("[" in s for s in summaries)
+
+    def test_unknown_condition_name_logs_without_player_visible_tag(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An unknown condition_name (LLM stat block drift) is logged, not
+        shown to players as '[Sig] unknown condition ...'."""
+        sig = SignatureAbility(
+            name="Maléfice",
+            description="Unknown condition.",
+            usage="per_combat",
+            uses_remaining=1,
+            effects=[
+                SignatureAbilityEffect(
+                    kind="condition",
+                    condition_name="Terrorized",  # pas une ConditionType
+                    target_scope="single",
+                ),
+            ],
+        )
+        caster = _make_elite("Sorcier", BehaviorProfile.TACTICAL, [sig])
+        target = _make_pc("Thorin", hp=20)
+        state = _state([caster, target])
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="engine.npc_ai.elite"):
+            summaries = execute_signature_ability(caster, sig, [target], state)
+
+        assert any("Terrorized" in rec.message for rec in caplog.records)
+        assert not any("[" in s for s in summaries)
+
+
+class TestSignatureSummariesFrench:
+    """H14 — the signature executor's summaries are player-visible (posted
+    by the TurnManager as the NPC turn recap): they must be clean French,
+    not engine-internal English."""
+
+    def test_damage_summary_is_french(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caster = _make_elite("Bruiser", BehaviorProfile.AGGRESSIVE, [_damage_signature()])
+        target = _make_pc("Thorin", hp=20)
+        state = _state([caster, target])
+
+        monkeypatch.setattr(
+            "engine.npc_ai.elite.roll",
+            lambda expr: DiceResult(expression=expr, rolls=[11], total=11),
+        )
+
+        sig = caster.stat_block.signature_abilities[0]  # type: ignore[union-attr]
+        summaries = execute_signature_ability(caster, sig, [target], state)
+
+        assert summaries == ["Thorin subit 11 dégâts"]
+
+    def test_heal_summary_is_french(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caster = _make_elite("Priest", BehaviorProfile.SUPPORT, [_heal_signature()])
+        ally = _make_elite(
+            "Warrior", BehaviorProfile.AGGRESSIVE, [], hp=5, side=CombatSide.ENEMY,
+        )
+        ally.character.max_hp = 20
+        state = _state([caster, ally])
+
+        monkeypatch.setattr(
+            "engine.npc_ai.elite.roll",
+            lambda expr: DiceResult(expression=expr, rolls=[7], total=7),
+        )
+
+        sig = caster.stat_block.signature_abilities[0]  # type: ignore[union-attr]
+        summaries = execute_signature_ability(caster, sig, [ally], state)
+
+        assert summaries == ["Warrior récupère 7 PV"]
+
+    def test_condition_applied_summary_is_french(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caster = _make_elite(
+            "Scary", BehaviorProfile.TACTICAL, [_condition_signature_with_save(dc=30)],
+        )
+        pc = _make_pc("Thorin", hp=20)
+        state = _state([caster, pc])
+
+        from engine.dice import D20CheckResult, RollOutcome
+
+        monkeypatch.setattr(
+            "engine.npc_ai.elite.roll_check",
+            lambda expr, dc: D20CheckResult(
+                expression=expr, rolls=[2], modifier=0, total=2,
+                dc=dc, outcome=RollOutcome.FAILURE, margin=2 - dc,
+            ),
+        )
+
+        sig = caster.stat_block.signature_abilities[0]  # type: ignore[union-attr]
+        summaries = execute_signature_ability(caster, sig, [pc], state)
+
+        assert len(summaries) == 1
+        assert "Thorin" in summaries[0]
+        assert "est maintenant" in summaries[0]
+        assert "is now" not in summaries[0]
+
+    def test_condition_resisted_summary_is_french(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caster = _make_elite(
+            "Scary", BehaviorProfile.TACTICAL, [_condition_signature_with_save(dc=5)],
+        )
+        pc = _make_pc("Thorin", hp=20)
+        state = _state([caster, pc])
+
+        from engine.dice import D20CheckResult, RollOutcome
+
+        monkeypatch.setattr(
+            "engine.npc_ai.elite.roll_check",
+            lambda expr, dc: D20CheckResult(
+                expression=expr, rolls=[19], modifier=0, total=19,
+                dc=dc, outcome=RollOutcome.SUCCESS, margin=19 - dc,
+            ),
+        )
+
+        sig = caster.stat_block.signature_abilities[0]  # type: ignore[union-attr]
+        summaries = execute_signature_ability(caster, sig, [pc], state)
+
+        assert summaries == ["Thorin résiste à Menace"]
 
 
 # ---------------------------------------------------------------------------

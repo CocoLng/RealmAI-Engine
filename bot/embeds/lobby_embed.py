@@ -11,13 +11,32 @@ from __future__ import annotations
 
 import discord
 
-from bot.lobby_state import LobbyPlayer, LobbyPlayerStatus, MAX_PLAYERS_PER_LOBBY
+from bot.lobby_state import (
+    GenerationPhase,
+    LobbyPlayer,
+    LobbyPlayerStatus,
+    MAX_PLAYERS_PER_LOBBY,
+)
 
 STATUS_BADGES = {
     LobbyPlayerStatus.JOINED: "🆕",
     LobbyPlayerStatus.CREATING: "🛠️",
     LobbyPlayerStatus.READY: "✅",
     LobbyPlayerStatus.CANCELLED: "❌",
+}
+
+# Progress lines for the background arc + location generation (H8): the
+# world is built while players create their characters, and the lobby
+# should say so instead of looking frozen.
+_PREGEN_LINES = {
+    GenerationPhase.PENDING: "⏳ Préparation de la génération…",
+    GenerationPhase.ARC: "⏳ Trame narrative en cours d'écriture…",
+    GenerationPhase.LOCATION: "⏳ Lieu de départ en cours de création…",
+    GenerationPhase.READY: "✅ Monde prêt — l'aventure peut commencer.",
+    GenerationPhase.FAILED: (
+        "❌ La génération du monde a échoué — le host peut relancer "
+        "`/start_campaign`."
+    ),
 }
 
 
@@ -27,11 +46,16 @@ def build_lobby_embed(
     host_name: str,
     roster: list[tuple[LobbyPlayer, str]],  # (player, display_name)
     language: str,
+    pregen_status: GenerationPhase | None = None,
 ) -> discord.Embed:
     """Build the campaign lobby embed.
 
     The roster is displayed line-by-line with a status badge prefix; READY
     players also show their character name + class summary.
+
+    ``pregen_status`` (optional) adds a "Génération du monde" field showing
+    the background arc/location generation progress. ``None`` keeps the
+    legacy layout untouched.
     """
     embed = discord.Embed(
         title=f"🏰 Campagne : {campaign_name}",
@@ -62,4 +86,11 @@ def build_lobby_embed(
         value=roster_text,
         inline=False,
     )
+
+    if pregen_status is not None:
+        embed.add_field(
+            name="🌍 Génération du monde",
+            value=_PREGEN_LINES[pregen_status],
+            inline=False,
+        )
     return embed

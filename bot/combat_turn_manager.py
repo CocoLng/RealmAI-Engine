@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Callable
 
 import discord
@@ -35,6 +36,7 @@ from bot.action_pipeline import (
     ActionPipeline,
     ActionPipelineResult,
     AmbiguityResult,
+    PipelineOutput,
     UnknownEntityResult,
 )
 from bot.combat_end import finalize_combat
@@ -80,6 +82,33 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 300
 
+# Action types that never consume the actor's combat turn. QUESTION and
+# LOOK are the informational actions the validator deliberately allows
+# off-turn (engine/validators.py — _EXPLORATION_ALLOWED_IN_COMBAT); they
+# must not advance the rotation even when the current combatant uses them.
+_NON_CONSUMING_ACTION_TYPES: frozenset[ActionType] = frozenset({
+    ActionType.QUESTION,
+    ActionType.LOOK,
+})
+
+# Internal '[Tag] …' diagnostic segments occasionally leaked into NPC
+# summaries by executors (audit H14). Matches the bracket tag and the rest
+# of its ';'-separated segment so the whole internal message disappears.
+_INTERNAL_TAG_RE = re.compile(r"\s*\[[^\]]*\][^;]*(?:;\s*|$)")
+
+
+def _strip_internal_tags(summary: str) -> str:
+    """Remove engine-internal '[Tag] …' segments from a player-visible summary.
+
+    Defense in depth for the NPC turn recap: executors must not emit such
+    tags anymore, but a leaked diagnostic must never reach the Discord
+    channel either way. Leftover separators and double spaces are tidied.
+    """
+    cleaned = _INTERNAL_TAG_RE.sub(" ", summary)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip(" ;:")
+
+
 # Labels for the hub-freeze message after combat ends. Displayed on the
 # edited hub above the final CombatState embed.
 _END_LABELS: dict[CombatEndReason, str] = {
@@ -119,6 +148,11 @@ class TurnManager:
         self.pending_timeout: asyncio.Task[None] | None = None
         self.current_view: CombatActionView | None = None
         self._finalized = False
+        self.checkpoint_dirty = False
+        """True while the latest auto-checkpoint failed (audit M5). The
+        next successful checkpoint clears it — ``persist_session`` always
+        writes the full session snapshot, so the retry is implicit."""
+        self._checkpoint_warned = False
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -137,15 +171,22 @@ class TurnManager:
 
     async def on_action_resolved(
         self,
-        result: ActionPipelineResult | None = None,
+        result: PipelineOutput | None = None,
     ) -> None:
         """Called after any pipeline.process() finishes while combat is live.
 
         Free-text actions come in via :class:`bot.cogs.action_handler.ActionHandlerCog`,
         which already posted the narrative embed; button clicks come in via
         :meth:`dispatch_action`, which posted the narrative embed itself.
-        Either way, the action is done, the turn must advance, pending
-        off-turn cues must be flushed, and the next turn prompted.
+
+        The turn only advances when ``result`` shows the CURRENT combatant
+        actually consumed their action. Refused actions
+        (:class:`UnknownEntityResult`), unresolved ambiguities, off-turn-legal
+        QUESTION/LOOK, free actions, and outputs authored by another player
+        leave the rotation untouched — they re-arm the auto-dodge watcher
+        instead. ``result=None`` is the trusted internal form (NPC turns,
+        surprise skip) whose action economy the engine already enforced:
+        it always advances.
 
         Holds ``session.action_lock`` for the entire turn-advance sequence
         so two concurrent callers (e.g. a button click and a free-text
@@ -155,15 +196,21 @@ class TurnManager:
         :meth:`dispatch_action` and ``ActionHandlerCog._run_pipeline`` both
         release it after the pipeline runs and before handing off here.
         """
-        del result  # Only used by callers for diagnostics; we read state directly.
-        self._cancel_timeout()
-
         async with self.session.action_lock:
             state = self.session.combat_state
             if state is None or not state.is_active:
                 await self._finalize()
                 return
 
+            if not self._turn_was_consumed(result, state):
+                # No turn consumed — keep the rotation in place and make
+                # sure the AFK safety net is back up (rearm_timeout no-ops
+                # when a live watcher exists, e.g. off-turn chatter that
+                # never paused the current PC's watcher).
+                self.rearm_timeout()
+                return
+
+            self._cancel_timeout()
             advance_turn(state)
             await self._flush_pending_cues(state)
 
@@ -182,6 +229,31 @@ class TurnManager:
         # await on Discord I/O for seconds and must not block another action
         # pipeline from grabbing the lock.
         await self._prompt_turn(current)
+
+    def _turn_was_consumed(
+        self,
+        result: PipelineOutput | None,
+        state: CombatState,
+    ) -> bool:
+        """Whether ``result`` represents the current combatant spending their action.
+
+        ``None`` means a trusted internal caller (NPC executor, surprise
+        skip) already enforced the action economy — treated as consumed.
+        Everything else must be an :class:`ActionPipelineResult` authored
+        by the current combatant for a turn-consuming action type.
+        """
+        if result is None:
+            return True
+        if not isinstance(result, ActionPipelineResult):
+            # Refused (UnknownEntityResult) or unresolved (AmbiguityResult):
+            # no mechanics were applied, the action slot is intact.
+            return False
+        action = result.interpreted_action
+        if get_current_combatant(state).name != action.actor_name:
+            return False
+        if result.is_question or result.is_free_action:
+            return False
+        return action.action_type not in _NON_CONSUMING_ACTION_TYPES
 
     async def dispatch_action(self, action: InterpretedAction) -> None:
         """Run one interpreted action through the pipeline and advance the turn.
@@ -233,19 +305,21 @@ class TurnManager:
 
             await self._render_pipeline_result(pipeline, result, action)
 
-        # Free actions (EQUIP) re-prompt the same combatant instead of advancing.
+        # Outcomes that did not consume the turn — free action (EQUIP),
+        # refused action, unresolved ambiguity — re-prompt the same
+        # combatant instead of advancing: the clicked view disabled
+        # itself, so without a fresh hub the player would be stuck until
+        # the auto-dodge timeout fired.
+        state = self.session.combat_state
         if (
-            isinstance(result, ActionPipelineResult)
-            and result.is_free_action
+            state is not None
+            and state.is_active
+            and not self._turn_was_consumed(result, state)
         ):
-            state = self.session.combat_state
-            if state is not None:
-                current = get_current_combatant(state)
-                if current is not None:
-                    await self._prompt_turn(current)
+            await self._prompt_turn(get_current_combatant(state))
             return
 
-        await self.on_action_resolved()
+        await self.on_action_resolved(result)
 
     # ------------------------------------------------------------------
     # Turn prompting
@@ -356,7 +430,13 @@ class TurnManager:
             await self.on_action_resolved()
             return
 
-        plan = self._dispatch_npc_brain(combatant, state)
+        # Off-loop: the boss tier goes through a synchronous httpx LLM
+        # call — run in-loop it would freeze the whole bot (gateway
+        # heartbeat included) for the entire generation. Players can only
+        # interleave non-mutating QUESTION/LOOK during an NPC turn (the
+        # validator refuses off-turn combat actions), so the thread never
+        # races a state mutation.
+        plan = await asyncio.to_thread(self._dispatch_npc_brain, combatant, state)
 
         dice_embed: discord.Embed | None = None
         if plan.action_type == ActionType.ATTACK and plan.signature_name is None:
@@ -372,6 +452,10 @@ class TurnManager:
             summary = getattr(self, "_last_npc_summary", "") or (
                 f"{combatant.name} → {plan.target_name or '?'}"
             )
+
+        # The summary is posted verbatim and recorded for the narrator —
+        # scrub any internal '[Tag] …' diagnostic before it leaves (H14).
+        summary = _strip_internal_tags(summary)
 
         await self._safe_send(content=f"📜 {summary}")
         if dice_embed is not None:
@@ -811,8 +895,11 @@ class TurnManager:
 
         Off-loaded to a thread because :func:`bot.persistence.persist_session`
         is synchronous SQLAlchemy. ``db_factory=None`` (tests / dev) makes
-        this a no-op. Failures are logged and swallowed — a failed
-        checkpoint must not brick the turn flow.
+        this a no-op. A failed checkpoint must not brick the turn flow,
+        but it is not silent either (audit M5): the channel gets ONE
+        warning per failure streak, ``checkpoint_dirty`` flags the
+        unsaved progress, and the next checkpoint retries naturally
+        (``persist_session`` always writes the full session snapshot).
         """
         if self.db_factory is None:
             return
@@ -824,6 +911,21 @@ class TurnManager:
             logger.exception(
                 "TurnManager auto-checkpoint failed: %s", exc,
             )
+            self.checkpoint_dirty = True
+            if not self._checkpoint_warned:
+                self._checkpoint_warned = True
+                await self._safe_send(
+                    "⚠️ La sauvegarde automatique du combat a échoué — "
+                    "nouvelle tentative au prochain tour.",
+                )
+            return
+
+        if self.checkpoint_dirty:
+            logger.info(
+                "TurnManager auto-checkpoint recovered after earlier failure.",
+            )
+        self.checkpoint_dirty = False
+        self._checkpoint_warned = False
 
     # ------------------------------------------------------------------
     # Session helpers

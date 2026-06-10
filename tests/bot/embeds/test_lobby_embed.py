@@ -1,7 +1,7 @@
 """Tests for the campaign lobby embed."""
 
 from bot.embeds.lobby_embed import build_lobby_embed
-from bot.lobby_state import LobbyPlayer, LobbyPlayerStatus
+from bot.lobby_state import GenerationPhase, LobbyPlayer, LobbyPlayerStatus
 
 
 def test_empty_lobby_shows_zero_players():
@@ -82,3 +82,65 @@ def test_player_count_displayed():
     )
     rendered_all = embed.title + "\n" + "\n".join((f.name or "") + (f.value or "") for f in embed.fields)
     assert "2/6" in rendered_all
+
+
+# ---------------------------------------------------------------------------
+# Pregen status line (chantier I / H8)
+#
+# The arc + starting location are generated in the background while players
+# create their characters. The lobby embed can surface that progress so the
+# bot never looks frozen during the long generation.
+# ---------------------------------------------------------------------------
+
+
+def test_no_pregen_status_renders_no_generation_field():
+    """Backward compatible: omitting pregen_status changes nothing."""
+    embed = build_lobby_embed(
+        campaign_name="X", theme="Y", host_name="h",
+        roster=[], language="fr",
+    )
+    rendered = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "Génération" not in rendered
+
+
+def test_pregen_arc_phase_shows_progress_line():
+    embed = build_lobby_embed(
+        campaign_name="X", theme="Y", host_name="h",
+        roster=[], language="fr",
+        pregen_status=GenerationPhase.ARC,
+    )
+    rendered = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "⏳" in rendered
+    assert "trame" in rendered.lower()
+
+
+def test_pregen_location_phase_shows_progress_line():
+    embed = build_lobby_embed(
+        campaign_name="X", theme="Y", host_name="h",
+        roster=[], language="fr",
+        pregen_status=GenerationPhase.LOCATION,
+    )
+    rendered = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "⏳" in rendered
+    assert "lieu" in rendered.lower()
+
+
+def test_pregen_ready_shows_checkmark():
+    embed = build_lobby_embed(
+        campaign_name="X", theme="Y", host_name="h",
+        roster=[], language="fr",
+        pregen_status=GenerationPhase.READY,
+    )
+    rendered = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "✅" in rendered
+    assert "prêt" in rendered.lower()
+
+
+def test_pregen_failed_shows_error():
+    embed = build_lobby_embed(
+        campaign_name="X", theme="Y", host_name="h",
+        roster=[], language="fr",
+        pregen_status=GenerationPhase.FAILED,
+    )
+    rendered = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "❌" in rendered

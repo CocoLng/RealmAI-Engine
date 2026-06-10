@@ -28,6 +28,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from bot.npc_prefetch import schedule_npc_prefetch
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
 from engine.character import AbilityScores, Character, Race
@@ -256,6 +257,10 @@ def hydrate_scene(
                     campaign_id,
                 )
                 created += 1
+            elif not existing.is_alive:
+                # Dead NPC lingering in a stale npcs_present list — never
+                # rebind, upgrade, or recreate it (audit H15).
+                continue
             elif _should_upgrade_npc(existing, arc=arc):
                 # Idempotent upgrade: an NPC created by the legacy code path
                 # matches the villain name or a combat beat but has no stat
@@ -316,6 +321,11 @@ def hydrate_scene(
             )
     finally:
         db_session.close()
+
+    # Chantier I (H8): pre-generate missing NPC sheets in the background so
+    # the first TALK doesn't pay the 18-27 s lazy generation mid-action.
+    # No-op without a running loop, an npc_generator, or empty-sheet NPCs.
+    schedule_npc_prefetch(session, db_factory=db_factory)
 
 
 def take_scene_item(
@@ -473,7 +483,7 @@ def describe_scene_for_narrator(
         if ongoing_npc is None:
             present = [
                 npc for npc in (session.npcs or {}).values()
-                if npc.location_name == location.name
+                if npc.is_alive and npc.location_name == location.name
             ]
             if present:
                 npc_lines = []

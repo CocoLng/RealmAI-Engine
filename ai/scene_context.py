@@ -52,7 +52,9 @@ def build_scene_context(
     visible_npcs = [
         npc.name
         for npc in npcs.values()
-        if npc.location_name is not None and npc.location_name == location.name
+        if npc.is_alive
+        and npc.location_name is not None
+        and npc.location_name == location.name
     ]
 
     ctx = SceneContext(

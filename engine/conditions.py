@@ -48,6 +48,7 @@ class ConditionType(StrEnum):
     EXHAUSTION = "Exhaustion"
     SURPRISED = "Surprised"
     CONCENTRATING = "Concentrating"
+    DODGING = "Dodging"
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +112,10 @@ CONDITIONS_AUTO_FAIL_STR_DEX_SAVES: frozenset[ConditionType] = frozenset({
     ConditionType.PETRIFIED,
     ConditionType.STUNNED,
     ConditionType.UNCONSCIOUS,
+})
+
+CONDITIONS_IMPOSING_DISADVANTAGE_ON_ATTACKERS: frozenset[ConditionType] = frozenset({
+    ConditionType.DODGING,
 })
 
 
@@ -211,6 +216,18 @@ def grants_advantage_to_attackers(conditions: list[ActiveCondition]) -> bool:
     """True if any active condition grants advantage to creatures attacking this one."""
     return any(
         c.condition_type in CONDITIONS_GRANTING_ADVANTAGE_AGAINST for c in conditions
+    )
+
+
+def imposes_disadvantage_on_attackers(conditions: list[ActiveCondition]) -> bool:
+    """True if attack rolls against this creature have disadvantage.
+
+    SRD 5e Dodge action: until the start of the dodger's next turn,
+    attack rolls against them have disadvantage.
+    """
+    return any(
+        c.condition_type in CONDITIONS_IMPOSING_DISADVANTAGE_ON_ATTACKERS
+        for c in conditions
     )
 
 

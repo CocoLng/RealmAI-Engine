@@ -40,6 +40,15 @@ class ArcGenerator:
 
     MODEL = "qwen3.5:9b"
 
+    NUM_PREDICT_CAP = 3072
+    """Hard output-token cap for the arc call.
+
+    The slim schema (narrative fields only) needs ~1500-2000 tokens for a
+    15-beat arc; the cap leaves headroom while guaranteeing a runaway
+    generation can no longer monopolize the 9b for 6+ minutes (finding H8:
+    the legacy schema produced 4700-5500-token outputs at ~13 tok/s).
+    """
+
     def __init__(
         self,
         client: OllamaClient,
@@ -86,7 +95,10 @@ class ArcGenerator:
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.9, think=False)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.9, think=False,
+            num_predict=self.NUM_PREDICT_CAP,
+        )
 
         # Repair known LLM output quirks before validation.
         self._sanitize_arc_data(data)
@@ -178,6 +190,9 @@ class ArcGenerator:
         - native ``objectives[]`` arrays per beat: missing kinds, duplicate ids,
           gate type mismatches, missing ``advance_rule`` etc. — and scaffolds a
           deterministic recipe-based fallback when the list is empty.
+        - missing ``on_complete`` effects: unlock_exits chained toward the
+          next beat's location, HAS_ITEM gates seeded into the previous
+          beat's add_items (see :meth:`_scaffold_beat_effects`).
         - damage_type synonym normalization (e.g. "Electricity" → "Lightning").
         - target_scope invalid hybrids (e.g. "all_enemies_in_zone" → "all_enemies").
         - string "null"/"None"/"" coerced to real None on optional effect/attack
@@ -194,6 +209,8 @@ class ArcGenerator:
                         for k, v in flags.items()
                     }
             ArcGenerator._sanitize_beat_objectives(beat, villain_name=villain_name)
+
+        ArcGenerator._scaffold_beat_effects(data)
 
         stat = data.get("villain_stat_block")
         if not isinstance(stat, dict):
@@ -338,6 +355,62 @@ class ArcGenerator:
                 beat["judge_rubric"] = recipe_rubric
             if not beat.get("player_visible_hint"):
                 beat["player_visible_hint"] = recipe_hint
+
+    @staticmethod
+    def _scaffold_beat_effects(data: dict[str, Any]) -> None:
+        """Fill missing ``on_complete`` effects deterministically, in place.
+
+        The slim prompt no longer asks the LLM for ``on_complete`` (it cost
+        ~60-80 output tokens per beat for content that is mostly derivable),
+        so the engine provides the two guarantees that matter mechanically:
+
+        1. **Progression**: each beat unlocks the exit toward the next
+           beat's ``location_hint`` — the documented intent of
+           ``unlock_exits``. Only fills when the LLM/legacy payload didn't
+           provide any unlock itself.
+        2. **Gate satisfiability**: every ``HAS_ITEM`` gate gets its item
+           appended to the *previous* beat's ``add_items`` so the gated
+           objective is reachable through normal play. Runs on LLM-provided
+           effects too (append-only, no overwrite).
+
+        Must run AFTER objective sanitization/scaffolding — it reads the
+        final ``objectives`` lists to find HAS_ITEM gates.
+        """
+        beats = [b for b in (data.get("beats") or []) if isinstance(b, dict)]
+        for i, beat in enumerate(beats):
+            on_complete = beat.get("on_complete")
+            if not isinstance(on_complete, dict):
+                on_complete = {}
+                beat["on_complete"] = on_complete
+
+            if not on_complete.get("unlock_exits"):
+                this_hint = str(beat.get("location_hint") or "").strip()
+                next_hint = ""
+                if i + 1 < len(beats):
+                    next_hint = str(
+                        beats[i + 1].get("location_hint") or "",
+                    ).strip()
+                if next_hint and next_hint != this_hint:
+                    on_complete["unlock_exits"] = [next_hint]
+
+            if i == 0:
+                continue  # No previous beat to grant a gated item.
+            for obj in beat.get("objectives") or []:
+                if not isinstance(obj, dict):
+                    continue
+                gate = obj.get("gate")
+                if (
+                    not isinstance(gate, dict)
+                    or gate.get("kind") != GateKind.HAS_ITEM.value
+                ):
+                    continue
+                item = gate.get("value")
+                if not isinstance(item, str) or not item.strip():
+                    continue
+                prev_effects = beats[i - 1]["on_complete"]
+                items = prev_effects.setdefault("add_items", [])
+                if isinstance(items, list) and item not in items:
+                    items.append(item)
 
     @staticmethod
     def _clean_objective_list(

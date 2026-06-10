@@ -36,12 +36,25 @@ class NPCRepository:
         rows = self._session.execute(stmt).scalars().all()
         return [npc_from_db(r) for r in rows]
 
-    def list_by_location(self, location_name: str, campaign_id: str) -> list[NPC]:
-        """List all NPCs at a specific location in a campaign."""
+    def list_by_location(
+        self,
+        location_name: str,
+        campaign_id: str,
+        *,
+        alive_only: bool = True,
+    ) -> list[NPC]:
+        """List NPCs at a specific location in a campaign.
+
+        Defaults to living NPCs only — scene hydration and navigation
+        must not resurrect corpses into the scene (audit H15). Pass
+        ``alive_only=False`` to include the dead.
+        """
         stmt = select(NPCRow).where(
             NPCRow.campaign_id == campaign_id,
             NPCRow.location_name == location_name,
         )
+        if alive_only:
+            stmt = stmt.where(NPCRow.is_alive.is_(True))
         rows = self._session.execute(stmt).scalars().all()
         return [npc_from_db(r) for r in rows]
 

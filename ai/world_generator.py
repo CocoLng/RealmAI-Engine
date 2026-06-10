@@ -32,6 +32,15 @@ class WorldGenerator:
 
     MODEL = "qwen3.5:9b"
 
+    NUM_PREDICT_CAP = 1536
+    """Hard output-token cap for the location call.
+
+    Baseline from real sessions (H8): ~990 output tokens at ~12 tok/s
+    = 80 s per location. The prompt's brevity rules target ~600-700
+    tokens; the cap bounds pathological generations without truncating
+    a normal payload.
+    """
+
     def __init__(
         self,
         client: OllamaClient,
@@ -89,7 +98,10 @@ class WorldGenerator:
             {"role": "user", "content": user_content},
         ]
 
-        data = self._client.chat_json(self.MODEL, messages, temperature=0.9, think=False)
+        data = self._client.chat_json(
+            self.MODEL, messages, temperature=0.9, think=False,
+            num_predict=self.NUM_PREDICT_CAP,
+        )
 
         # --- Item description filtering (safety: drop hallucinated items) ---
         items_available = list(data.get("items_available", []))
