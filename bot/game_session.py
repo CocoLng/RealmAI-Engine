@@ -107,6 +107,15 @@ class GameSession:
     I/O-free. ``None`` until the first turn completes (e.g. right after
     /resume — the next turn rebuilds it from the persisted exchanges)."""
 
+    memory_summarize_task: "asyncio.Task[None] | None" = None
+    """In-flight background summarization (Layer 3 cadence, audit H9c).
+
+    Scheduled fire-and-forget by ``narrate.update_memory_after_turn``
+    once enough exchanges have left the sliding window; the reference
+    doubles as a re-entrancy guard so only one summarization runs at a
+    time per session. Cleared implicitly when a later turn observes the
+    task as done."""
+
 
 def create_ai_services(session: GameSession) -> None:
     """Attempt to initialize AI services on a session.

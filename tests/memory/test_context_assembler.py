@@ -116,7 +116,7 @@ class TestContextAssembler:
         db_session.commit()
 
         exchange_repo = ExchangeRepository(db_session)
-        for i in range(1, 26):
+        for i in range(1, 41):
             exchange_repo.save(NarrativeExchange(
                 campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
                 content=f"Action {i}", interaction_number=i,
@@ -259,7 +259,7 @@ class TestContextAssembler:
         db_session.commit()
         exchange_repo = ExchangeRepository(db_session)
         # Enough exchanges to trigger the summarization cadence
-        for i in range(1, 26):
+        for i in range(1, 41):
             exchange_repo.save(NarrativeExchange(
                 campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
                 content=f"Action {i}", interaction_number=i,

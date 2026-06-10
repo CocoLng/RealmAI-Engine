@@ -124,10 +124,11 @@ async def update_memory_after_turn(
         return
     campaign_id = session.campaign.id
 
-    def _record_and_render() -> str:
+    def _record_and_render() -> tuple[str, bool]:
         from memory.context_assembler import ContextAssembler
         from memory.models import ExchangeRole
         from memory.sliding_window import SlidingWindow
+        from memory.summarizer import Summarizer
 
         db = db_factory()
         try:
@@ -149,18 +150,65 @@ async def update_memory_after_turn(
                 getattr(session, "semantic_memory", None),
                 getattr(session, "ollama_client", None),
             )
-            return assembler.assemble_memory_prefix(
+            prefix = assembler.assemble_memory_prefix(
                 campaign_id, query_text=player_input,
             )
+            needs_summary = Summarizer(db, None).should_summarize(campaign_id)
+            return prefix, needs_summary
         finally:
             db.close()
 
     try:
-        session.memory_context = await asyncio.to_thread(_record_and_render)
+        prefix, needs_summary = await asyncio.to_thread(_record_and_render)
+        session.memory_context = prefix
     except Exception:
         logger.warning(
             "MEMORY record failed campaign=%s", campaign_id, exc_info=True,
         )
+        return
+
+    if needs_summary:
+        _schedule_summarization(session, db_factory)
+
+
+def _schedule_summarization(
+    session: "GameSession",
+    db_factory: Callable[[], Any],
+) -> None:
+    """Fire-and-forget Layer 3 summarization (Ollama via to_thread).
+
+    The task reference on the session doubles as a re-entrancy guard:
+    while a summarization is in flight, no second one is scheduled.
+    """
+    client = getattr(session, "ollama_client", None)
+    if client is None:
+        return
+    current = getattr(session, "memory_summarize_task", None)
+    if current is not None and not current.done():
+        return
+    campaign_id = session.campaign.id
+
+    def _summarize() -> None:
+        from memory.summarizer import Summarizer
+
+        db = db_factory()
+        try:
+            summary = Summarizer(db, client).summarize(campaign_id)
+            if summary is not None:
+                db.commit()
+        finally:
+            db.close()
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(_summarize)
+        except Exception:
+            logger.warning(
+                "MEMORY summarization failed campaign=%s",
+                campaign_id, exc_info=True,
+            )
+
+    session.memory_summarize_task = asyncio.get_running_loop().create_task(_run())
 
 
 async def call_narrator(

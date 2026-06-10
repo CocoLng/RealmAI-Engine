@@ -243,6 +243,116 @@ class TestMemoryContextCache:
         assert "larmes de sang" in second_context
 
 
+class TestSummarizationCadence:
+    """update_memory_after_turn schedules background summarization once
+    enough exchanges have left the window (audit H9c), without blocking
+    the turn, and purges the summarized exchanges."""
+
+    def _seed(self, factory, campaign_id: str, count: int) -> None:
+        from db.repositories.exchange_repo import ExchangeRepository
+        from memory.models import NarrativeExchange
+
+        db = factory()
+        repo = ExchangeRepository(db)
+        for i in range(1, count + 1):
+            repo.save(NarrativeExchange(
+                campaign_id=campaign_id, role=ExchangeRole.NARRATOR,
+                content=f"Vieux souvenir numéro {i}", interaction_number=i,
+            ))
+        db.commit()
+        db.close()
+
+    @pytest.mark.asyncio
+    async def test_summarization_scheduled_and_purges(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        from unittest.mock import MagicMock
+        game_session.ollama_client = MagicMock()
+        game_session.ollama_client.chat_json.return_value = {
+            "summary": "Les héros ont traversé les marais.",
+        }
+        # 30 already there; the hook records 2 more → 32 = window(12) + interval(20)
+        self._seed(thread_safe_db_factory, "camp-mem-1", 30)
+
+        await narrate.update_memory_after_turn(
+            session=game_session,
+            db_factory=thread_safe_db_factory,
+            player_input="on continue",
+            narration="La route s'étire devant vous.",
+        )
+
+        task = game_session.memory_summarize_task
+        assert task is not None
+        await task
+
+        from db.repositories.summary_repo import SummaryRepository
+        from db.repositories.exchange_repo import ExchangeRepository
+        db = thread_safe_db_factory()
+        summaries = SummaryRepository(db).list_by_campaign("camp-mem-1")
+        remaining = ExchangeRepository(db).get_recent("camp-mem-1", limit=100)
+        db.close()
+        assert len(summaries) == 1
+        assert "marais" in summaries[0].summary_text
+        assert summaries[0].end_interaction == 20
+        assert len(remaining) == 12
+
+    @pytest.mark.asyncio
+    async def test_no_summarization_below_cadence(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        from unittest.mock import MagicMock
+        game_session.ollama_client = MagicMock()
+        self._seed(thread_safe_db_factory, "camp-mem-1", 10)
+
+        await narrate.update_memory_after_turn(
+            session=game_session,
+            db_factory=thread_safe_db_factory,
+            player_input="on continue",
+            narration="Rien de neuf.",
+        )
+
+        assert game_session.memory_summarize_task is None
+
+    @pytest.mark.asyncio
+    async def test_no_summarization_without_client(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        game_session.ollama_client = None
+        self._seed(thread_safe_db_factory, "camp-mem-1", 40)
+
+        await narrate.update_memory_after_turn(
+            session=game_session,
+            db_factory=thread_safe_db_factory,
+            player_input="on continue",
+            narration="Rien.",
+        )
+
+        assert game_session.memory_summarize_task is None
+
+    @pytest.mark.asyncio
+    async def test_inflight_task_not_duplicated(
+        self, thread_safe_db_factory, game_session: GameSession,
+    ) -> None:
+        import asyncio
+        from unittest.mock import MagicMock
+        game_session.ollama_client = MagicMock()
+        game_session.ollama_client.chat_json.return_value = {"summary": "S."}
+        self._seed(thread_safe_db_factory, "camp-mem-1", 40)
+
+        sentinel: asyncio.Task = asyncio.ensure_future(asyncio.sleep(30))
+        game_session.memory_summarize_task = sentinel
+        try:
+            await narrate.update_memory_after_turn(
+                session=game_session,
+                db_factory=thread_safe_db_factory,
+                player_input="on continue",
+                narration="Rien.",
+            )
+            assert game_session.memory_summarize_task is sentinel
+        finally:
+            sentinel.cancel()
+
+
 class TestPipelineRecordsExchanges:
     """The orchestrator hook: a full pipeline run records the turn."""
 

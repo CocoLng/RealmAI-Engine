@@ -45,23 +45,33 @@ class Summarizer:
         self,
         session: Session,
         client: OllamaClient | None,
+        window_size: int = 12,
     ) -> None:
-        """``client=None`` disables summary GENERATION; reads still work."""
+        """``client=None`` disables summary GENERATION; reads still work.
+
+        ``window_size`` mirrors the SlidingWindow size: exchanges still
+        rendered in the window are never summarized (they would appear
+        twice in the prompt — once verbatim, once compressed).
+        """
         self._summary_repo = SummaryRepository(session)
         self._exchange_repo = ExchangeRepository(session)
         self._client = client
+        self._window_size = window_size
 
     def should_summarize(self, campaign_id: str) -> bool:
-        """Check if enough unsummarized exchanges have accumulated."""
+        """True once INTERVAL unsummarized exchanges have LEFT the window."""
         latest = self._summary_repo.get_latest(campaign_id)
         last_summarized = latest.end_interaction if latest else 0
         count = self._exchange_repo.count_unsummarized(campaign_id, last_summarized)
-        return count >= self.SUMMARY_INTERVAL
+        return count - self._window_size >= self.SUMMARY_INTERVAL
 
     def summarize(self, campaign_id: str) -> CompressedSummary | None:
-        """Generate a summary of unsummarized exchanges via Ollama.
+        """Summarize the unsummarized exchanges that left the window.
 
-        Returns None if not enough exchanges or if LLM call fails.
+        On success, the summarized exchanges are deleted (the exchanges
+        table stays bounded; the caller owns the commit). Returns None
+        if not enough eligible exchanges or if the LLM call fails —
+        nothing is deleted in that case.
         """
         if self._client is None:
             return None
@@ -69,6 +79,8 @@ class Summarizer:
         last_summarized = latest.end_interaction if latest else 0
 
         exchanges = self._exchange_repo.get_unsummarized(campaign_id, last_summarized)
+        if self._window_size > 0:
+            exchanges = exchanges[:-self._window_size]
         if len(exchanges) < self.SUMMARY_INTERVAL:
             return None
 
@@ -97,8 +109,13 @@ class Summarizer:
             end_interaction=exchanges[-1].interaction_number,
         )
         self._summary_repo.save(summary)
+        # The summarized exchanges are now redundant with the summary and
+        # already out of the window — drop them to bound the table.
+        self._exchange_repo.delete_before(
+            campaign_id, summary.end_interaction + 1,
+        )
         logger.info(
-            "SUMMARY campaign=%s interactions=%d-%d",
+            "SUMMARY campaign=%s interactions=%d-%d (purged)",
             campaign_id, summary.start_interaction, summary.end_interaction,
         )
         return summary
