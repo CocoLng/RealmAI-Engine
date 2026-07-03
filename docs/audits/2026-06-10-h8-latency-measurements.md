@@ -55,10 +55,18 @@ Non traité (hors périmètre du chantier) : le swap de modèle 4b↔9b par
 action (~6-8 s dans l'interprète, inhérent au pipeline interpret(4b) →
 narrate(9b)) et la latence du narrateur lui-même.
 
-## Reste à câbler (chantier session-cog)
+## Suite du chantier (2026-07-03)
 
-`build_lobby_embed` accepte `pregen_status: GenerationPhase | None`
-(champ « 🌍 Génération du monde », commit `feat(lobby-embed)`).
-`bot/cogs/session.py` doit passer `pregen_status=lobby.pregen_phase` dans
-`_refresh_lobby_embed` et rafraîchir l'embed aux transitions de phase de
-`_pregenerate_campaign_world` pour que la progression soit visible en live.
+Câblé : `bot/cogs/session.py` passe `pregen_status=lobby.pregen_phase` à
+`build_lobby_embed` et rafraîchit l'embed à chaque transition de phase —
+la progression est visible en live dans le lobby.
+
+Prefetch des lieux voisins (`bot/location_prefetch.py` + gate global
+`bot/prefetch_gate.py`) : après chaque arrivée (lancement, MOVE, /resume),
+les voisins non générés du lieu courant sont générés en tâche de fond —
+un MOVE vers un lieu préfetché devient une lecture DB (~57-80 s → <2 s
+attendu). Au plus une génération de fond en vol (gate partagé avec le
+prefetch NPC) ; un job ne démarre jamais pendant une action joueur ;
+`change_location` attend un job déjà démarré pour sa destination (une
+génération au lieu de deux). Mesures réelles à faire sur une session
+Discord live (chantier discord-live-testing).

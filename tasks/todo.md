@@ -487,7 +487,12 @@ ici au merge.
       engine/dice, cogs/rolls, npc_tactician, npc_ai/scripted+boss, npc_stat_block, skill_check
 - [ ] G. Mémoire 4 couches & locked facts (H9, H17 + lows) —
       memory/*, pipeline/narrate, story_bible_logger, game_session
-- [ ] I. Latence (H8) — ai/arc_generator, world_generator, npc_generator, embeds progression
+- [x] I. Latence (H8) — ai/arc_generator, world_generator, npc_generator, embeds progression
+      (2026-07-03 : arc amaigri + pregen lobby + prefetch NPC déjà mergés ;
+      cette passe ajoute le câblage pregen_status dans l'embed lobby et le
+      prefetch des lieux voisins — spec docs/superpowers/specs/
+      2026-07-03-h8-location-prefetch-design.md, plan docs/superpowers/
+      plans/2026-07-03-h8-location-prefetch.md. Reste : mesure live Discord.)
 - [ ] H. Porte mypy + qualité (M14 + lows) — EN DERNIER, après merge des autres
       (touche tout le repo)
 
