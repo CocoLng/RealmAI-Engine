@@ -96,6 +96,56 @@ def create_exit_stubs(
     return created
 
 
+async def generate_destination(
+    session: "GameSession",
+    destination_name: str,
+    *,
+    origin_name: str,
+    required_connections: list[str],
+) -> Location:
+    """Generate (or hydrate) ``destination_name`` via :class:`WorldGenerator`.
+
+    Shared by the synchronous MOVE path (:func:`change_location`) and the
+    background neighbor prefetch (``bot/location_prefetch.py``) so both
+    produce identical locations: arc hints from ``session.story_arc``, the
+    requested name forced back on the result, and required back-links
+    injected as a safety net. Raises whatever the generator raises —
+    callers wrap errors. ``session.ollama_client`` must be set.
+    """
+    from ai.world_generator import WorldGenerator
+
+    assert session.ollama_client is not None
+    gen = WorldGenerator(session.ollama_client)
+    # Pass arc location hints so generated names match the arc.
+    arc_hints: list[str] | None = None
+    story_arc = getattr(session, "story_arc", None)
+    if story_arc is not None:
+        arc_hints = [
+            beat.location_hint
+            for beat in story_arc.beats
+            if beat.location_hint
+        ]
+    new_dest = await asyncio.to_thread(
+        gen.generate,
+        campaign_context=f"Moving from {origin_name} to {destination_name}",
+        location_type="connected_area",
+        location_name=destination_name,
+        language=session.language,
+        location_hints=arc_hints,
+        required_connections=required_connections or None,
+    )
+    # Guarantee name stability even if the LLM rephrased it, since the
+    # player asked for this exact destination and the DB row (when it's a
+    # stub) is keyed by that name.
+    new_dest.name = destination_name
+    # Safety net: force-inject required back-links in case the
+    # world_generator filter let something slip through.
+    for req in required_connections:
+        if req and req not in new_dest.connections:
+            new_dest.connections = [*new_dest.connections, req]
+    return new_dest
+
+
 async def change_location(
     session: "GameSession",
     destination_name: str,
@@ -139,18 +189,6 @@ async def change_location(
                 else "stub hydration needs Ollama",
             )
         try:
-            from ai.world_generator import WorldGenerator
-
-            gen = WorldGenerator(session.ollama_client)
-            # Pass arc location hints so generated names match the arc.
-            arc_hints: list[str] | None = None
-            story_arc = getattr(session, "story_arc", None)
-            if story_arc is not None:
-                arc_hints = [
-                    beat.location_hint
-                    for beat in story_arc.beats
-                    if beat.location_hint
-                ]
             # When hydrating a stub, preserve any back-links it already knows
             # about (at least the parent we came from). When creating from
             # scratch, enforce a back-link to the current location so the
@@ -160,26 +198,12 @@ async def change_location(
                 required = list(dest.connections)
             elif current_name and current_name != "unknown":
                 required = [current_name]
-
-            new_dest = await asyncio.to_thread(
-                gen.generate,
-                campaign_context=f"Moving from {current_name} to {destination_name}",
-                location_type="connected_area",
-                location_name=destination_name,
-                language=session.language,
-                location_hints=arc_hints,
-                required_connections=required or None,
+            dest = await generate_destination(
+                session,
+                destination_name,
+                origin_name=current_name,
+                required_connections=required,
             )
-            # Guarantee name stability even if the LLM rephrased it, since
-            # the player asked for this exact destination and the DB row
-            # (when it's a stub) is keyed by that name.
-            new_dest.name = destination_name
-            # Safety net: force-inject required back-links in case the
-            # world_generator filter let something slip through.
-            for req in required:
-                if req and req not in new_dest.connections:
-                    new_dest.connections = [*new_dest.connections, req]
-            dest = new_dest
             created_stub_or_full = True
         except Exception as exc:  # noqa: BLE001
             raise LocationChangeError(
