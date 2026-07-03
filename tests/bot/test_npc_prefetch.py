@@ -21,6 +21,7 @@ from sqlalchemy.orm import sessionmaker
 
 from ai.models import NPCSheet
 from bot.npc_prefetch import prefetch_npc_sheets, schedule_npc_prefetch
+from bot.prefetch_gate import generation_gate, reset_generation_gate
 from db.database import Base
 from db.mappers import campaign_to_db
 from db.repositories.location_repo import LocationRepository
@@ -274,3 +275,56 @@ async def test_concurrent_schedules_generate_each_npc_once(db_factory) -> None:
 
     assert gen.calls.count("Jeanne") == 1
     assert session.npcs["Jeanne"].personality
+
+
+# ---------------------------------------------------------------------------
+# Gate compliance tests (H8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fresh_gate():
+    reset_generation_gate()
+    yield
+    reset_generation_gate()
+
+
+async def test_prefetch_yields_to_player_action(db_factory) -> None:
+    """No LLM call starts while session.action_lock is held (H8 gate)."""
+    gen = FakeGenerator()
+    npcs = {"Jeanne": _make_npc("Jeanne")}
+    session = _make_session(npcs, gen)
+    session.action_lock = asyncio.Lock()
+    _persist_world(db_factory, session)
+
+    await session.action_lock.acquire()
+    task = asyncio.create_task(
+        prefetch_npc_sheets(session, db_factory=db_factory),
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert gen.calls == []
+
+    session.action_lock.release()
+    count = await asyncio.wait_for(task, timeout=5)
+    assert count == 1
+    assert gen.calls == ["Jeanne"]
+
+
+async def test_prefetch_waits_for_generation_gate(db_factory) -> None:
+    """The NPC prefetch respects the process-wide generation gate."""
+    gen = FakeGenerator()
+    npcs = {"Jeanne": _make_npc("Jeanne")}
+    session = _make_session(npcs, gen)
+    _persist_world(db_factory, session)
+
+    async with generation_gate():
+        task = asyncio.create_task(
+            prefetch_npc_sheets(session, db_factory=db_factory),
+        )
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert gen.calls == []
+
+    count = await asyncio.wait_for(task, timeout=5)
+    assert count == 1

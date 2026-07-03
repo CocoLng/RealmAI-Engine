@@ -24,6 +24,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from db.repositories.npc_repo import NPCRepository
+from bot.prefetch_gate import generation_gate, wait_player_idle
 
 if TYPE_CHECKING:
     from bot.game_session import GameSession
@@ -80,13 +81,24 @@ async def prefetch_npc_sheets(
             continue
         _IN_FLIGHT.add(key)
         try:
-            sheet = await asyncio.to_thread(
-                generator.generate,
-                npc_name=name,
-                location_context=location_ctx,
-                campaign_theme=campaign_theme,
-                language=language,
-            )
+            async with generation_gate():
+                # H8: the fond always yields priority — never start a
+                # background LLM call while a player action is in flight,
+                # and never pay the call if a TALK filled the sheet while
+                # we waited for the gate.
+                await wait_player_idle(session)
+                if not _sheet_is_empty(npc):
+                    logger.info(
+                        "NPC prefetch lost race for %r — result dropped", name,
+                    )
+                    continue
+                sheet = await asyncio.to_thread(
+                    generator.generate,
+                    npc_name=name,
+                    location_context=location_ctx,
+                    campaign_theme=campaign_theme,
+                    language=language,
+                )
             if not _sheet_is_empty(npc):
                 # A TALK action filled the sheet while our call was in
                 # flight — the canon already shown to the player wins.
