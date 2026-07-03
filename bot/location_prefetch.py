@@ -7,8 +7,10 @@ background task scheduled on arrival (campaign launch, MOVE, /resume), so
 the next MOVE finds a fully generated row in the DB and resolves instantly.
 
 Design constraints (mirrors ``bot/npc_prefetch.py``):
-- the LLM call always runs through ``asyncio.to_thread`` — never on the
-  event loop;
+- the LLM call runs through ``asyncio.to_thread`` inside
+  ``generate_destination`` (``bot/world_navigation.py``), which this module
+  delegates to for both the initial generation and stub hydration — never
+  on the event loop;
 - at most ONE background generation in flight process-wide
   (``bot/prefetch_gate.py``), and a job never *starts* while a player
   action is in flight on the session;
@@ -51,6 +53,18 @@ _TASKS: set[asyncio.Task[Any]] = set()
 _STARTED: dict[tuple[str, str], "asyncio.Task[bool]"] = {}
 
 
+def _combat_active(session: "GameSession") -> bool:
+    """Whether ``session`` is currently in an active combat encounter.
+
+    Mirrors the idiom used throughout ``bot/combat_turn_manager.py`` and
+    ``bot/pipeline/resolve.py`` (``combat_state is not None and
+    combat_state.is_active``). Tolerant of test doubles that don't set
+    ``combat_state`` at all.
+    """
+    state = getattr(session, "combat_state", None)
+    return state is not None and bool(getattr(state, "is_active", False))
+
+
 def schedule_location_prefetch(
     session: "GameSession",
     *,
@@ -59,13 +73,18 @@ def schedule_location_prefetch(
     """Spawn :func:`prefetch_neighbor_locations` as a background task.
 
     Returns ``None`` (no-op) when there is nothing to do: no Ollama client
-    on the session, no current location, no pending neighbor, or no running
-    event loop (sync callers — the prefetch is best-effort).
+    on the session, no current location, no pending neighbor, active combat,
+    or no running event loop (sync callers — the prefetch is best-effort).
     """
     if getattr(session, "ollama_client", None) is None:
         return None
     location = getattr(session, "current_location", None)
     if location is None:
+        return None
+    if _combat_active(session):
+        # Between combat turns action_lock is free, so a 9b prefetch job
+        # could start and the next turn would queue behind it — the
+        # arrival hook re-schedules on the next MOVE, so just skip for now.
         return None
     try:
         pending = _pending_neighbors(session, db_factory=db_factory)
@@ -115,6 +134,11 @@ async def prefetch_neighbor_locations(
     for name in _pending_neighbors(session, db_factory=db_factory):
         if not _still_at(session, parent_name):
             break  # the party moved on — this queue is stale
+        if _combat_active(session):
+            # Combat can last minutes; abandon the queue rather than park
+            # and poll. The arrival hook re-schedules on the next MOVE, so
+            # nothing is lost — just deferred until combat ends.
+            break
         key = (campaign_id, name)
         if key in _STARTED:
             continue  # another prefetch run is already generating it
@@ -124,6 +148,10 @@ async def prefetch_neighbor_locations(
                 # gate — the fond always yields priority (H8).
                 await wait_player_idle(session)
                 if not _still_at(session, parent_name):
+                    break
+                if _combat_active(session):
+                    # Combat may have started while we waited for the gate
+                    # — same reasoning as above: break, don't park.
                     break
                 row = _load_row(name, campaign_id, db_factory)
                 if row is not None and row.generated:
@@ -177,9 +205,20 @@ async def wait_for_started_job(
         return False
     try:
         await asyncio.wait_for(asyncio.shield(inner), timeout=timeout)
+    except TimeoutError:
+        # The job is still running (shield kept it alive) — the caller
+        # re-reads the DB, finds it not yet generated, and sync-generates
+        # itself. That sync call and this abandoned job now race to
+        # persist; last upsert wins. Rare (180 s) and self-healing (the
+        # row ends up generated either way), but worth naming explicitly.
+        logger.warning(
+            "wait_for_started_job: job for %r timed out after %.0fs — "
+            "still running, caller falls back to sync generation",
+            location_name, timeout,
+        )
     except Exception:  # noqa: BLE001 — job errors are the loop's to log
         logger.warning(
-            "wait_for_started_job: job for %r did not complete cleanly",
+            "wait_for_started_job: job for %r failed",
             location_name,
         )
     return True

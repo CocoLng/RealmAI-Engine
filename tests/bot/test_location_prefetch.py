@@ -30,6 +30,7 @@ from bot.prefetch_gate import generation_gate, reset_generation_gate
 from db.database import Base
 from db.mappers import campaign_to_db
 from db.repositories.location_repo import LocationRepository
+from engine.combat import CombatState
 from world.campaign import Campaign
 from world.location import Location
 
@@ -330,6 +331,37 @@ async def test_two_prefetch_runs_do_not_double_generate(db_factory) -> None:
     assert sorted(results) == [0, 1]
 
 
+async def test_prefetch_generates_nothing_during_active_combat(db_factory) -> None:
+    """F1: between combat turns action_lock is free, so an unguarded prefetch
+    would start a 9b job that queues the next combat turn behind it. Active
+    combat must short-circuit the loop before it ever reaches the gate."""
+    fake = FakeDestinationFactory()
+    session = _make_session(["Ruelle", "Marché"])
+    session.combat_state = CombatState()  # is_active=True by default
+    _persist_world(db_factory, session, stubs=["Ruelle", "Marché"])
+
+    with patch("bot.world_navigation.generate_destination", fake):
+        count = await asyncio.wait_for(
+            prefetch_neighbor_locations(session, db_factory=db_factory),
+            timeout=5,
+        )
+
+    assert count == 0
+    assert fake.calls == []
+    assert schedule_location_prefetch(session, db_factory=db_factory) is None
+
+    # Combat ends and the arrival hook reschedules — the prefetch now runs.
+    session.combat_state.is_active = False
+    with patch("bot.world_navigation.generate_destination", fake):
+        count = await asyncio.wait_for(
+            prefetch_neighbor_locations(session, db_factory=db_factory),
+            timeout=5,
+        )
+
+    assert count == 2
+    assert sorted(fake.calls) == ["Marché", "Ruelle"]
+
+
 # ---------------------------------------------------------------------------
 # schedule_location_prefetch
 # ---------------------------------------------------------------------------
@@ -488,3 +520,52 @@ async def test_move_falls_back_when_started_job_fails(db_factory) -> None:
 
     assert dest.generated
     assert fake.calls == ["Ruelle", "Ruelle"]  # failed prefetch + sync fallback
+
+
+async def test_full_lock_topology_no_deadlock_across_two_jobs(db_factory) -> None:
+    """F5: exercises the real production lock topology end to end.
+
+    Job 1 (Ruelle) is STARTED and held. While it is in flight, a real
+    ``action_lock`` is acquired — simulating a MOVE landing mid-prefetch.
+    Releasing the hold lets job 1 complete; the loop must then find
+    ``action_lock`` held and park on ``wait_player_idle`` BEFORE starting
+    job 2 (Marché) — politeness, not a deadlock. Releasing ``action_lock``
+    lets job 2 start and complete. Every wait is deadline-guarded so a
+    regression here fails fast instead of hanging the suite.
+    """
+    hold = asyncio.Event()
+    fake = FakeDestinationFactory(hold=hold)
+    session = _make_session(["Ruelle", "Marché"])
+    session.action_lock = asyncio.Lock()
+    _persist_world(db_factory, session, stubs=["Ruelle", "Marché"])
+
+    with patch("bot.world_navigation.generate_destination", fake):
+        task = asyncio.create_task(
+            prefetch_neighbor_locations(session, db_factory=db_factory),
+        )
+
+        # Job 1 (Ruelle) is STARTED and held mid-generation.
+        while not fake.calls:
+            await asyncio.sleep(0)
+        assert fake.calls == ["Ruelle"]
+
+        # A MOVE lands while job 1 is in flight: acquire the real lock.
+        await asyncio.wait_for(session.action_lock.acquire(), timeout=5)
+
+        # Let job 1 finish. The loop must now try job 2, hit
+        # wait_player_idle, and park on the held action_lock instead of
+        # starting a second generation.
+        hold.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert fake.calls == ["Ruelle"]  # job 2 has NOT started — parked
+
+        row = _load(db_factory, "Ruelle", session.campaign.id)
+        assert row is not None and row.generated  # job 1 completed cleanly
+
+        # Release the lock — job 2 (Marché) can now start and complete.
+        session.action_lock.release()
+        count = await asyncio.wait_for(task, timeout=5)
+
+    assert count == 2
+    assert sorted(fake.calls) == ["Marché", "Ruelle"]

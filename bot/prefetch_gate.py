@@ -12,6 +12,13 @@ module enforces two invariants:
 - **background jobs never start while a player action is in flight** —
   :func:`wait_player_idle` parks the job until ``session.action_lock`` is
   free (event-driven acquire/release, no polling).
+
+Note: ``_pregenerate_campaign_world`` (lobby arc + starting-location
+pregeneration in ``bot/cogs/session.py``) intentionally does NOT go through
+this gate. It runs while the host is synchronously awaiting READY — there is
+no player action to protect priority for — and it predates this module. The
+"one background generation in flight" invariant above covers the two
+background prefetchers (NPC, location) only.
 """
 
 from __future__ import annotations
