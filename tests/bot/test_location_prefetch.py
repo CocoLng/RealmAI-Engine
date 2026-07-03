@@ -394,3 +394,97 @@ async def test_wait_for_started_job_awaits_inflight_generation(db_factory) -> No
 
     row = _load(db_factory, "Ruelle", session.campaign.id)
     assert row is not None and row.generated
+
+
+# ---------------------------------------------------------------------------
+# MOVE vs prefetch race (change_location integration)
+# ---------------------------------------------------------------------------
+
+
+def _patched_move_env():
+    """change_location needs hydrate_scene patched out (it schedules NPC
+    prefetch and needs a fuller session than these tests build)."""
+    return patch("bot.scene_hydration.hydrate_scene")
+
+
+async def test_move_awaits_started_job_and_pays_one_generation(db_factory) -> None:
+    from bot.world_navigation import change_location
+
+    hold = asyncio.Event()
+    fake = FakeDestinationFactory(hold=hold)
+    session = _make_session(["Ruelle"])
+    _persist_world(db_factory, session, stubs=["Ruelle"])
+
+    with patch("bot.world_navigation.generate_destination", fake), _patched_move_env():
+        prefetch = asyncio.create_task(
+            prefetch_neighbor_locations(session, db_factory=db_factory),
+        )
+        while not fake.calls:
+            await asyncio.sleep(0)
+        move = asyncio.create_task(
+            change_location(session, "Ruelle", db_factory=db_factory),
+        )
+        await asyncio.sleep(0)
+        assert not move.done()  # waiting on the started job, not regenerating
+        hold.set()
+        dest = await asyncio.wait_for(move, timeout=5)
+        await asyncio.wait_for(prefetch, timeout=5)
+
+    assert dest.generated
+    assert fake.calls == ["Ruelle"]  # ONE generation total
+    assert session.current_location.name == "Ruelle"
+
+
+async def test_move_ignores_queued_job_and_generates_sync(db_factory) -> None:
+    """A queued-but-not-started job is never awaited (anti-deadlock): the
+    MOVE generates synchronously and the prefetch then skips the row."""
+    from bot.world_navigation import change_location
+
+    fake = FakeDestinationFactory()
+    session = _make_session(["Ruelle"])
+    _persist_world(db_factory, session, stubs=["Ruelle"])
+
+    with patch("bot.world_navigation.generate_destination", fake), _patched_move_env():
+        async with generation_gate():
+            # The prefetch parks on the gate — queued, never started.
+            prefetch = asyncio.create_task(
+                prefetch_neighbor_locations(session, db_factory=db_factory),
+            )
+            for _ in range(10):
+                await asyncio.sleep(0)
+            assert fake.calls == []
+            dest = await asyncio.wait_for(
+                change_location(session, "Ruelle", db_factory=db_factory),
+                timeout=5,
+            )
+        await asyncio.wait_for(prefetch, timeout=5)
+
+    assert dest.generated
+    assert fake.calls == ["Ruelle"]  # only the MOVE generated it
+
+
+async def test_move_falls_back_when_started_job_fails(db_factory) -> None:
+    from bot.world_navigation import change_location
+
+    hold = asyncio.Event()
+    fake = FakeDestinationFactory(fail_for={"Ruelle"}, hold=hold)
+    session = _make_session(["Ruelle"])
+    _persist_world(db_factory, session, stubs=["Ruelle"])
+
+    with patch("bot.world_navigation.generate_destination", fake), _patched_move_env():
+        prefetch = asyncio.create_task(
+            prefetch_neighbor_locations(session, db_factory=db_factory),
+        )
+        while not fake.calls:
+            await asyncio.sleep(0)
+        fake.fail_for = set()  # the retry (sync path) succeeds
+        move = asyncio.create_task(
+            change_location(session, "Ruelle", db_factory=db_factory),
+        )
+        await asyncio.sleep(0)
+        hold.set()
+        dest = await asyncio.wait_for(move, timeout=5)
+        await asyncio.wait_for(prefetch, timeout=5)
+
+    assert dest.generated
+    assert fake.calls == ["Ruelle", "Ruelle"]  # failed prefetch + sync fallback

@@ -181,6 +181,24 @@ async def change_location(
     created_stub_or_full = False
 
     if needs_generation:
+        # H8: a background neighbor prefetch may already be generating this
+        # exact destination — await the STARTED job (one generation instead
+        # of two queued in Ollama), then re-read the DB. Queued-but-not-
+        # started jobs return False immediately: they wait on the very
+        # action_lock this MOVE is holding.
+        from bot.location_prefetch import wait_for_started_job
+
+        if await wait_for_started_job(str(campaign_id), destination_name):
+            db_session = db_factory()
+            try:
+                dest = LocationRepository(db_session).get_by_name(
+                    destination_name, campaign_id,
+                )
+            finally:
+                db_session.close()
+            needs_generation = dest is None or not dest.generated
+
+    if needs_generation:
         if session.ollama_client is None:
             raise LocationChangeError(
                 destination_name,
