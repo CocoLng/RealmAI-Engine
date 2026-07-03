@@ -28,6 +28,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from bot.location_prefetch import schedule_location_prefetch
 from bot.npc_prefetch import schedule_npc_prefetch
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
@@ -326,6 +327,13 @@ def hydrate_scene(
     # the first TALK doesn't pay the 18-27 s lazy generation mid-action.
     # No-op without a running loop, an npc_generator, or empty-sheet NPCs.
     schedule_npc_prefetch(session, db_factory=db_factory)
+
+    # Chantier I (H8, suite): pre-generate this location's missing neighbors
+    # so the next MOVE is a DB read instead of a ~57-80 s synchronous
+    # WorldGenerator call. Scheduled after the NPC prefetch: NPC jobs (4b)
+    # go through the shared gate first, location jobs (9b) after — one
+    # model swap per arrival.
+    schedule_location_prefetch(session, db_factory=db_factory)
 
 
 def take_scene_item(

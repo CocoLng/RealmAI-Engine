@@ -193,6 +193,23 @@ class TestResume:
         assert USER_ID in session.inventories
 
     @pytest.mark.asyncio
+    @patch("bot.location_prefetch.schedule_location_prefetch")
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_schedules_location_prefetch(
+        self,
+        mock_ai: MagicMock,
+        mock_sched: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+    ) -> None:
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        mock_sched.assert_called_once()
+        assert mock_sched.call_args.args[0] is cog.bot.sessions[CHANNEL_ID]
+
+    @pytest.mark.asyncio
     async def test_resume_already_active(
         self, cog: SessionCog, interaction: AsyncMock,
     ) -> None:

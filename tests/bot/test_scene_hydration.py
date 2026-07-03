@@ -9,7 +9,7 @@ those would defeat the purpose of these tests).
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -1216,3 +1216,27 @@ def test_describe_scene_actor_enrichment_surfaces_kit_and_motivation():
 
     assert "Kit : Shadow Blade" in out
     assert "Motivation : Contract" in out
+
+
+def test_hydrate_schedules_location_prefetch_after_npc_prefetch(db_factory) -> None:
+    """H8: every arrival pre-generates the neighbors, after the NPC sheets
+    (4b jobs first through the shared gate, 9b jobs second — one model
+    swap per arrival)."""
+    location = Location(name="Place", npcs_present=[], connections=["Ruelle"])
+    session = _make_session(location=location)
+    _persist_campaign_and_location(db_factory, session)
+
+    calls: list[str] = []
+    with (
+        patch(
+            "bot.scene_hydration.schedule_npc_prefetch",
+            side_effect=lambda *a, **k: calls.append("npc"),
+        ),
+        patch(
+            "bot.scene_hydration.schedule_location_prefetch",
+            side_effect=lambda *a, **k: calls.append("location"),
+        ),
+    ):
+        hydrate_scene(session, db_factory=db_factory)
+
+    assert calls == ["npc", "location"]

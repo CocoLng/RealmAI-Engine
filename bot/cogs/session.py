@@ -1016,6 +1016,11 @@ class SessionCog(commands.Cog):
         create_ai_services(session)
         self.bot.sessions[channel_id] = session
 
+        # H8 (suite): the resumed location may still have stub neighbors.
+        from bot.location_prefetch import schedule_location_prefetch
+
+        schedule_location_prefetch(session, db_factory=self.bot.db_factory)
+
         player_count = len(session.characters)
         combat_msg = " (combat en cours !)" if combat_state else ""
         npc_count = len(session.npcs)
