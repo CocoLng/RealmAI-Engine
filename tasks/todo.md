@@ -496,9 +496,10 @@ ici au merge.
       (prêt à merger) + vague de fix 1df9427 : garde combat sur le prefetch
       lieux, doc de l'exclusion lobby-pregen du gate, test topologie de
       verrous complète. Vérif : pytest 2735 passed/1 skipped, ruff, mypy.
-      Reste : mesure live Discord (inclure un MOVE en plein prefetch et un
-      round de combat avec prefetch actif) ; différé : hook
-      cancel_for_campaign pour tuer les tâches de prefetch au /end_campaign.)
+      (2026-07-03, commit 3c3c11c) `cancel_for_campaign` ajouté et câblé dans
+      `/end_campaign` — annule la boucle de prefetch d'une campagne
+      terminée (TDD, 5 tests). Reste : mesure live Discord (inclure un MOVE
+      en plein prefetch et un round de combat avec prefetch actif).)
 - [ ] H. Porte mypy + qualité (M14 + lows) — EN DERNIER, après merge des autres
       (touche tout le repo)
 
