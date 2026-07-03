@@ -392,6 +392,52 @@ class TestEndCampaign:
         mock_archive.assert_called_once()
         assert CHANNEL_ID not in cog.bot.sessions
 
+    @pytest.mark.asyncio
+    @patch("bot.location_prefetch.cancel_for_campaign")
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_cancels_location_prefetch(
+        self,
+        mock_archive: AsyncMock,
+        mock_cancel: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """A dead campaign's background neighbor-prefetch loop is stopped
+        (H8) — it would otherwise keep burning the shared gate for a
+        session nobody plays anymore."""
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+        interaction.user.id = USER_ID
+
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        mock_cancel.assert_called_once_with(persisted_campaign.id)
+
+    @pytest.mark.asyncio
+    @patch("bot.location_prefetch.cancel_for_campaign")
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_survives_cancel_prefetch_failure(
+        self,
+        mock_archive: AsyncMock,
+        mock_cancel: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """A failure cancelling background prefetch must never block the
+        rest of /end_campaign — best-effort, like the ChromaDB/Arc Tracker
+        cleanup steps."""
+        mock_cancel.side_effect = RuntimeError("boom")
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+        interaction.user.id = USER_ID
+
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        mock_archive.assert_called_once()
+        assert CHANNEL_ID not in cog.bot.sessions
+
 
 # ---------------------------------------------------------------------------
 # /settings

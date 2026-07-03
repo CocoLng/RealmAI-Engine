@@ -224,6 +224,28 @@ async def wait_for_started_job(
     return True
 
 
+def cancel_for_campaign(campaign_id: str) -> int:
+    """Cancel every running background prefetch loop for ``campaign_id``.
+
+    Called from ``/end_campaign`` right before the session is dropped: a
+    stale loop's ``session.current_location`` never changes again, so left
+    running it would keep burning the shared gate
+    (``bot/prefetch_gate.py``) and Ollama capacity generating neighbors for
+    a campaign nobody plays anymore, delaying prefetch for other active
+    campaigns. Cancelling the loop task also cancels its in-flight
+    generation job when one is running — :func:`prefetch_neighbor_locations`
+    awaits that job directly (unshielded), so asyncio's normal task-chain
+    cancellation reaches it too. Returns the number of tasks cancelled.
+    """
+    name = f"location-prefetch:{campaign_id}"
+    cancelled = 0
+    for task in list(_TASKS):
+        if task.get_name() == name and not task.done():
+            task.cancel()
+            cancelled += 1
+    return cancelled
+
+
 def reset_for_tests() -> None:
     """Drop module registries (tests run one event loop per test)."""
     _TASKS.clear()

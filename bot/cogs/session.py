@@ -1155,6 +1155,18 @@ class SessionCog(commands.Cog):
         if channel and guild:
             await archive_channel(channel, guild)  # type: ignore[arg-type]
 
+        # Cancel any still-running neighbor-prefetch loop for this campaign
+        # (H8) — the session is about to be dropped, and a stale loop would
+        # otherwise keep burning the shared background-generation gate.
+        try:
+            from bot.location_prefetch import cancel_for_campaign
+            cancel_for_campaign(session.campaign.id)
+        except Exception:
+            logger.warning(
+                "Failed to cancel location prefetch on /end_campaign",
+                exc_info=True,
+            )
+
         # Remove from in-memory sessions
         if channel_id is not None and channel_id in self.bot.sessions:
             del self.bot.sessions[channel_id]

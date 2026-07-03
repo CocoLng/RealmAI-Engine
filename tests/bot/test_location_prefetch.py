@@ -569,3 +569,66 @@ async def test_full_lock_topology_no_deadlock_across_two_jobs(db_factory) -> Non
 
     assert count == 2
     assert sorted(fake.calls) == ["Marché", "Ruelle"]
+
+
+# ---------------------------------------------------------------------------
+# cancel_for_campaign
+# ---------------------------------------------------------------------------
+
+
+async def test_cancel_for_campaign_cancels_running_task(db_factory) -> None:
+    """/end_campaign calls this so a dead campaign's loop stops burning the
+    shared gate and Ollama capacity for a session nobody plays anymore."""
+    hold = asyncio.Event()
+    fake = FakeDestinationFactory(hold=hold)
+    session = _make_session(["Ruelle"])
+    _persist_world(db_factory, session, stubs=["Ruelle"])
+
+    with patch("bot.world_navigation.generate_destination", fake):
+        task = schedule_location_prefetch(session, db_factory=db_factory)
+        assert task is not None
+        while not fake.calls:  # wait until job 1 is genuinely mid-flight
+            await asyncio.sleep(0)
+
+        cancelled = location_prefetch.cancel_for_campaign(session.campaign.id)
+        assert cancelled == 1
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+
+    assert task.cancelled()
+    # The in-flight inner job's own bookkeeping is unwound, not leaked.
+    assert location_prefetch._STARTED == {}
+
+
+async def test_cancel_for_campaign_returns_zero_when_nothing_running() -> None:
+    assert location_prefetch.cancel_for_campaign("no-such-campaign") == 0
+
+
+async def test_cancel_for_campaign_only_cancels_matching_campaign(db_factory) -> None:
+    """Two campaigns share the process-wide gate; ending one must not touch
+    the other's in-flight prefetch loop."""
+    hold = asyncio.Event()
+    fake = FakeDestinationFactory(hold=hold)
+    session_a = _make_session(["Ruelle"])
+    session_b = _make_session(["Marché"])
+    session_b.campaign = Campaign(name="Autre Campagne", current_location="Place")
+    _persist_world(db_factory, session_a, stubs=["Ruelle"])
+    _persist_world(db_factory, session_b, stubs=["Marché"])
+
+    with patch("bot.world_navigation.generate_destination", fake):
+        task_a = schedule_location_prefetch(session_a, db_factory=db_factory)
+        task_b = schedule_location_prefetch(session_b, db_factory=db_factory)
+        assert task_a is not None and task_b is not None
+
+        cancelled = location_prefetch.cancel_for_campaign(session_a.campaign.id)
+        assert cancelled == 1
+
+        hold.set()  # let task_b's generation (whichever job it reaches) finish
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task_a, timeout=5)
+        count_b = await asyncio.wait_for(task_b, timeout=5)
+
+    assert task_a.cancelled()
+    assert count_b == 1
+    assert fake.calls == ["Marché"]
