@@ -478,11 +478,26 @@ class SessionCog(commands.Cog):
             host_name=host_name,
             roster=roster,
             language=lobby.language,
+            pregen_status=lobby.pregen_phase,
         )
         try:
             await lobby.lobby_message.edit(embed=new_embed)
         except discord.HTTPException:
             logger.warning("_refresh_lobby_embed: edit failed", exc_info=True)
+
+    async def _refresh_lobby_pregen_status(self, lobby: LobbyState) -> None:
+        """Best-effort lobby embed refresh on a pregen phase transition.
+
+        A Discord edit failure must never fail the pre-generation task —
+        the phases keep advancing and the launch path stays intact.
+        """
+        message = lobby.lobby_message
+        if message is None or message.guild is None:
+            return
+        try:
+            await self._refresh_lobby_embed(lobby, message.guild)
+        except Exception:
+            logger.warning("PREGEN status refresh failed", exc_info=True)
 
     @app_commands.command(
         name="add_member",
@@ -626,6 +641,7 @@ class SessionCog(commands.Cog):
             logger.warning(
                 "PREGEN ollama_unavailable campaign=%s err=%s", campaign.id, exc,
             )
+            await self._refresh_lobby_pregen_status(lobby)
             return
 
         try:
@@ -635,6 +651,7 @@ class SessionCog(commands.Cog):
 
             # ---- Arc ----
             lobby.pregen_phase = GenerationPhase.ARC
+            await self._refresh_lobby_pregen_status(lobby)
             arc_start = time.monotonic()
             arc = await asyncio.to_thread(
                 arc_gen.generate, campaign.name, 1, language, recipe,
@@ -647,6 +664,7 @@ class SessionCog(commands.Cog):
 
             # ---- Location ----
             lobby.pregen_phase = GenerationPhase.LOCATION
+            await self._refresh_lobby_pregen_status(lobby)
             arc_context = (
                 f"Campaign: {campaign.name}. "
                 f"Villain: {lobby.story_arc.villain_name}. "
@@ -671,16 +689,19 @@ class SessionCog(commands.Cog):
             )
 
             lobby.pregen_phase = GenerationPhase.READY
+            await self._refresh_lobby_pregen_status(lobby)
         except OllamaUnavailableError as exc:
             lobby.pregen_phase = GenerationPhase.FAILED
             lobby.pregen_error = str(exc)
             logger.warning(
                 "PREGEN ollama_lost campaign=%s err=%s", campaign.id, exc,
             )
+            await self._refresh_lobby_pregen_status(lobby)
         except Exception as exc:
             lobby.pregen_phase = GenerationPhase.FAILED
             lobby.pregen_error = f"{type(exc).__name__}: {exc}"
             logger.exception("PREGEN failed campaign=%s", campaign.id)
+            await self._refresh_lobby_pregen_status(lobby)
 
     # ------------------------------------------------------------------
     # Lobby → GameSession transition (C3)

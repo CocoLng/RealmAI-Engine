@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import create_engine
@@ -941,3 +942,119 @@ class TestActionHandlerConsumesForceDirectorFlag:
         assert captured_kwargs[0]["force_director_run"] is True
         # Flag was consumed (reset to False)
         assert session.force_next_director_run is False
+
+
+class TestLobbyPregenStatus:
+    """H8 — the lobby embed shows the world-generation phase live."""
+
+    def _make_lobby(self):
+        from bot.lobby_state import GenerationPhase, LobbyState
+
+        message = MagicMock()
+        message.guild = MagicMock()
+        message.guild.get_member.return_value = None
+        message.edit = AsyncMock()
+        lobby = LobbyState(
+            creator_id=42,
+            language="fr",
+            campaign_name="Brumes du Nord",
+            theme="Brumes du Nord",
+        )
+        lobby.lobby_message = message
+        lobby.pregen_phase = GenerationPhase.ARC
+        return lobby, message
+
+    async def test_refresh_lobby_embed_passes_pregen_status(self):
+        from bot.cogs.session import SessionCog
+
+        lobby, message = self._make_lobby()
+        cog = SessionCog.__new__(SessionCog)  # method under test needs no bot
+        await cog._refresh_lobby_embed(lobby, lobby.lobby_message.guild)
+        embed = message.edit.call_args.kwargs["embed"]
+        assert any(
+            "Génération du monde" in (field.name or "")
+            for field in embed.fields
+        )
+
+    async def test_pregen_status_refresh_is_best_effort(self):
+        from bot.cogs.session import SessionCog
+
+        lobby, message = self._make_lobby()
+        message.edit.side_effect = RuntimeError("discord down")
+        cog = SessionCog.__new__(SessionCog)
+        await cog._refresh_lobby_pregen_status(lobby)  # must not raise
+
+    async def test_pregen_status_refresh_noop_without_message(self):
+        from bot.cogs.session import SessionCog
+
+        lobby, _ = self._make_lobby()
+        lobby.lobby_message = None
+        cog = SessionCog.__new__(SessionCog)
+        await cog._refresh_lobby_pregen_status(lobby)  # must not raise
+
+    async def test_pregen_refreshes_lobby_on_each_phase(self):
+        from bot.cogs.session import SessionCog
+        from bot.lobby_state import GenerationPhase
+        from world.campaign import Campaign
+        from world.location import Location
+
+        lobby, _ = self._make_lobby()
+        lobby.pregen_phase = GenerationPhase.PENDING
+        cog = SessionCog.__new__(SessionCog)
+        phases: list[GenerationPhase] = []
+
+        async def record(lb) -> None:
+            phases.append(lb.pregen_phase)
+
+        cog._refresh_lobby_pregen_status = record  # type: ignore[method-assign]
+
+        fake_arc = MagicMock()
+        fake_arc.model_copy.return_value = SimpleNamespace(
+            campaign_id="c1", beats=[], villain_name="L'Ombre",
+        )
+        fake_loc = Location(name="Place", description="d", generated=True)
+        with (
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe"),
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator") as world_cls,
+        ):
+            arc_cls.return_value.generate.return_value = fake_arc
+            world_cls.return_value.generate.return_value = fake_loc
+            await cog._pregenerate_campaign_world(
+                lobby, Campaign(name="Brumes du Nord"), "fr",
+            )
+
+        assert phases == [
+            GenerationPhase.ARC,
+            GenerationPhase.LOCATION,
+            GenerationPhase.READY,
+        ]
+
+    async def test_pregen_refreshes_lobby_on_failure(self):
+        from bot.cogs.session import SessionCog
+        from bot.lobby_state import GenerationPhase
+        from world.campaign import Campaign
+
+        lobby, _ = self._make_lobby()
+        lobby.pregen_phase = GenerationPhase.PENDING
+        cog = SessionCog.__new__(SessionCog)
+        phases: list[GenerationPhase] = []
+
+        async def record(lb) -> None:
+            phases.append(lb.pregen_phase)
+
+        cog._refresh_lobby_pregen_status = record  # type: ignore[method-assign]
+
+        with (
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe"),
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator"),
+        ):
+            arc_cls.return_value.generate.side_effect = RuntimeError("boom")
+            await cog._pregenerate_campaign_world(
+                lobby, Campaign(name="Brumes du Nord"), "fr",
+            )
+
+        assert phases[-1] == GenerationPhase.FAILED
