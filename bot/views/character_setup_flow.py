@@ -430,16 +430,21 @@ class CharacterSetupFlow(LoggedView):
     def _build_kit_motiv_components(self) -> None:
         from engine.starter_gear import get_starter_kits
 
-        from bot.i18n import MOTIVATION_KEYS, get_motivation_label
+        from bot.i18n import MOTIVATION_KEYS, get_kit_label, get_motivation_label
 
         self.clear_items()
         assert self.char_class is not None
         kits = get_starter_kits(self.char_class)
+        # Labels are localized for display; ``value`` stays the canonical
+        # English kit name because the engine looks kits up by that key.
         kit_options = [
             discord.SelectOption(
-                label=k.name,
+                label=get_kit_label(self.language, k.name, "name"),
                 value=k.name,
-                description=k.description[:100] if k.description else None,
+                description=(
+                    get_kit_label(self.language, k.name, "description")
+                    or k.description
+                )[:100] or None,
                 default=(self.kit_name == k.name),
             )
             for k in kits

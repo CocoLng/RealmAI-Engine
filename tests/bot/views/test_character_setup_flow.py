@@ -158,6 +158,74 @@ async def test_kit_motiv_step_records_kit_and_motivation():
 
 
 @pytest.mark.asyncio
+async def test_kit_select_labels_are_localized():
+    """Kit options must display the campaign-language label, not the raw English name."""
+    from engine.character import CharacterClass
+    from engine.starter_gear import get_starter_kits
+
+    from bot.i18n import get_kit_label
+
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.char_class = CharacterClass.ROGUE
+    view.state = SetupStep.KIT_MOTIV
+    view._build_kit_motiv_components()
+
+    kit_select = next(c for c in view.children if isinstance(c, ui.Select) and c.custom_id == "setup_kit")
+    kits = get_starter_kits(CharacterClass.ROGUE)
+    assert [o.label for o in kit_select.options] == [
+        get_kit_label("fr", k.name, "name") for k in kits
+    ]
+    # "Shadow Blade" must not leak through untranslated
+    assert "Lame de l'ombre" in [o.label for o in kit_select.options]
+    assert "Shadow Blade" not in [o.label for o in kit_select.options]
+
+
+@pytest.mark.asyncio
+async def test_kit_select_values_stay_canonical_english():
+    """Only the display label is translated — the stored value stays the engine key."""
+    from engine.character import CharacterClass
+    from engine.starter_gear import get_starter_kits
+
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.char_class = CharacterClass.ROGUE
+    view.state = SetupStep.KIT_MOTIV
+    view._build_kit_motiv_components()
+
+    kit_select = next(c for c in view.children if isinstance(c, ui.Select) and c.custom_id == "setup_kit")
+    assert [o.value for o in kit_select.options] == [k.name for k in get_starter_kits(CharacterClass.ROGUE)]
+
+
+@pytest.mark.asyncio
+async def test_kit_select_descriptions_are_localized():
+    from engine.character import CharacterClass
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.char_class = CharacterClass.ROGUE
+    view.state = SetupStep.KIT_MOTIV
+    view._build_kit_motiv_components()
+
+    kit_select = next(c for c in view.children if isinstance(c, ui.Select) and c.custom_id == "setup_kit")
+    shadow = next(o for o in kit_select.options if o.value == "Shadow Blade")
+    assert shadow.description == "Un roublard en double lame pour le combat rapproché."
+
+
+@pytest.mark.asyncio
+async def test_kit_select_unknown_language_falls_back_to_english():
+    """An untranslated language keeps the engine name and description."""
+    from engine.character import CharacterClass
+    from engine.starter_gear import get_starter_kits
+
+    view = CharacterSetupFlow(user_id=1, language="es", on_complete=AsyncMock())
+    view.char_class = CharacterClass.ROGUE
+    view.state = SetupStep.KIT_MOTIV
+    view._build_kit_motiv_components()
+
+    kit_select = next(c for c in view.children if isinstance(c, ui.Select) and c.custom_id == "setup_kit")
+    kits = get_starter_kits(CharacterClass.ROGUE)
+    assert [o.label for o in kit_select.options] == [k.name for k in kits]
+    assert [o.description for o in kit_select.options] == [k.description[:100] for k in kits]
+
+
+@pytest.mark.asyncio
 async def test_review_confirm_calls_on_complete():
     from engine.character import AbilityScores, CharacterClass, Race, Skill
     on_complete = AsyncMock()
