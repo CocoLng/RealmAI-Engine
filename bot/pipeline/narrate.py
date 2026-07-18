@@ -9,7 +9,10 @@ these functions, preserving the legacy call interface.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ai.models import InterpretedAction, MechanicsOutcome, NarrativeResult
 from ai.entity_resolver import ResolutionResult
@@ -23,6 +26,8 @@ if TYPE_CHECKING:
     from bot.game_session import GameSession
     from engine.combat import CombatState
     from engine.inventory import Inventory
+
+logger = logging.getLogger(__name__)
 
 
 def build_player_intent(action: InterpretedAction) -> str:
@@ -74,12 +79,24 @@ def assemble_context(
     """
     if session is not None:
         from bot.scene_hydration import describe_scene_for_narrator
-        return describe_scene_for_narrator(
+        scene = describe_scene_for_narrator(
             session,
             actor_name=action.actor_name,
             current_outcome_summary=current_outcome_summary,
             ongoing_dialogue_with=ongoing_dialogue_with,
         )
+        # Memory layers (summaries + sliding window [+ lore]) precomputed
+        # by update_memory_after_turn at the end of the previous turn —
+        # the scene snapshot plays the Layer 1 (structured state) role.
+        blocks: list[str] = []
+        memory_block = getattr(session, "memory_context", None)
+        if isinstance(memory_block, str) and memory_block:
+            blocks.append(memory_block)
+        facts_block = _render_locked_facts(session)
+        if facts_block:
+            blocks.append(facts_block)
+        blocks.append(scene)
+        return "\n\n".join(blocks)
 
     loc = location
     lines: list[str] = []
@@ -87,6 +104,169 @@ def assemble_context(
         lines.append(f"## Location\n{loc.name}\n{loc.description}")
     lines.append(f"## Acting character\n{action.actor_name}")
     return "\n\n".join(lines)
+
+
+def _render_locked_facts(session: "GameSession") -> str:
+    """Render the [LOCKED FACTS] block from the arc's locked facts (H17).
+
+    Pure in-memory read — safe on the event loop. Empty string when the
+    session has no arc or no facts.
+    """
+    arc = getattr(session, "story_arc", None)
+    facts = getattr(arc, "locked_facts", None) if arc is not None else None
+    # isinstance guard: tests drive the pipeline with MagicMock sessions
+    if not isinstance(facts, list) or not facts:
+        return ""
+    lines = ["[LOCKED FACTS]"]
+    lines += [f"- [{fact.id}] {fact.text}" for fact in facts]
+    return "\n".join(lines)
+
+
+async def update_memory_after_turn(
+    *,
+    session: "GameSession | None",
+    db_factory: Callable[[], Any] | None,
+    player_input: str,
+    narration: str,
+) -> None:
+    """Record this turn's exchanges and refresh the cached memory context.
+
+    Called once per resolved action, after narration (audit H9). The
+    player input and the narrator's prose are persisted as two
+    consecutive exchanges, then the memory prefix used by the NEXT
+    turn's ``assemble_context`` is re-rendered and cached on the session.
+
+    All I/O runs in ``asyncio.to_thread`` — never on the event loop.
+    Failures are swallowed and logged: memory must never break gameplay.
+    """
+    if session is None:
+        return
+    _sync_locked_facts(session)
+    if narration:
+        from memory import narration_guard
+        narration_guard.record_narration(session.campaign.id, narration)
+    if db_factory is None:
+        return
+    if not player_input and not narration:
+        return
+    campaign_id = session.campaign.id
+
+    def _record_and_render() -> tuple[str, bool]:
+        from memory.context_assembler import ContextAssembler
+        from memory.models import ExchangeRole
+        from memory.sliding_window import SlidingWindow
+        from memory.summarizer import Summarizer
+
+        db = db_factory()
+        try:
+            window = SlidingWindow(db)
+            number = window.next_interaction_number(campaign_id)
+            if player_input:
+                window.add_exchange(
+                    campaign_id, ExchangeRole.PLAYER, player_input, number,
+                )
+                number += 1
+            if narration:
+                window.add_exchange(
+                    campaign_id, ExchangeRole.NARRATOR, narration, number,
+                )
+            db.commit()
+
+            assembler = ContextAssembler(
+                db,
+                getattr(session, "semantic_memory", None),
+                getattr(session, "ollama_client", None),
+            )
+            prefix = assembler.assemble_memory_prefix(
+                campaign_id, query_text=player_input,
+            )
+            needs_summary = Summarizer(db, None).should_summarize(campaign_id)
+            return prefix, needs_summary
+        finally:
+            db.close()
+
+    try:
+        prefix, needs_summary = await asyncio.to_thread(_record_and_render)
+        session.memory_context = prefix
+    except Exception:
+        logger.warning(
+            "MEMORY record failed campaign=%s", campaign_id, exc_info=True,
+        )
+        return
+
+    if needs_summary:
+        _schedule_summarization(session, db_factory)
+
+
+def _sync_locked_facts(session: "GameSession") -> None:
+    """Refresh the narration guard and the arc's locked facts (H17).
+
+    Pure in-memory pass, called at the END of each turn: an NPC killed
+    this turn becomes a locked fact and enters the guard's dead set only
+    for FUTURE turns — its death narration is never flagged.
+    """
+    from memory import narration_guard
+    from world.story_arc import LockedFact
+
+    # isinstance guards: tests drive the pipeline with MagicMock sessions
+    npcs = getattr(session, "npcs", None)
+    if not isinstance(npcs, dict):
+        return
+    dead = [npc.name for npc in npcs.values() if not npc.is_alive]
+    narration_guard.set_dead_npcs(session.campaign.id, dead)
+
+    arc = getattr(session, "story_arc", None)
+    facts = getattr(arc, "locked_facts", None) if arc is not None else None
+    if not isinstance(facts, list):
+        return
+    existing = {fact.id for fact in facts}
+    for name in dead:
+        fact_id = f"npc_dead:{name}"
+        if fact_id not in existing:
+            facts.append(LockedFact(
+                id=fact_id,
+                text=f"{name} est mort(e). Ce personnage ne peut plus parler ni agir.",
+            ))
+
+
+def _schedule_summarization(
+    session: "GameSession",
+    db_factory: Callable[[], Any],
+) -> None:
+    """Fire-and-forget Layer 3 summarization (Ollama via to_thread).
+
+    The task reference on the session doubles as a re-entrancy guard:
+    while a summarization is in flight, no second one is scheduled.
+    """
+    client = getattr(session, "ollama_client", None)
+    if client is None:
+        return
+    current = getattr(session, "memory_summarize_task", None)
+    if current is not None and not current.done():
+        return
+    campaign_id = session.campaign.id
+
+    def _summarize() -> None:
+        from memory.summarizer import Summarizer
+
+        db = db_factory()
+        try:
+            summary = Summarizer(db, client).summarize(campaign_id)
+            if summary is not None:
+                db.commit()
+        finally:
+            db.close()
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(_summarize)
+        except Exception:
+            logger.warning(
+                "MEMORY summarization failed campaign=%s",
+                campaign_id, exc_info=True,
+            )
+
+    session.memory_summarize_task = asyncio.get_running_loop().create_task(_run())
 
 
 async def call_narrator(
@@ -97,11 +277,18 @@ async def call_narrator(
     campaign_id: str,
     has_npc_dialogue: bool = False,
     director_note: "DirectorNote | None" = None,
+    guard: bool = True,
 ) -> NarrativeResult:
-    """Call the Narrator LLM with retry logic and return the narrative result."""
-    def _do() -> NarrativeResult:
+    """Call the Narrator LLM with retry logic and return the narrative result.
+
+    When ``guard`` is True (the main action path), the result goes
+    through the deterministic narration guard: a narration that brings a
+    dead NPC back to life triggers ONE corrective retry with an explicit
+    constraint (audit H17). The second result is final — no loops.
+    """
+    def _do(action_text: str) -> NarrativeResult:
         return narrator.narrate(
-            action_result_text=outcome.summary,
+            action_result_text=action_text,
             context_prompt=context_prompt,
             language=language,
             player_intent=outcome.player_intent,
@@ -110,9 +297,56 @@ async def call_narrator(
             director_note=director_note,
         )
 
-    return await retry_llm_call(
-        _do,
+    result = await retry_llm_call(
+        lambda: _do(outcome.summary),
         log_label=f"ACTION campaign={campaign_id} narrate",
+    )
+    if not guard:
+        return result
+
+    from memory import narration_guard
+    violations = narration_guard.find_dead_npc_violations(
+        campaign_id,
+        narrative=result.narrative,
+        npcs_mentioned=result.npcs_mentioned,
+    )
+    repeated = narration_guard.find_repetition(campaign_id, result.narrative)
+    if not violations and repeated is None:
+        if result.locked_facts_used:
+            logger.info(
+                "NARRATE locked_facts_used campaign=%s ids=%s",
+                campaign_id, result.locked_facts_used,
+            )
+        return result
+
+    constraints: list[str] = []
+    if violations:
+        names = ", ".join(violations)
+        logger.warning(
+            "NARRATION guard: dead NPC(s) %s resurrected campaign=%s — retrying once",
+            names, campaign_id,
+        )
+        constraints.append(
+            f"CONTRAINTE ABSOLUE (faits verrouillés) : {names} — MORT(S). "
+            "Un personnage mort ne peut ni parler, ni bouger, ni réagir. "
+            "Réécris la narration sans le(s) faire agir ; tu peux au mieux "
+            "mentionner leur cadavre."
+        )
+    if repeated is not None:
+        logger.warning(
+            "NARRATION guard: repetition %r campaign=%s — retrying once",
+            repeated[:80], campaign_id,
+        )
+        constraints.append(
+            "CONTRAINTE DE VARIATION : ta narration répète presque mot pour "
+            f"mot un passage récent (« {repeated[:120]} »). Reformule avec "
+            "des images, un rythme et un vocabulaire différents, sans "
+            "changer les faits."
+        )
+    amended = "\n\n".join([outcome.summary, *constraints])
+    return await retry_llm_call(
+        lambda: _do(amended),
+        log_label=f"ACTION campaign={campaign_id} narrate-guard-retry",
     )
 
 
@@ -182,6 +416,7 @@ async def narrate_unknown(
         context_prompt=context,
         language=language,
         campaign_id=campaign_id,
+        guard=False,
     )
 
 
@@ -241,4 +476,5 @@ async def narrate_rule_failure(
         context_prompt=context,
         language=language,
         campaign_id=campaign_id,
+        guard=False,
     )

@@ -265,3 +265,36 @@ class TestObjectivesCompletedH16:
             "search_altar": 4, "old": None,
         }
         assert restored.beats[1].objectives_completed == {}
+
+
+# ---------------------------------------------------------------------------
+# Locked facts (audit H17)
+# ---------------------------------------------------------------------------
+
+
+class TestLockedFacts:
+    """LockedFact storage on StoryArc — serialized in the existing
+    arc_json blob, no new DB table (audit H17)."""
+
+    def test_defaults_to_empty(self, sample_arc: StoryArc) -> None:
+        assert sample_arc.locked_facts == []
+
+    def test_roundtrip_through_json(self, sample_arc: StoryArc) -> None:
+        from world.story_arc import LockedFact
+
+        arc = sample_arc.model_copy(update={"locked_facts": [
+            LockedFact(id="npc_dead:Grim", text="Grim est mort."),
+        ]})
+        restored = StoryArc.model_validate_json(arc.model_dump_json())
+        assert len(restored.locked_facts) == 1
+        assert restored.locked_facts[0].id == "npc_dead:Grim"
+        assert restored.locked_facts[0].text == "Grim est mort."
+
+    def test_legacy_json_without_field_loads(self, sample_arc: StoryArc) -> None:
+        """Arc blobs persisted before this field existed must still load."""
+        import json
+
+        raw = json.loads(sample_arc.model_dump_json())
+        raw.pop("locked_facts", None)
+        restored = StoryArc.model_validate_json(json.dumps(raw))
+        assert restored.locked_facts == []

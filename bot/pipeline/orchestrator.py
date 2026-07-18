@@ -682,6 +682,15 @@ class PipelineRunner:
             director_note=director_note,
         )
 
+        # Memory hook (audit H9): persist this turn's exchanges and refresh
+        # the cached memory context used by the NEXT turn. Never raises.
+        await narrate.update_memory_after_turn(
+            session=self.session,
+            db_factory=self.db_factory,
+            player_input=interpreted.raw_input,
+            narration=narration.narrative,
+        )
+
         # --- Drift tracking + Story Director scheduling ---
         tracker = get_drift_tracker()
         tracker.record(self.campaign_id, decision=engine_decision)

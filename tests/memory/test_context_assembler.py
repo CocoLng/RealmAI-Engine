@@ -116,7 +116,7 @@ class TestContextAssembler:
         db_session.commit()
 
         exchange_repo = ExchangeRepository(db_session)
-        for i in range(1, 26):
+        for i in range(1, 41):
             exchange_repo.save(NarrativeExchange(
                 campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
                 content=f"Action {i}", interaction_number=i,
@@ -195,6 +195,204 @@ class TestContextAssembler:
         result = assembler.assemble(sample_campaign.id, "forest dangers")
 
         assert estimate_tokens(result) <= 250
+
+    def test_budget_truncation_keeps_newest_exchanges(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        """When the total budget forces layer 2 truncation, the most
+        RECENT exchanges survive — not the oldest ones."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+
+        exchange_repo = ExchangeRepository(db_session)
+        for i in range(1, 13):
+            exchange_repo.save(NarrativeExchange(
+                campaign_id=sample_campaign.id, role=ExchangeRole.NARRATOR,
+                content=(
+                    f"Narration update number {i} where the heroes pressed "
+                    "onward through danger and shadow without rest."
+                ),
+                interaction_number=i,
+            ))
+        db_session.commit()
+
+        budget = ContextBudget(
+            layer1_max=80, layer2_max=400,
+            layer3_max=80, layer4_max=80, total_max=200,
+        )
+        assembler = ContextAssembler(
+            db_session, semantic_memory, mock_ollama_client, budget=budget,
+        )
+        result = assembler.assemble(sample_campaign.id, "onward")
+
+        assert estimate_tokens(result) <= 200
+        assert "number 12" in result
+        assert "number 1 " not in result
+
+    def test_assemble_without_semantic_memory(
+        self, db_session: Session, sample_campaign: Campaign,
+        mock_ollama_client: MagicMock,
+    ) -> None:
+        """ChromaDB unavailable (semantic_memory=None) — layers 1-3 still work."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+            content="Hello there", interaction_number=1,
+        ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, None, mock_ollama_client)
+        result = assembler.assemble(sample_campaign.id, "test")
+
+        assert "[GAME STATE]" in result
+        assert "Hello there" in result
+        assert "[RELEVANT LORE]" not in result
+
+    def test_assemble_without_ollama_client(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory,
+    ) -> None:
+        """No LLM backend — summarization is skipped but reads still work."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        exchange_repo = ExchangeRepository(db_session)
+        # Enough exchanges to trigger the summarization cadence
+        for i in range(1, 41):
+            exchange_repo.save(NarrativeExchange(
+                campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+                content=f"Action {i}", interaction_number=i,
+            ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, semantic_memory, None)
+        result = assembler.assemble(sample_campaign.id, "test")
+
+        assert "[GAME STATE]" in result
+        assert "[RECENT NARRATIVE]" in result
+        # No client → no new summary was generated
+        assert "[SESSION HISTORY]" not in result
+
+
+class TestAssembleMemoryPrefix:
+    """assemble_memory_prefix renders layers 2-3 (window + summaries)
+    WITHOUT the structured-state layer — production prefixes the scene
+    snapshot (which plays the Layer 1 role) with this block."""
+
+    def test_prefix_contains_window_and_summaries(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        from db.repositories.summary_repo import SummaryRepository
+        from memory.models import CompressedSummary
+        SummaryRepository(db_session).save(CompressedSummary(
+            campaign_id=sample_campaign.id,
+            summary_text="The party crossed the marshes.",
+            start_interaction=1, end_interaction=20,
+        ))
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.NARRATOR,
+            content="A wolf howls in the distance.", interaction_number=21,
+        ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, semantic_memory, mock_ollama_client)
+        prefix = assembler.assemble_memory_prefix(sample_campaign.id)
+
+        assert "[SESSION HISTORY]" in prefix
+        assert "crossed the marshes" in prefix
+        assert "[RECENT NARRATIVE]" in prefix
+        assert "wolf howls" in prefix
+        assert "[GAME STATE]" not in prefix
+        # Chronological reading order: history before the fresh window
+        assert prefix.index("[SESSION HISTORY]") < prefix.index("[RECENT NARRATIVE]")
+
+    def test_prefix_empty_campaign_returns_empty(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        assembler = ContextAssembler(db_session, semantic_memory, mock_ollama_client)
+        assert assembler.assemble_memory_prefix(sample_campaign.id) == ""
+
+    def test_prefix_respects_layer_budgets(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        for i in range(1, 13):
+            ExchangeRepository(db_session).save(NarrativeExchange(
+                campaign_id=sample_campaign.id, role=ExchangeRole.NARRATOR,
+                content=f"Narration {i}: " + "endless detail " * 5,
+                interaction_number=i,
+            ))
+        db_session.commit()
+
+        budget = ContextBudget(
+            layer1_max=100, layer2_max=80, layer3_max=50, layer4_max=50,
+            total_max=300,
+        )
+        assembler = ContextAssembler(
+            db_session, semantic_memory, mock_ollama_client, budget=budget,
+        )
+        prefix = assembler.assemble_memory_prefix(sample_campaign.id)
+        assert estimate_tokens(prefix) <= 80 + 50 + 50
+        # Most recent exchange survives the cut; the oldest is dropped
+        assert "Narration 12" in prefix
+        assert "Narration 1:" not in prefix
+
+    def test_prefix_includes_relevant_lore(
+        self, db_session: Session, sample_campaign: Campaign,
+        semantic_memory: SemanticMemory, mock_ollama_client: MagicMock,
+    ) -> None:
+        """Layer 4 read path: the prefix surfaces semantically relevant
+        lore (ChromaDB was write-only in prod — audit H9d)."""
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+            content="Je demande qui dirige la forge.", interaction_number=1,
+        ))
+        db_session.commit()
+        semantic_memory.add_document(SemanticDocument(
+            campaign_id=sample_campaign.id,
+            doc_type=SemanticDocumentType.WORLD_LORE,
+            content="La Forge des Sortilèges est dirigée par Nezznar.",
+        ))
+
+        assembler = ContextAssembler(db_session, semantic_memory, mock_ollama_client)
+        prefix = assembler.assemble_memory_prefix(
+            sample_campaign.id, query_text="je vais à la forge",
+        )
+
+        assert "[RELEVANT LORE]" in prefix
+        assert "Nezznar" in prefix
+        # Background lore comes before the fresh narrative window
+        assert prefix.index("[RELEVANT LORE]") < prefix.index("[RECENT NARRATIVE]")
+
+    def test_prefix_without_semantic_memory_skips_lore(
+        self, db_session: Session, sample_campaign: Campaign,
+        mock_ollama_client: MagicMock,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        db_session.commit()
+        ExchangeRepository(db_session).save(NarrativeExchange(
+            campaign_id=sample_campaign.id, role=ExchangeRole.PLAYER,
+            content="Bonjour.", interaction_number=1,
+        ))
+        db_session.commit()
+
+        assembler = ContextAssembler(db_session, None, mock_ollama_client)
+        prefix = assembler.assemble_memory_prefix(
+            sample_campaign.id, query_text="bonjour",
+        )
+        assert "[RELEVANT LORE]" not in prefix
+        assert "[RECENT NARRATIVE]" in prefix
 
 
 class TestRagQueryUsesRollingWindow:

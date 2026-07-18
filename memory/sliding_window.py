@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from db.repositories.exchange_repo import ExchangeRepository
 from memory.models import ExchangeRole, NarrativeExchange
-from memory.token_utils import truncate_to_tokens
+from memory.token_utils import truncate_lines_keep_recent
 
 _ROLE_DISPLAY = {
     ExchangeRole.PLAYER: "Player",
@@ -45,10 +45,26 @@ class SlidingWindow:
         """Get the current sliding window (last N exchanges in ASC order)."""
         return self._repo.get_recent(campaign_id, limit=self._window_size)
 
+    def next_interaction_number(self, campaign_id: str) -> int:
+        """Next strictly-increasing interaction number for this campaign.
+
+        Derived from the exchanges table itself so numbering survives
+        process restarts (/resume) and stays independent of any other
+        counter.
+        """
+        recent = self._repo.get_recent(campaign_id, limit=1)
+        if not recent:
+            return 1
+        return recent[-1].interaction_number + 1
+
     def render(
         self, exchanges: list[NarrativeExchange], max_tokens: int = 700
     ) -> str:
-        """Render exchanges into a text block for the prompt."""
+        """Render exchanges into a text block for the prompt.
+
+        Over budget, the OLDEST exchanges are dropped first — the freshest
+        continuity is what the narrator needs most.
+        """
         if not exchanges:
             return ""
         lines = ["[RECENT NARRATIVE]"]
@@ -56,4 +72,4 @@ class SlidingWindow:
             role_name = _ROLE_DISPLAY.get(ex.role, ex.role.value.capitalize())
             lines.append(f"{role_name}: {ex.content}")
         text = "\n".join(lines)
-        return truncate_to_tokens(text, max_tokens)
+        return truncate_lines_keep_recent(text, max_tokens)

@@ -49,10 +49,22 @@ class TestSummarizer:
     def test_should_summarize_true_when_enough(
         self, db_session: Session, sample_campaign: Campaign,
     ) -> None:
+        """Triggers once INTERVAL exchanges have left the sliding window
+        (window_size + INTERVAL unsummarized exchanges in total)."""
         CampaignRepository(db_session).save(sample_campaign)
-        _seed_exchanges(db_session, sample_campaign.id, 25)
+        _seed_exchanges(db_session, sample_campaign.id, 32)
         summarizer = Summarizer(db_session, _make_mock_client())
         assert summarizer.should_summarize(sample_campaign.id) is True
+
+    def test_should_summarize_false_while_only_window_unsummarized(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        """Exchanges still rendered in the window must NOT count toward
+        the cadence — summarizing them would duplicate layers 2 and 3."""
+        CampaignRepository(db_session).save(sample_campaign)
+        _seed_exchanges(db_session, sample_campaign.id, 31)
+        summarizer = Summarizer(db_session, _make_mock_client())
+        assert summarizer.should_summarize(sample_campaign.id) is False
 
     def test_should_summarize_accounts_for_existing_summaries(
         self, db_session: Session, sample_campaign: Campaign,
@@ -71,7 +83,7 @@ class TestSummarizer:
         self, db_session: Session, sample_campaign: Campaign,
     ) -> None:
         CampaignRepository(db_session).save(sample_campaign)
-        _seed_exchanges(db_session, sample_campaign.id, 25)
+        _seed_exchanges(db_session, sample_campaign.id, 40)
 
         mock_client = _make_mock_client("The party explored the dungeon and defeated goblins.")
         summarizer = Summarizer(db_session, mock_client)
@@ -80,11 +92,65 @@ class TestSummarizer:
         assert result is not None
         assert "goblins" in result.summary_text
         assert result.start_interaction == 1
-        assert result.end_interaction == 25
+        # Only exchanges OUT of the 12-exchange window are summarized
+        assert result.end_interaction == 28
 
         mock_client.chat_json.assert_called_once()
         call_kwargs = mock_client.chat_json.call_args.kwargs
         assert call_kwargs.get("temperature") == 0.3 or mock_client.chat_json.call_args[0][0] == "qwen3.5:9b"
+
+    def test_summarize_excludes_window_exchanges_from_prompt(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        """The LLM prompt must not contain the exchanges still rendered
+        in the sliding window (audit low: layer 2/3 duplication)."""
+        CampaignRepository(db_session).save(sample_campaign)
+        _seed_exchanges(db_session, sample_campaign.id, 40)
+
+        mock_client = _make_mock_client("Summary.")
+        summarizer = Summarizer(db_session, mock_client)
+        summarizer.summarize(sample_campaign.id)
+
+        user_message = mock_client.chat_json.call_args[0][1][1]["content"]
+        assert "number 28" in user_message
+        assert "number 29" not in user_message
+        assert "number 40" not in user_message
+
+    def test_summarize_purges_summarized_exchanges(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        """After a successful summary, the summarized exchanges are
+        deleted — the exchanges table stays bounded (audit low)."""
+        CampaignRepository(db_session).save(sample_campaign)
+        _seed_exchanges(db_session, sample_campaign.id, 40)
+
+        summarizer = Summarizer(db_session, _make_mock_client("Summary."))
+        result = summarizer.summarize(sample_campaign.id)
+        db_session.commit()
+
+        assert result is not None
+        remaining = ExchangeRepository(db_session).get_recent(
+            sample_campaign.id, limit=100,
+        )
+        assert len(remaining) == 12
+        assert remaining[0].interaction_number == 29
+
+    def test_summarize_failure_does_not_purge(
+        self, db_session: Session, sample_campaign: Campaign,
+    ) -> None:
+        CampaignRepository(db_session).save(sample_campaign)
+        _seed_exchanges(db_session, sample_campaign.id, 40)
+
+        mock_client = MagicMock()
+        mock_client.chat_json.side_effect = ConnectionError("Ollama down")
+        summarizer = Summarizer(db_session, mock_client)
+        result = summarizer.summarize(sample_campaign.id)
+
+        assert result is None
+        remaining = ExchangeRepository(db_session).get_recent(
+            sample_campaign.id, limit=100,
+        )
+        assert len(remaining) == 40
 
     def test_summarize_returns_none_when_not_enough(
         self, db_session: Session, sample_campaign: Campaign,
@@ -99,7 +165,7 @@ class TestSummarizer:
         self, db_session: Session, sample_campaign: Campaign,
     ) -> None:
         CampaignRepository(db_session).save(sample_campaign)
-        _seed_exchanges(db_session, sample_campaign.id, 25)
+        _seed_exchanges(db_session, sample_campaign.id, 40)
 
         mock_client = MagicMock()
         mock_client.chat_json.return_value = {"wrong_key": "no summary field"}
@@ -112,7 +178,7 @@ class TestSummarizer:
         self, db_session: Session, sample_campaign: Campaign,
     ) -> None:
         CampaignRepository(db_session).save(sample_campaign)
-        _seed_exchanges(db_session, sample_campaign.id, 25)
+        _seed_exchanges(db_session, sample_campaign.id, 40)
 
         mock_client = MagicMock()
         mock_client.chat_json.side_effect = ConnectionError("Ollama down")
@@ -166,6 +232,23 @@ class TestSummarizer:
         summarizer = Summarizer(db_session, _make_mock_client())
         text = summarizer.render(summaries, max_tokens=30)
         assert estimate_tokens(text) <= 30
+
+    def test_render_over_budget_keeps_most_recent(self, db_session: Session) -> None:
+        """Over budget, the OLDEST summaries are dropped, not the newest."""
+        summaries = [
+            CompressedSummary(
+                campaign_id="c1",
+                summary_text=f"Era {i}: " + "many things happened during this period " * 5,
+                start_interaction=i * 20 + 1, end_interaction=(i + 1) * 20,
+            )
+            for i in range(4)
+        ]
+        summarizer = Summarizer(db_session, _make_mock_client())
+        text = summarizer.render(summaries, max_tokens=80)
+        assert estimate_tokens(text) <= 80
+        assert "[SESSION HISTORY]" in text
+        assert "Era 3:" in text
+        assert "Era 0:" not in text
 
     def test_render_empty(self, db_session: Session) -> None:
         summarizer = Summarizer(db_session, _make_mock_client())

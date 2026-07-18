@@ -18,7 +18,11 @@ from memory.semantic import SemanticMemory
 from memory.sliding_window import SlidingWindow
 from memory.state import StateBuilder
 from memory.summarizer import Summarizer
-from memory.token_utils import estimate_tokens, truncate_to_tokens
+from memory.token_utils import (
+    estimate_tokens,
+    truncate_lines_keep_recent,
+    truncate_to_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +33,14 @@ class ContextAssembler:
     def __init__(
         self,
         session: Session,
-        semantic_memory: SemanticMemory,
-        ollama_client: OllamaClient,
+        semantic_memory: SemanticMemory | None,
+        ollama_client: OllamaClient | None,
         budget: ContextBudget | None = None,
     ) -> None:
+        """Both AI services are optional so production sessions running
+        without ChromaDB (``semantic_memory=None``, layer 4 skipped) or
+        without Ollama (``ollama_client=None``, summarization skipped)
+        still get the remaining layers."""
         self._state_builder = StateBuilder(session)
         self._sliding_window = SlidingWindow(session)
         self._summarizer = Summarizer(session, ollama_client)
@@ -73,11 +81,13 @@ class ContextAssembler:
             summaries, self._budget.layer3_max,
         )
 
-        rag_query = self._build_rag_query(player_input, window)
-        relevant_docs = self._semantic.query(campaign_id, rag_query)
-        layer4_text = self._semantic.render(
-            relevant_docs, self._budget.layer4_max,
-        )
+        layer4_text = ""
+        if self._semantic is not None:
+            rag_query = self._build_rag_query(player_input, window)
+            relevant_docs = self._semantic.query(campaign_id, rag_query)
+            layer4_text = self._semantic.render(
+                relevant_docs, self._budget.layer4_max,
+            )
 
         logger.info(
             "CONTEXT layers L1=%d L2=%d L3=%d L4=%d total=%d tokens",
@@ -91,6 +101,39 @@ class ContextAssembler:
         return self._assemble_prompt(
             layer1_text, layer2_text, layer3_text, layer4_text,
         )
+
+    def assemble_memory_prefix(self, campaign_id: str, query_text: str = "") -> str:
+        """Render the memory layers WITHOUT the structured-state layer.
+
+        Production prefixes the narrator's scene snapshot (which already
+        plays the Layer 1 role) with this block. Reading order is
+        chronological: compressed history first, fresh window last.
+        Each layer is rendered under its own budget, so the total stays
+        within ``layer2_max + layer3_max + layer4_max``.
+
+        ``query_text`` seeds the semantic (RAG) query; when empty, the
+        freshest window content is used instead.
+        """
+        window = self._sliding_window.get_window(campaign_id)
+        layer2_text = self._sliding_window.render(
+            window, self._budget.layer2_max,
+        )
+
+        summaries = self._summarizer.get_recent_summaries(campaign_id)
+        layer3_text = self._summarizer.render(
+            summaries, self._budget.layer3_max,
+        )
+
+        layer4_text = ""
+        if self._semantic is not None and (query_text or window):
+            rag_query = self._build_rag_query(query_text, window)
+            relevant_docs = self._semantic.query(campaign_id, rag_query)
+            layer4_text = self._semantic.render(
+                relevant_docs, self._budget.layer4_max,
+            )
+
+        sections = [s for s in [layer4_text, layer3_text, layer2_text] if s]
+        return "\n\n".join(sections)
 
     @staticmethod
     def _build_rag_query(
@@ -147,7 +190,7 @@ class ContextAssembler:
                 total -= layer_tokens
                 layers[i] = ""
             else:
-                layers[i] = truncate_to_tokens(layers[i], new_budget)
+                layers[i] = self._truncate_layer(i, layers[i], new_budget)
                 total = sum(estimate_tokens(ly) for ly in layers if ly)
 
         # Final clamp: ceil() rounding may leave 1-3 tokens over budget
@@ -157,10 +200,22 @@ class ContextAssembler:
                 if layers[i]:
                     overage = total - self._budget.total_max
                     new_budget = max(0, estimate_tokens(layers[i]) - overage)
-                    layers[i] = truncate_to_tokens(layers[i], new_budget)
+                    layers[i] = self._truncate_layer(i, layers[i], new_budget)
                     total = sum(estimate_tokens(ly) for ly in layers if ly)
                     if total <= self._budget.total_max:
                         break
 
         sections = [s for s in layers if s]
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _truncate_layer(index: int, text: str, max_tokens: int) -> str:
+        """Truncate one layer to its budget.
+
+        Chronological layers (1 = sliding window, 2 = summaries in the
+        ``layers`` list) keep their most RECENT lines; the RAG layer
+        keeps its top-ranked documents (relevance order, start of text).
+        """
+        if index in (1, 2):
+            return truncate_lines_keep_recent(text, max_tokens)
+        return truncate_to_tokens(text, max_tokens)
