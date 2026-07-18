@@ -123,11 +123,18 @@ class BeatProgressionEngine:
         history: BeatHistory,
         world_flags: dict[str, Any],
         inventory: set[str],
+        turn_number: int | None = None,
     ) -> BeatProgressionResult:
         """Evaluate the current action against the active beat's objectives.
 
         Returns a BeatProgressionResult with decision, progress, and optional
         ``new_beat`` (on ADVANCE) or ``judge_request`` (on NEEDS_JUDGE).
+
+        Objectives recorded in ``current_beat.objectives_completed`` (H16)
+        are merged in as completed before scoring, so progress accumulates
+        across turns instead of being recomputed from zero. The caller is
+        responsible for writing new completions back into the beat (the
+        orchestrator does, and persists the arc).
 
         Args:
             arc:         The current story arc (provides beats + current index).
@@ -137,6 +144,7 @@ class BeatProgressionEngine:
             history:     Sliding window of recent decisions (for context only).
             world_flags: Mutable world-state flags (flag_name → truthy value).
             inventory:   The player's current inventory as a set of item names.
+            turn_number: Campaign turn counter, stamped on completions.
 
         Returns:
             BeatProgressionResult with decision, progress snapshot, and optional
@@ -180,8 +188,44 @@ class BeatProgressionEngine:
         # 3. Score every objective.
         states: dict[str, ObjectiveState] = {}
         partial_matches: list[ObjectivePartialMatch] = []
+        newly_completed: list[str] = []
+
+        # Flags that SOME beat effect can set — a FLAG objective outside
+        # this set (and absent from world state) has no writer at all.
+        flag_writers = {
+            flag_name
+            for beat in arc.beats
+            for flag_name in beat.on_complete.state_flags
+        }
 
         for obj in current_beat.objectives:
+            # H16 — merge completions persisted on earlier turns.
+            if obj.id in current_beat.objectives_completed:
+                states[obj.id] = ObjectiveState(
+                    status="completed",
+                    last_attempt_score=1.0,
+                    completed_at_turn=current_beat.objectives_completed[obj.id],
+                )
+                reasons.append(f"{obj.id}:already_completed")
+                continue
+
+            # H16 — a FLAG objective whose flag is set by no beat effect and
+            # absent from world state is mechanically unsatisfiable:
+            # auto-complete instead of soft-locking the campaign.
+            if (
+                obj.kind == ObjectiveKind.FLAG
+                and obj.target not in flag_writers
+                and obj.target not in world_flags
+            ):
+                states[obj.id] = ObjectiveState(
+                    status="completed",
+                    last_attempt_score=1.0,
+                    completed_at_turn=turn_number,
+                )
+                reasons.append(f"{obj.id}:flag_no_writer_auto")
+                newly_completed.append(obj.id)
+                continue
+
             score = compute_match_score(
                 obj, interpreted, outcome, location, world_flags, inventory,
             )
@@ -194,8 +238,10 @@ class BeatProgressionEngine:
                     states[obj.id] = ObjectiveState(
                         status="completed",
                         last_attempt_score=score,
+                        completed_at_turn=turn_number,
                     )
                     reasons.append(f"{obj.id}:match_full")
+                    newly_completed.append(obj.id)
                 else:
                     states[obj.id] = ObjectiveState(
                         status="partial",
@@ -276,8 +322,29 @@ class BeatProgressionEngine:
                 reasons=reasons,
             )
 
-        # 6. Partial match this turn → defer to judge.
-        if partial_matches:
+        # 6. Defer to judge when the turn produced signal but no advance:
+        #    a) partial matches (score below threshold or gate failed), or
+        #    b) H16 — an objective fully completed this turn while the beat
+        #       stays blocked. Candidates are then ALL non-completed
+        #       objectives, so the judge can decide whether the player's
+        #       progress satisfies the beat's intent.
+        judge_candidates = partial_matches
+        if newly_completed:
+            by_id = {pm.id: pm for pm in partial_matches}
+            judge_candidates = [
+                by_id.get(obj.id) or ObjectivePartialMatch(
+                    id=obj.id, kind=obj.kind, target=obj.target,
+                    description=obj.description,
+                    match_score=states[obj.id].last_attempt_score,
+                    gate_failed=False, gate_kind=None,
+                )
+                for obj in current_beat.objectives
+                if states[obj.id].status != "completed"
+            ]
+            if judge_candidates:
+                reasons.append("full_match_blocked_judge")
+
+        if judge_candidates:
             return BeatProgressionResult(
                 decision="NEEDS_JUDGE",
                 progress=progress,
@@ -285,7 +352,7 @@ class BeatProgressionEngine:
                     beat_title=current_beat.title,
                     beat_description=current_beat.description,
                     beat_judge_rubric=current_beat.judge_rubric,
-                    objectives=partial_matches,
+                    objectives=judge_candidates,
                     player_action_text=interpreted.raw_input,
                     interpreted_action=interpreted,
                     outcome_summary=outcome.summary,

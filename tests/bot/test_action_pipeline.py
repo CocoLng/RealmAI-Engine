@@ -650,6 +650,8 @@ def _make_session_with_arc(location, story_arc):
     session.combat_state = None
     session.inventory = None
     session.interaction_count = 0
+    # M1: the real turn counter lives on the Campaign model.
+    session.campaign.interaction_count = 0
     # Disable agents/generators that would otherwise be MagicMocks and
     # short-circuit the _resolve_talk path down the cheap no-agent branch.
     session.npc_agent = None
@@ -2521,7 +2523,8 @@ class TestDriftTrackerWiring:
 class TestBeatCompletionIndexing:
     """Verify the SemanticIndexer is called when beats complete."""
 
-    def test_apply_beat_effects_indexes_narrative_hint(self) -> None:
+    @pytest.mark.asyncio
+    async def test_apply_beat_effects_indexes_narrative_hint(self) -> None:
         """When a runner has an indexer, beat completion indexes the narrative_hint."""
         from unittest.mock import MagicMock
         from bot.pipeline.orchestrator import PipelineRunner
@@ -2544,14 +2547,15 @@ class TestBeatCompletionIndexing:
             narrative_hint="A breach opens in the wall.",
             state_flags={"breach_open": True},
         )
-        runner._apply_beat_effects(effects)
+        await runner._apply_beat_effects(effects)
 
         # narrative_hint indexed:
         indexer.index_revealed_fact.assert_any_call(
             "cmp_test", fact="A breach opens in the wall.",
         )
 
-    def test_apply_beat_effects_no_indexer_works_unchanged(self) -> None:
+    @pytest.mark.asyncio
+    async def test_apply_beat_effects_no_indexer_works_unchanged(self) -> None:
         """When no indexer is provided, _apply_beat_effects must not raise."""
         from unittest.mock import MagicMock
         from bot.pipeline.orchestrator import PipelineRunner
@@ -2570,4 +2574,4 @@ class TestBeatCompletionIndexing:
             narrative_hint="A breach opens.", state_flags={"breach_open": True},
         )
         # Must not raise.
-        runner._apply_beat_effects(effects)
+        await runner._apply_beat_effects(effects)

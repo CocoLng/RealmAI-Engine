@@ -7,6 +7,7 @@ Level 3: BeatJudge LLM verbose, 5-turn cooldown after use (concrete actions).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -88,6 +89,16 @@ class HintCog(commands.Cog):
         beat = arc.beats[arc.current_beat_index]
 
         repo = self._get_repo()
+        try:
+            await self._dispatch_levels(interaction, session, beat, repo, public)
+        finally:
+            # One DB session is opened per invocation (H2) — close it.
+            self._close_repo(repo)
+
+    async def _dispatch_levels(  # type: ignore[no-untyped-def]
+        self, interaction, session, beat, repo, public,
+    ) -> None:
+        """Pick the hint level from usage state and send the response."""
         row = repo.get_or_create(
             campaign_id=session.campaign.id, beat_number=beat.beat_number,
         )
@@ -116,8 +127,9 @@ class HintCog(commands.Cog):
             )
             return
 
-        # Level 3: cooldown check first.
-        current_turn = getattr(session, "interaction_count", 0) or 0
+        # Level 3: cooldown check first. The turn counter lives on the
+        # Campaign model, NOT on GameSession.
+        current_turn = getattr(session.campaign, "interaction_count", 0) or 0
         cooldown = 5
         if (
             row.level3_last_used_turn is not None
@@ -139,6 +151,17 @@ class HintCog(commands.Cog):
             turn=current_turn,
         )
         await interaction.followup.send(text + "\n\n💡 Niveau 3", ephemeral=not public)
+
+    @staticmethod
+    def _close_repo(repo: "HintUsageRepository") -> None:
+        """Close the DB session backing ``repo``.
+
+        The repository does not expose its session publicly; reaching for
+        ``_session`` here keeps db/* untouched (owned by another chantier).
+        """
+        db_session = getattr(repo, "_session", None)
+        if db_session is not None:
+            db_session.close()
 
     # ----- level builders -----
 
@@ -191,8 +214,12 @@ class HintCog(commands.Cog):
             npcs_present=[],
         )
         judge = self._build_judge(session)
-        judge.begin_turn(turn_id=f"hint-{getattr(session, 'interaction_count', 0)}")
-        resp = judge.evaluate(req)
+        judge.begin_turn(
+            turn_id=f"hint-{getattr(session.campaign, 'interaction_count', 0)}",
+        )
+        # evaluate() wraps a blocking httpx POST — keep it off the event
+        # loop (H2).
+        resp = await asyncio.to_thread(judge.evaluate, req)
         if resp.suggested_next_action:
             return (
                 f"Pour avancer :\n"

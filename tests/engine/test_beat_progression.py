@@ -284,7 +284,12 @@ def test_no_advance_when_one_required_missing():
         world_flags={},
         inventory=set(),
     )
-    assert result.decision == "STAY"
+    # H16 contract change: a full match while the beat stays blocked is no
+    # longer a silent STAY — the judge gets a chance to unlock the beat.
+    # The beat itself must still NOT advance.
+    assert result.decision == "NEEDS_JUDGE"
+    assert result.new_beat is None
+    assert result.progress.last_action_advanced is False
     assert result.progress.progress_score == 50  # 1/2 completed
 
 
@@ -493,3 +498,186 @@ def test_advance_required_only_subset():
     )
     assert result.decision == "ADVANCE"
     assert result.progress.progress_score == 50  # 1 of 2 completed, but ALL_REQUIRED met
+
+
+# ---------------------------------------------------------------------------
+# H16 — persistent objective state across turns
+# ---------------------------------------------------------------------------
+
+
+def _search_examine_beat() -> StoryBeat:
+    """M_OF_N(2) beat needing SEARCH + EXAMINE — one action can never match
+    both matchers, so without persisted completions it is mechanically
+    insatisfiable (the audit's soft-lock)."""
+    return StoryBeat(
+        beat_number=1, title="Le Rituel", description="...", location_hint="...",
+        encounter_type="puzzle",
+        objectives=[
+            BeatObjective(
+                id="search_altar", kind=ObjectiveKind.SEARCH,
+                target="autel", description="Fouiller l'autel",
+            ),
+            BeatObjective(
+                id="examine_runes", kind=ObjectiveKind.EXAMINE,
+                target="gravures", description="Examiner les gravures",
+            ),
+        ],
+        advance_rule=AdvanceRule.M_OF_N, advance_threshold=2,
+    )
+
+
+class TestPersistentObjectiveStateH16:
+    def test_prior_completions_merge_from_beat(self):
+        """Objectives recorded in beat.objectives_completed stay completed
+        on later turns, whatever the current action is."""
+        beat = _search_examine_beat()
+        beat.objectives_completed = {"search_altar": 3}
+        arc = _make_arc([beat])
+        engine = BeatProgressionEngine()
+        result = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.TALK, target="Bob"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={}, inventory=set(),
+        )
+        st = result.progress.objective_states["search_altar"]
+        assert st.status == "completed"
+        assert st.completed_at_turn == 3
+        assert "search_altar:already_completed" in result.reasons
+
+    def test_completed_at_turn_stamped_on_new_completion(self):
+        beat = _search_examine_beat()
+        arc = _make_arc([beat])
+        engine = BeatProgressionEngine()
+        result = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.SEARCH, target="autel"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={}, inventory=set(), turn_number=7,
+        )
+        st = result.progress.objective_states["search_altar"]
+        assert st.status == "completed"
+        assert st.completed_at_turn == 7
+
+    def test_m_of_n_accumulates_across_turns(self):
+        """SEARCH on turn 1, EXAMINE on turn 2 → threshold 2 reached.
+        The write-back between turns mirrors what the orchestrator does."""
+        beat = _search_examine_beat()
+        arc = _make_arc([beat])
+        engine = BeatProgressionEngine()
+
+        r1 = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.SEARCH, target="autel"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={}, inventory=set(), turn_number=1,
+        )
+        assert r1.decision != "ADVANCE"
+        assert r1.progress.objective_states["search_altar"].status == "completed"
+
+        # Orchestrator-style write-back of new completions.
+        beat.objectives_completed.update({
+            oid: st.completed_at_turn
+            for oid, st in r1.progress.objective_states.items()
+            if st.status == "completed"
+        })
+
+        r2 = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.LOOK, target="gravures"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={}, inventory=set(), turn_number=2,
+        )
+        assert r2.decision == "ADVANCE"
+
+    def test_full_match_blocked_goes_to_judge(self):
+        """An objective fully completed this turn while the beat stays
+        blocked must produce NEEDS_JUDGE (escape hatch), with the remaining
+        objectives as candidates."""
+        obj1 = BeatObjective(
+            id="talk_npc", kind=ObjectiveKind.TALK, target="Bob", description="...",
+        )
+        obj2 = BeatObjective(
+            id="get_item", kind=ObjectiveKind.POSSESS, target="key", description="...",
+        )
+        beat = StoryBeat(
+            beat_number=1, title="X", description="...", location_hint="...",
+            encounter_type="social", objectives=[obj1, obj2],
+        )
+        arc = _make_arc([beat])
+        engine = BeatProgressionEngine()
+        result = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.TALK, target="Bob"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={}, inventory=set(), turn_number=1,
+        )
+        assert result.decision == "NEEDS_JUDGE"
+        assert "full_match_blocked_judge" in result.reasons
+        assert result.judge_request is not None
+        assert {pm.id for pm in result.judge_request.objectives} == {"get_item"}
+
+    def test_flag_without_writer_autocompletes(self):
+        """A FLAG objective whose flag is set by no beat effect and absent
+        from world state is mechanically unsatisfiable → auto-completed."""
+        beat = StoryBeat(
+            beat_number=1, title="X", description="...", location_hint="...",
+            encounter_type="puzzle",
+            objectives=[BeatObjective(
+                id="ritual_flag", kind=ObjectiveKind.FLAG,
+                target="ritual_complete", description="...",
+            )],
+        )
+        arc = _make_arc([beat])
+        engine = BeatProgressionEngine()
+        result = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.LOOK, target="autel"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={}, inventory=set(),
+        )
+        assert result.decision == "ADVANCE"
+        assert "ritual_flag:flag_no_writer_auto" in result.reasons
+
+    def test_flag_with_writer_stays_pending(self):
+        """A FLAG objective IS satisfiable when some beat effect sets the
+        flag — no auto-completion."""
+        from world.story_arc import BeatEffects
+
+        beat1 = StoryBeat(
+            beat_number=1, title="X", description="...", location_hint="...",
+            encounter_type="puzzle",
+            objectives=[BeatObjective(
+                id="door_flag", kind=ObjectiveKind.FLAG,
+                target="door_open", description="...",
+            )],
+        )
+        beat2 = StoryBeat(
+            beat_number=2, title="Y", description="...", location_hint="...",
+            encounter_type="exploration",
+            on_complete=BeatEffects(state_flags={"door_open": True}),
+        )
+        arc = _make_arc([beat1, beat2])
+        engine = BeatProgressionEngine()
+        result = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.LOOK, target="autel"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={}, inventory=set(),
+        )
+        assert result.decision == "STAY"
+        assert result.progress.objective_states["door_flag"].status == "pending"
+
+    def test_flag_present_but_falsy_in_world_stays_pending(self):
+        """A flag initialized (falsy) in world state has a live mechanism —
+        no auto-completion either."""
+        beat = StoryBeat(
+            beat_number=1, title="X", description="...", location_hint="...",
+            encounter_type="puzzle",
+            objectives=[BeatObjective(
+                id="lever_flag", kind=ObjectiveKind.FLAG,
+                target="lever_pulled", description="...",
+            )],
+        )
+        arc = _make_arc([beat])
+        engine = BeatProgressionEngine()
+        result = engine.evaluate(
+            arc=arc, interpreted=_interp(ActionType.LOOK, target="autel"),
+            outcome=_outcome(), location=None, history=_history(),
+            world_flags={"lever_pulled": False}, inventory=set(),
+        )
+        assert result.decision == "STAY"
+        assert result.progress.objective_states["lever_flag"].status == "pending"

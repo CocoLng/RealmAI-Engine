@@ -100,6 +100,14 @@ class StoryBeat(BaseModel):
     player_visible_hint: str | None = None  # for /hint level 1
     judge_rubric: str | None = None  # for BeatJudge LLM context
 
+    # Runtime progression state (H16): completed objective id → campaign
+    # turn number when completed (None when unknown). Serialized in
+    # arc_json with the rest of the beat — no DB schema change. Merged
+    # back by BeatProgressionEngine.evaluate() so multi-action beats
+    # (M_OF_N, ALL_REQUIRED across turns) accumulate progress instead of
+    # recomputing from zero every turn.
+    objectives_completed: dict[str, int | None] = Field(default_factory=dict)
+
     # LEGACY: kept for read-back compat, auto-migrated to `objectives` on load
     completion_trigger: CompletionTrigger | None = None
     on_complete: BeatEffects = Field(default_factory=BeatEffects)

@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ai.client import LLMParseError, OllamaClient
+from ai.client import LLMParseError, OllamaClient, OllamaUnavailableError
 from engine.beat_progression import JudgeRequest
 
 logger = logging.getLogger(__name__)
@@ -83,13 +83,17 @@ class BeatJudge:
         try:
             data: dict[str, Any] = self._client.chat_json(
                 self.MODEL, messages, temperature=0.3, think=False,
+                timeout=self.TIMEOUT_SECONDS,
             )
         except LLMParseError:
             logger.warning("JUDGE parse error for beat=%r", request.beat_title)
             return JudgeResponse(
                 passed=False, confidence=0.0, reasoning="judge_error",
             )
-        except TimeoutError:
+        except (TimeoutError, OllamaUnavailableError):
+            # httpx timeouts surface as OllamaUnavailableError (ai/client.py
+            # converts httpx.TimeoutException); the judge must degrade fast
+            # and silently rather than crash the pipeline.
             logger.warning("JUDGE timeout for beat=%r", request.beat_title)
             return JudgeResponse(
                 passed=False, confidence=0.0, reasoning="judge_timeout",

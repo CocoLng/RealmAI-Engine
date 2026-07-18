@@ -478,6 +478,9 @@ class PipelineRunner:
         ):
             self.location = self.session.current_location
             self.npcs = self.session.npcs
+            # The cached DirectorNote describes the previous scene (M11).
+            from ai.story_director import invalidate_note
+            invalidate_note(self.campaign_id)
 
         # PICKUP syncs location + inventory refs after item transfer.
         if (
@@ -500,9 +503,15 @@ class PipelineRunner:
             if event_text:
                 record_combat_event(self.combat_state, event_text)
 
+        # The turn counter lives on the Campaign model (incremented by
+        # StoryBibleLogger), NOT on GameSession.
+        _campaign = getattr(self.session, "campaign", None)
+        interaction_count = getattr(_campaign, "interaction_count", 0) or 0
+
         # ----- Beat progression — single decision point -----
         new_beat: StoryBeat | None = None
         beat_completed = False
+        objectives_dirty = False
         engine_decision: DriftDecision = "STAY"
         beat_progress_snapshot: Any = None  # BeatProgress | None
         if self.session is not None and getattr(self.session, "story_arc", None) is not None:
@@ -531,6 +540,7 @@ class PipelineRunner:
                 history=BeatHistory(),
                 world_flags=world_flags,
                 inventory=inventory_items,
+                turn_number=interaction_count,
             )
 
             engine_decision = beat_eval.decision
@@ -542,7 +552,11 @@ class PipelineRunner:
                 judge = self.beat_judge
                 if judge is not None and beat_eval.judge_request is not None:
                     judge.begin_turn(turn_id=str(id(interpreted)))
-                    judge_resp = judge.evaluate(beat_eval.judge_request)
+                    # evaluate() wraps a blocking httpx POST — keep it off
+                    # the event loop (H2).
+                    judge_resp = await asyncio.to_thread(
+                        judge.evaluate, beat_eval.judge_request,
+                    )
                     if judge_resp.passed and judge_resp.confidence >= 0.7:
                         should_advance = True
                         logger.info(
@@ -578,10 +592,25 @@ class PipelineRunner:
             except Exception:
                 logger.debug("log_decision failed campaign=%s", self.campaign_id, exc_info=True)
 
+            # H16 — when the beat stays put, record this turn's completions
+            # on the beat itself so the engine merges them back on later
+            # turns (multi-action beats accumulate instead of resetting).
+            if not should_advance:
+                _beat_model = arc.beats[arc.current_beat_index]
+                _newly_done = {
+                    oid: st.completed_at_turn
+                    for oid, st in beat_eval.progress.objective_states.items()
+                    if st.status == "completed"
+                    and oid not in _beat_model.objectives_completed
+                }
+                if _newly_done:
+                    _beat_model.objectives_completed.update(_newly_done)
+                    objectives_dirty = True
+
             if should_advance:
                 beat_completed = True
                 old_beat = arc.beats[arc.current_beat_index]
-                hint = self._apply_beat_effects(old_beat.on_complete)
+                hint = await self._apply_beat_effects(old_beat.on_complete)
                 if hint:
                     outcome = outcome.model_copy(update={
                         "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
@@ -589,6 +618,9 @@ class PipelineRunner:
                 from world.story_arc import advance_beat
                 advanced_arc = advance_beat(arc)
                 self.session.story_arc = advanced_arc
+                # The cached DirectorNote targets the completed beat (M11).
+                from ai.story_director import invalidate_note
+                invalidate_note(self.campaign_id)
                 # Reset /hint usage for the now-completed beat.
                 if self.db_factory is not None:
                     try:
@@ -660,8 +692,6 @@ class PipelineRunner:
         combat_just_ended = self._last_combat_active and not combat_active_now
         self._last_combat_active = combat_active_now
 
-        interaction_count = getattr(self.session, "interaction_count", 0) or 0
-
         if should_run_director(
             interaction_count=interaction_count,
             combat_just_ended=combat_just_ended,
@@ -674,8 +704,13 @@ class PipelineRunner:
                 beat_progress=beat_progress_snapshot,
             )
 
-        # Persist the arc if it advanced.
-        if beat_completed and self.db_factory is not None and self.session is not None:
+        # Persist the arc if it advanced OR if objective completions were
+        # recorded on the current beat (H16).
+        if (
+            (beat_completed or objectives_dirty)
+            and self.db_factory is not None
+            and self.session is not None
+        ):
             session_arc = self.session.story_arc
             try:
                 await asyncio.to_thread(
@@ -725,20 +760,23 @@ class PipelineRunner:
         )
         return result
 
-    def _apply_beat_effects(self, effects: BeatEffects) -> str:
+    async def _apply_beat_effects(self, effects: BeatEffects) -> str:
         """Apply beat completion effects to the current location.
 
         Returns a narrative hint string for the narrator.
         """
         # Index revealed facts regardless of whether a location exists.
+        # ChromaDB indexing is blocking I/O — keep it off the event loop (M4).
         if self.semantic_indexer is not None and self.campaign_id:
             if effects.narrative_hint:
-                self.semantic_indexer.index_revealed_fact(
+                await asyncio.to_thread(
+                    self.semantic_indexer.index_revealed_fact,
                     self.campaign_id, fact=effects.narrative_hint,
                 )
             for flag, value in effects.state_flags.items():
                 if value:
-                    self.semantic_indexer.index_revealed_fact(
+                    await asyncio.to_thread(
+                        self.semantic_indexer.index_revealed_fact,
                         self.campaign_id,
                         fact=f"State flag set: {flag}",
                     )
