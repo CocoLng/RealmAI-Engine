@@ -112,10 +112,17 @@ implémentée et câblée. Reliquats réels :
 - [ ] **Docstring périmée** : `bot/embeds/beat_embed.py:3` référence
       `GameSession.advance_beat_if_ready`, disparu avec le Beat Progression
       Engine.
-- [ ] **H19 (reliquat)** — `ai/npc_tactician.py:113-142` valide les noms
-      (cible, signature, arme) contre le stat block, mais toujours pas la
-      zone/portée, ni que la cible est vivante et du bon camp, ni le budget
-      de signature.
+- [x] **H19 (reliquat)** — clos en deux temps. `977fa26` avait déjà posé la
+      garde moteur (`engine/npc_ai/boss_brain._validate_decision` : cible
+      vivante / bon camp, mêlée same-zone, budget signature, zone adjacente
+      pour `move`). `8425ff2` complète côté IA : `_validate_references`
+      revalide vivant/fui/camp/portée/budget contre l'état réel avant même
+      que le moteur regarde, et `recharge_5_6` reçoit enfin un budget
+      (`engine/npc_stat_block.py`) — sans jet de recharge implémenté, le
+      `uses_remaining=None` rendait le nuke utilisable chaque round.
+      **Reste ouvert** : le jet de recharge 5-6 en début de tour (il faudrait
+      un hook tour-par-tour dans `bot/combat_turn_manager` ; en attendant, une
+      capacité « recharge » vaut 1×/combat).
 - [ ] **`attune_item` / `unattune_item`** (`engine/inventory.py:338,378`) :
       implémentés et testés, zéro appelant en production — l'attunement n'est
       jamais exposé au joueur. Décider : câbler ou retirer.
