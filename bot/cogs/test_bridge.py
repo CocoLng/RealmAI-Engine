@@ -11,7 +11,7 @@ import logging
 import os
 import shlex
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import discord
 from discord.ext import commands
@@ -30,6 +30,29 @@ if TYPE_CHECKING:
     from bot.bot import RealmBot
 
 logger = logging.getLogger(__name__)
+
+
+# Commands that used to live on the deleted ExplorationCog. They are kept
+# in the bridge vocabulary — the MCP tools and existing scenarios speak it —
+# but resolve through the free-text action pipeline.
+_EXPLORATION_COMMANDS = frozenset({"look", "move", "search", "talk"})
+
+
+def _exploration_text(command: str, args: dict[str, str]) -> str:
+    """Render a legacy exploration command as French free-text.
+
+    The interpreter classifies these back into the right ActionType, so the
+    bridge keeps a stable surface without a parallel command path.
+    """
+    if command == "move":
+        return f"je vais vers {args.get('direction', '')}".strip()
+    if command == "search":
+        target = args.get("target", "")
+        return f"je fouille {target}".strip() if target else "je fouille les lieux"
+    if command == "talk":
+        npc = args.get("npc", "")
+        return f"je parle à {npc}".strip() if npc else "je parle aux gens ici"
+    return "j'observe attentivement les alentours"
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +249,7 @@ class ChannelTestInteraction:
         self.guild_id = guild.id
         self.channel = channel
         self.channel_id = channel.id
-        self.user = user  # type: ignore[assignment]
+        self.user = user
         self.message = message
         self.response = _ChannelResponse(
             channel, bridge=bridge, message=message, player_idx=player_idx,
@@ -255,6 +278,17 @@ class TestBridge(commands.Cog):
         # Modals are ephemeral dialogs with no persistent msg id. Key by player
         # so the same tester can drive multiple parallel flows concurrently.
         self.pending_modals: dict[int, discord.ui.Modal] = {}
+
+    def _cog(self, name: str) -> Any:
+        """Look up a cog for dynamic app-command dispatch.
+
+        Returns ``Any`` on purpose: the bridge invokes slash-command
+        callbacks that exist only on the concrete cog subclasses, and
+        ``Bot.get_cog`` is typed as returning the ``Cog`` base. Annotating
+        it honestly here beats an ``attr-defined`` ignore on every call
+        site — and keeps the ``None`` check meaningful.
+        """
+        return self.bot.get_cog(name)
 
     def _get_virtual_player(self, idx: int) -> _VirtualMember:
         """Get or create a virtual player by index."""
@@ -349,61 +383,51 @@ class TestBridge(commands.Cog):
         elif command == "create_character":
             await self._handle_create_character(inter, args)
         elif command == "save":
-            cog = self.bot.get_cog("SessionCog")
+            cog = self._cog("SessionCog")
             if cog:
-                await cog.save.callback(cog, inter)  # type: ignore[union-attr, arg-type]
+                await cog.save.callback(cog, inter)
         elif command == "resume":
-            cog = self.bot.get_cog("SessionCog")
+            cog = self._cog("SessionCog")
             if cog:
-                await cog.resume.callback(cog, inter)  # type: ignore[union-attr, arg-type]
-        elif command == "look":
-            cog = self.bot.get_cog("ExplorationCog")
-            if cog:
-                await cog.look.callback(cog, inter)  # type: ignore[union-attr, arg-type]
-        elif command == "move":
-            cog = self.bot.get_cog("ExplorationCog")
-            if cog:
-                direction = args.get("direction", "")
-                await cog.move.callback(cog, inter, direction)  # type: ignore[union-attr, arg-type]
-        elif command == "search":
-            cog = self.bot.get_cog("ExplorationCog")
-            if cog:
-                target = args.get("target", "")
-                await cog.search.callback(cog, inter, target)  # type: ignore[union-attr, arg-type]
-        elif command == "talk":
-            cog = self.bot.get_cog("ExplorationCog")
-            if cog:
-                npc = args.get("npc", "")
-                await cog.talk.callback(cog, inter, npc)  # type: ignore[union-attr, arg-type]
+                await cog.resume.callback(cog, inter)
+        elif command in _EXPLORATION_COMMANDS:
+            # ExplorationCog and its /look /move /search /talk slash commands
+            # were removed in 5681a6b; free text through the action pipeline
+            # replaced them. Route these to the same pipeline instead of
+            # looking up a cog that can never resolve — that lookup failed
+            # silently, so an MCP-driven test got no reply and no error.
+            await self._handle_narrate(
+                inter, {"text": _exploration_text(command, args)},
+            )
         elif command == "roll":
-            cog = self.bot.get_cog("RollsCog")
+            cog = self._cog("RollsCog")
             if cog:
                 expr = args.get("expression", "1d20")
-                await cog.roll_dice.callback(cog, inter, expr)  # type: ignore[union-attr, arg-type]
+                await cog.roll_dice.callback(cog, inter, expr)
         elif command == "inventory":
-            cog = self.bot.get_cog("InventoryCog")
+            cog = self._cog("InventoryCog")
             if cog:
-                await cog.inventory.callback(cog, inter, public=True)  # type: ignore[union-attr, arg-type]
+                await cog.inventory.callback(cog, inter, public=True)
         elif command == "equip":
-            cog = self.bot.get_cog("InventoryCog")
+            cog = self._cog("InventoryCog")
             if cog:
                 item = args.get("item", "")
                 slot = args.get("slot", "")
-                await cog.equip.callback(cog, inter, item, slot)  # type: ignore[union-attr, arg-type]
+                await cog.equip.callback(cog, inter, item, slot)
         elif command == "unequip":
-            cog = self.bot.get_cog("InventoryCog")
+            cog = self._cog("InventoryCog")
             if cog:
                 slot = args.get("slot", "")
-                await cog.unequip.callback(cog, inter, slot)  # type: ignore[union-attr, arg-type]
+                await cog.unequip.callback(cog, inter, slot)
         elif command == "use_item":
-            cog = self.bot.get_cog("InventoryCog")
+            cog = self._cog("InventoryCog")
             if cog:
                 item = args.get("item", "")
-                await cog.use_item.callback(cog, inter, item)  # type: ignore[union-attr, arg-type]
+                await cog.use_item.callback(cog, inter, item)
         elif command == "character":
-            cog = self.bot.get_cog("CharacterCog")
+            cog = self._cog("CharacterCog")
             if cog:
-                await cog.character.callback(cog, inter, public=True)  # type: ignore[union-attr, arg-type]
+                await cog.character.callback(cog, inter, public=True)
         elif command == "game_state":
             await self._handle_game_state(channel)
         elif command == "inject_scene":
@@ -620,8 +644,10 @@ class TestBridge(commands.Cog):
             return
 
         # Populate .values on the select so the callback sees the selection
-        # exactly as discord.py would after a user picked options.
-        select._values = values  # type: ignore[attr-defined, assignment]
+        # exactly as discord.py would after a user picked options. The
+        # attribute is typed for every select flavour (user/role/channel
+        # pickers included); a string select only ever holds str values.
+        select._values = cast("list[Any]", values)
 
         message = await self._safe_fetch_message(channel, msg_id)
         inter = self._make_interaction(guild, channel, player_idx, message=message)
@@ -658,7 +684,7 @@ class TestBridge(commands.Cog):
             if isinstance(child, discord.ui.TextInput):
                 label = child.label
                 if label in field_values:
-                    child._value = field_values[label]  # type: ignore[attr-defined]
+                    child._value = field_values[label]
 
         inter = self._make_interaction(guild, channel, player_idx)
         await modal.on_submit(inter)  # type: ignore[arg-type]
@@ -759,7 +785,7 @@ class TestBridge(commands.Cog):
             )
             return
 
-        cog = self.bot.get_cog("ActionHandlerCog")
+        cog = self._cog("ActionHandlerCog")
         if cog is None:
             await inter.channel.send("ActionHandlerCog not loaded.")
             return
@@ -776,7 +802,7 @@ class TestBridge(commands.Cog):
 
         # _run_pipeline owns action_lock itself (and releases it before the
         # combat turn handoff) — holding it here would deadlock the task.
-        await cog._run_pipeline(fake_message, session, text)  # type: ignore[attr-defined]
+        await cog._run_pipeline(fake_message, session, text)
 
     async def _handle_game_state(self, channel: discord.TextChannel) -> None:
         """Serialize and post the active game session state."""

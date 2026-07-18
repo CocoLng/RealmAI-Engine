@@ -580,8 +580,8 @@ class PipelineRunner:
                 _judge_passed: bool | None = None
                 _judge_confidence: float | None = None
                 if beat_eval.decision == "NEEDS_JUDGE" and "judge_resp" in locals():
-                    _judge_passed = judge_resp.passed  # type: ignore[name-defined]
-                    _judge_confidence = judge_resp.confidence  # type: ignore[name-defined]
+                    _judge_passed = judge_resp.passed
+                    _judge_confidence = judge_resp.confidence
                 log_decision(
                     campaign_id=self.campaign_id,
                     beat_number=_beat_num,

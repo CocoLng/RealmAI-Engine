@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import discord
 
 from bot.embeds.arc_tracker_embed import build_arc_tracker_embed
+
+if TYPE_CHECKING:
+    from engine.beat_progression import BeatProgress
+    from world.story_arc import StoryArc
 
 logger = logging.getLogger(__name__)
 
@@ -161,16 +165,15 @@ class ArcTrackerManager:
 
 def build_arc_tracker_data_from_progress(
     *,
-    arc: object,
-    progress: object,  # engine.beat_progression.BeatProgress | None
+    arc: StoryArc | None,
+    progress: BeatProgress | None,
     recent_beats: list[str] | None = None,
     active_quests: list[str] | None = None,
 ) -> ArcTrackerData:
     """Build an ArcTrackerData from engine truth.
 
-    ``arc`` is a :class:`world.story_arc.StoryArc` instance.
-    ``progress`` is the latest :class:`engine.beat_progression.BeatProgress`
-    (or ``None`` to fall back to a minimal view).
+    ``progress`` is the latest beat evaluation, or ``None`` to fall back to
+    a minimal view built from the arc alone.
     """
     chapter_title = ""
     current_objective = ""
@@ -179,15 +182,15 @@ def build_arc_tracker_data_from_progress(
     locations: list[str] = []
     npcs: list[str] = []
 
-    if arc is not None and arc.current_beat_index < len(arc.beats):  # type: ignore[union-attr]
-        beat = arc.beats[arc.current_beat_index]  # type: ignore[union-attr]
+    if arc is not None and arc.current_beat_index < len(arc.beats):
+        beat = arc.beats[arc.current_beat_index]
         chapter_title = beat.title
         current_objective = beat.description.split(".", 1)[0] + "."
 
         if progress is not None:
-            progress_score = progress.progress_score  # type: ignore[union-attr]
+            progress_score = progress.progress_score
             for obj in beat.objectives:
-                state = progress.objective_states.get(obj.id)  # type: ignore[union-attr]
+                state = progress.objective_states.get(obj.id)
                 marker = "◯"
                 if state is not None:
                     if state.status == "completed":

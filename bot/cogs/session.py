@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import discord
 from discord import app_commands
@@ -1224,10 +1224,17 @@ class SessionCog(commands.Cog):
         )
 
         # Surface AI initialization warnings to the campaign channel.
+        # ``interaction.channel`` is typed as a union that includes
+        # non-sendable channels (forum, category), but a campaign channel is
+        # always created as a TextChannel by bot.utils.channel_manager. Cast
+        # rather than isinstance-narrow: an isinstance gate would silently
+        # skip the send if the invariant ever broke, and the try/except
+        # below already covers that case loudly.
+        warn_channel = cast("discord.abc.Messageable", interaction.channel)
         if session.ai_warnings and interaction.channel is not None:
             for warning in session.ai_warnings:
                 try:
-                    await interaction.channel.send(warning)
+                    await warn_channel.send(warning)
                 except Exception:
                     logger.warning("Failed to send AI warning to channel %s", channel_id)
 
@@ -1422,7 +1429,10 @@ class SessionCog(commands.Cog):
                 from bot.utils.arc_tracker import ArcTrackerManager
                 store = _CampaignChannelArcStore(self.bot.db_factory)
                 manager = ArcTrackerManager(store=store)
-                await manager.remove(channel=channel, channel_id=channel_id)
+                await manager.remove(
+                    channel=cast("discord.abc.Messageable", channel),
+                    channel_id=channel_id,
+                )
             except Exception:
                 logger.warning("Failed to remove Arc Tracker on /end_campaign", exc_info=True)
 

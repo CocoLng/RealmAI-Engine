@@ -44,7 +44,7 @@ class HintCog(commands.Cog):
         db_session = db_factory()
         return HintUsageRepository(db_session)
 
-    def _build_judge(self, session: "GameSession"):  # type: ignore[return]
+    def _build_judge(self, session: "GameSession"):
         """Build a BeatJudge bound to this session's Ollama client.
 
         Overridable in tests.
@@ -95,7 +95,7 @@ class HintCog(commands.Cog):
             # One DB session is opened per invocation (H2) — close it.
             self._close_repo(repo)
 
-    async def _dispatch_levels(  # type: ignore[no-untyped-def]
+    async def _dispatch_levels(
         self, interaction, session, beat, repo, public,
     ) -> None:
         """Pick the hint level from usage state and send the response."""
@@ -165,7 +165,7 @@ class HintCog(commands.Cog):
 
     # ----- level builders -----
 
-    def _build_level1(self, beat) -> str:  # type: ignore[no-untyped-def]
+    def _build_level1(self, beat) -> str:
         """Vague, in-character hint. Falls back to first sentence of description."""
         if beat.player_visible_hint:
             return beat.player_visible_hint
@@ -174,7 +174,7 @@ class HintCog(commands.Cog):
             return first_sentence + "."
         return "Tu sens que quelque chose t'attend par ici."
 
-    def _build_level2(self, beat) -> str:  # type: ignore[no-untyped-def]
+    def _build_level2(self, beat) -> str:
         """List of pending/partial objective descriptions."""
         if not beat.objectives:
             return "Aucun objectif identifié pour ce beat."
@@ -183,7 +183,7 @@ class HintCog(commands.Cog):
             lines.append(f"◯ {obj.description}")
         return "\n".join(lines)
 
-    async def _build_level3(self, beat, session) -> str:  # type: ignore[no-untyped-def]
+    async def _build_level3(self, beat, session) -> str:
         """Run the BeatJudge in verbose mode and format its reasoning."""
         from engine.beat_progression import JudgeRequest, ObjectivePartialMatch
         from ai.models import InterpretedAction

@@ -966,7 +966,7 @@ class TurnManager:
 
     def _build_pipeline(self) -> ActionPipeline:
         user_id = self._find_user_id(
-            get_current_combatant(self.session.combat_state).name,  # type: ignore[arg-type]
+            get_current_combatant(self.session.combat_state).name,
         ) if self.session.combat_state is not None else None
 
         inventory = (

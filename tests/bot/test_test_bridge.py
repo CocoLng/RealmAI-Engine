@@ -199,3 +199,47 @@ async def test_game_state_with_session(bridge: TestBridge) -> None:
     assert data["campaign"]["name"] == "Test Campaign"
     assert data["combat_active"] is False
     assert data["characters"] == []
+
+
+# ---------------------------------------------------------------------------
+# Legacy exploration commands (ExplorationCog was deleted in 5681a6b)
+# ---------------------------------------------------------------------------
+
+
+def test_exploration_text_renders_each_legacy_command() -> None:
+    """look/move/search/talk become free text the interpreter can classify."""
+    from bot.cogs.test_bridge import _exploration_text
+
+    assert _exploration_text("move", {"direction": "nord"}) == "je vais vers nord"
+    assert _exploration_text("search", {"target": "le coffre"}) == "je fouille le coffre"
+    assert _exploration_text("talk", {"npc": "Grim"}) == "je parle à Grim"
+    assert "observe" in _exploration_text("look", {})
+
+
+def test_exploration_text_tolerates_missing_args() -> None:
+    """A bare command must still produce usable text, never a dangling verb."""
+    from bot.cogs.test_bridge import _exploration_text
+
+    assert _exploration_text("search", {}) == "je fouille les lieux"
+    assert _exploration_text("talk", {}) == "je parle aux gens ici"
+
+
+@pytest.mark.parametrize("command", ["look", "move", "search", "talk"])
+async def test_exploration_commands_route_to_narrate(
+    bridge: TestBridge, command: str,
+) -> None:
+    """They must reach the action pipeline, not a cog lookup that can never resolve.
+
+    ExplorationCog no longer exists: `get_cog("ExplorationCog")` returned
+    None and the branch fell through silently, so an MCP-driven test got
+    no reply and no error.
+    """
+    guild, channel = MagicMock(), MagicMock()
+    channel.id = 42
+    bridge._handle_narrate = AsyncMock()
+
+    await bridge._dispatch(command, {}, 1, guild, channel)
+
+    bridge._handle_narrate.assert_awaited_once()
+    text = bridge._handle_narrate.await_args.args[1]["text"]
+    assert text, "exploration command produced empty free text"

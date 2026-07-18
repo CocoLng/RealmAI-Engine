@@ -39,7 +39,7 @@ class CampaignRepository:
             raise ValueError(msg)
         row.name = campaign.name
         row.created_at = campaign.created_at
-        row.player_names = campaign.player_names  # type: ignore[assignment]
+        row.player_names = campaign.player_names
         row.current_location = campaign.current_location
         row.interaction_count = campaign.interaction_count
         row.combat_state_json = campaign.combat_state_json

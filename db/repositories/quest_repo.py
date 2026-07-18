@@ -48,7 +48,7 @@ class QuestRepository:
             raise ValueError(msg)
         row.description = quest.description
         row.status = quest.status.value
-        row.objectives = [obj.model_dump() for obj in quest.objectives]  # type: ignore[assignment]
+        row.objectives = [obj.model_dump() for obj in quest.objectives]
         row.reward_xp = quest.reward_xp
         row.reward_gold = quest.reward_gold
         row.giver_npc = quest.giver_npc
@@ -65,7 +65,7 @@ class QuestRepository:
             return
         row.description = quest.description
         row.status = quest.status.value
-        row.objectives = [obj.model_dump() for obj in quest.objectives]  # type: ignore[assignment]
+        row.objectives = [obj.model_dump() for obj in quest.objectives]
         row.reward_xp = quest.reward_xp
         row.reward_gold = quest.reward_gold
         row.giver_npc = quest.giver_npc

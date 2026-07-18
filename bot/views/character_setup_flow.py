@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from enum import IntEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import TextStyle, ui
@@ -42,14 +42,14 @@ class SetupStep(IntEnum):
 class IdentityModal(ui.Modal, title="Ton aventurier"):
     """Captures name + concept in one submit."""
 
-    name = ui.TextInput(
+    name: ui.TextInput[Any] = ui.TextInput(
         label="Nom du personnage",
         placeholder="Ex: Thorin Forgefort",
         min_length=1,
         max_length=32,
         required=True,
     )
-    concept = ui.TextInput(
+    concept: ui.TextInput[Any] = ui.TextInput(
         label="Concept (optionnel)",
         placeholder="Ex: Un voleur repenti cherchant la rédemption",
         max_length=100,
@@ -103,7 +103,7 @@ class CharacterSetupFlow(LoggedView):
         self.kit_name: str | None = None
         self.motivation_key: str | None = None
         # Built only at REVIEW step (preview, awaiting Confirm)
-        self._preview_character: Character | None = None  # type: ignore[assignment]
+        self._preview_character: Character | None = None
 
     async def transition_to(
         self, interaction: discord.Interaction, next_step: SetupStep,
@@ -201,7 +201,7 @@ class CharacterSetupFlow(LoggedView):
             )
             for r in Race
         ]
-        race_select = ui.Select(
+        race_select: ui.Select[Any] = ui.Select(
             placeholder="Choisis ta race...",
             options=race_options,
             custom_id="setup_race",
@@ -230,7 +230,7 @@ class CharacterSetupFlow(LoggedView):
             )
             for c in CharacterClass
         ]
-        class_select = ui.Select(
+        class_select: ui.Select[Any] = ui.Select(
             placeholder="Choisis ta classe...",
             options=class_options,
             custom_id="setup_class",
@@ -242,7 +242,7 @@ class CharacterSetupFlow(LoggedView):
         self.add_item(class_select)
 
         # Continue button
-        continue_btn = ui.Button(
+        continue_btn: ui.Button[Any] = ui.Button(
             label="Continuer",
             emoji="➡️",
             style=discord.ButtonStyle.success,
@@ -301,34 +301,34 @@ class CharacterSetupFlow(LoggedView):
         self.clear_items()
 
         # Preset button
-        preset_btn = ui.Button(
+        preset_btn: ui.Button[Any] = ui.Button(
             label=f"Optimisé pour {self.char_class.value if self.char_class else ''}",
             emoji="✨",
             style=discord.ButtonStyle.primary,
             custom_id="setup_stats_preset",
         )
-        preset_btn.callback = lambda i: self._on_preset_stats(i)
+        preset_btn.callback = lambda interaction: self._on_preset_stats(interaction)
         self.add_item(preset_btn)
 
         # Random button
-        random_btn = ui.Button(
+        random_btn: ui.Button[Any] = ui.Button(
             label="Aléatoire (4d6)",
             emoji="🎲",
             style=discord.ButtonStyle.secondary,
             custom_id="setup_stats_random",
         )
-        random_btn.callback = lambda i: self._on_random_stats(i)
+        random_btn.callback = lambda interaction: self._on_random_stats(interaction)
         self.add_item(random_btn)
 
         # Continue button (only enabled if scores chosen)
-        continue_btn = ui.Button(
+        continue_btn: ui.Button[Any] = ui.Button(
             label="Continuer",
             emoji="➡️",
             style=discord.ButtonStyle.success,
             disabled=(self.ability_scores is None),
             custom_id="setup_stats_continue",
         )
-        continue_btn.callback = lambda i: self.transition_to(i, SetupStep.SKILLS)
+        continue_btn.callback = lambda interaction: self.transition_to(interaction, SetupStep.SKILLS)
         self.add_item(continue_btn)
 
     async def _on_preset_stats(self, interaction: discord.Interaction) -> None:
@@ -396,7 +396,7 @@ class CharacterSetupFlow(LoggedView):
             )
             for s in config.options
         ]
-        select = ui.Select(
+        select: ui.Select[Any] = ui.Select(
             placeholder=f"Choisis {config.choose} compétences...",
             options=options,
             min_values=config.choose,
@@ -409,14 +409,14 @@ class CharacterSetupFlow(LoggedView):
         select.callback = cb
         self.add_item(select)
 
-        continue_btn = ui.Button(
+        continue_btn: ui.Button[Any] = ui.Button(
             label="Continuer",
             emoji="➡️",
             style=discord.ButtonStyle.success,
             disabled=(not self.skill_proficiencies),
             custom_id="setup_skills_continue",
         )
-        continue_btn.callback = lambda i: self.transition_to(i, SetupStep.KIT_MOTIV)
+        continue_btn.callback = lambda interaction: self.transition_to(interaction, SetupStep.KIT_MOTIV)
         self.add_item(continue_btn)
 
     async def _on_skills_selected(
@@ -449,12 +449,12 @@ class CharacterSetupFlow(LoggedView):
             )
             for k in kits
         ]
-        kit_select = ui.Select(
+        kit_select: ui.Select[Any] = ui.Select(
             placeholder="Choisis ton kit de départ...",
             options=kit_options,
             custom_id="setup_kit",
         )
-        kit_select.callback = lambda i: self._on_kit_selected(i, kit_select.values)
+        kit_select.callback = lambda interaction: self._on_kit_selected(interaction, kit_select.values)
         self.add_item(kit_select)
 
         motiv_options = [
@@ -465,22 +465,22 @@ class CharacterSetupFlow(LoggedView):
             )
             for m in MOTIVATION_KEYS
         ]
-        motiv_select = ui.Select(
+        motiv_select: ui.Select[Any] = ui.Select(
             placeholder="Choisis ta motivation...",
             options=motiv_options,
             custom_id="setup_motivation",
         )
-        motiv_select.callback = lambda i: self._on_motivation_selected(i, motiv_select.values)
+        motiv_select.callback = lambda interaction: self._on_motivation_selected(interaction, motiv_select.values)
         self.add_item(motiv_select)
 
-        continue_btn = ui.Button(
+        continue_btn: ui.Button[Any] = ui.Button(
             label="Continuer",
             emoji="➡️",
             style=discord.ButtonStyle.success,
             disabled=not (self.kit_name and self.motivation_key),
             custom_id="setup_kit_motiv_continue",
         )
-        continue_btn.callback = lambda i: self.transition_to(i, SetupStep.REVIEW)
+        continue_btn.callback = lambda interaction: self.transition_to(interaction, SetupStep.REVIEW)
         self.add_item(continue_btn)
 
     async def _on_kit_selected(
@@ -499,30 +499,44 @@ class CharacterSetupFlow(LoggedView):
 
     def _build_review_components(self) -> None:
         self.clear_items()
-        confirm_btn = ui.Button(
+        confirm_btn: ui.Button[Any] = ui.Button(
             label="Confirmer", emoji="✅",
             style=discord.ButtonStyle.success, custom_id="setup_confirm",
         )
-        confirm_btn.callback = lambda i: self._on_confirm(i)
+        confirm_btn.callback = lambda interaction: self._on_confirm(interaction)
         self.add_item(confirm_btn)
 
-        edit_btn = ui.Button(
+        edit_btn: ui.Button[Any] = ui.Button(
             label="Recommencer", emoji="✏️",
             style=discord.ButtonStyle.secondary, custom_id="setup_restart",
         )
-        edit_btn.callback = lambda i: self._on_restart(i)
+        edit_btn.callback = lambda interaction: self._on_restart(interaction)
         self.add_item(edit_btn)
 
-        cancel_btn = ui.Button(
+        cancel_btn: ui.Button[Any] = ui.Button(
             label="Annuler", emoji="❌",
             style=discord.ButtonStyle.danger, custom_id="setup_cancel",
         )
-        cancel_btn.callback = lambda i: self._on_cancel(i)
+        cancel_btn.callback = lambda interaction: self._on_cancel(interaction)
         self.add_item(cancel_btn)
 
     async def _on_confirm(self, interaction: discord.Interaction) -> None:
         """Persist the previewed character via on_complete callback."""
         char = self._preview_character
+        if char is None:
+            # Confirm reached without a built preview — a stale view, or a
+            # REVIEW transition that failed. Never call on_complete with
+            # None: it would persist a broken roster entry.
+            await interaction.response.edit_message(
+                content=(
+                    "❌ La fiche n'a pas pu être finalisée. "
+                    "Relance la création depuis le lobby."
+                ),
+                embed=None, view=None,
+            )
+            self.stop()
+            return
+
         await self._on_complete(char, self.kit_name or "", self.motivation_key or "")
         self.stop()
         await interaction.response.edit_message(

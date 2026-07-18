@@ -71,7 +71,7 @@ class NPCRepository:
         row.race = npc.race.value
         row.char_class = npc.char_class.value if npc.char_class else None
         row.level = npc.level
-        row.ability_scores = npc.ability_scores.model_dump()  # type: ignore[assignment]
+        row.ability_scores = npc.ability_scores.model_dump()
         row.hp = npc.hp
         row.max_hp = npc.max_hp
         row.ac = npc.ac
@@ -101,7 +101,7 @@ class NPCRepository:
         row.race = npc.race.value
         row.char_class = npc.char_class.value if npc.char_class else None
         row.level = npc.level
-        row.ability_scores = npc.ability_scores.model_dump()  # type: ignore[assignment]
+        row.ability_scores = npc.ability_scores.model_dump()
         row.hp = npc.hp
         row.max_hp = npc.max_hp
         row.ac = npc.ac

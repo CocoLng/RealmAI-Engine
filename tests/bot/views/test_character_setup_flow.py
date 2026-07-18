@@ -249,3 +249,23 @@ async def test_review_confirm_calls_on_complete():
     assert args[0].name == "Thorin"
     assert args[1] == "Iron Vow"
     assert args[2] == "Contract"
+
+
+async def test_confirm_without_preview_does_not_persist():
+    """Confirm on a stale view must not hand None to on_complete.
+
+    The preview is only built at the REVIEW step; a view that never got
+    there (or whose transition failed) would otherwise crash on
+    ``char.name`` and, worse, persist a broken roster entry.
+    """
+    on_complete = AsyncMock()
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=on_complete)
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view._on_confirm(interaction)
+
+    on_complete.assert_not_called()
+    content = interaction.response.edit_message.call_args.kwargs["content"]
+    assert "n'a pas pu être finalisée" in content

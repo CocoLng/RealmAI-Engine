@@ -25,7 +25,7 @@ class SemanticMemory:
     ) -> None:
         self._client = client or chromadb.PersistentClient(path=persist_directory)
 
-    def _get_collection(self, campaign_id: str) -> chromadb.Collection:  # type: ignore[type-arg]
+    def _get_collection(self, campaign_id: str) -> chromadb.Collection:
         """Get or create the collection for a campaign."""
         return self._client.get_or_create_collection(
             name=f"campaign_{campaign_id}",

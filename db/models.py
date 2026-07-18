@@ -16,7 +16,7 @@ class CampaignRow(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(nullable=False)
-    player_names: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    player_names: Mapped[list] = mapped_column(JSON, default=list)
     current_location: Mapped[str | None] = mapped_column(String, nullable=True)
     interaction_count: Mapped[int] = mapped_column(default=0)
     combat_state_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -36,7 +36,7 @@ class NPCRow(Base):
     race: Mapped[str] = mapped_column(String, nullable=False)
     char_class: Mapped[str | None] = mapped_column(String, nullable=True)
     level: Mapped[int] = mapped_column(nullable=False)
-    ability_scores: Mapped[dict] = mapped_column(JSON, nullable=False)  # type: ignore[type-arg]
+    ability_scores: Mapped[dict] = mapped_column(JSON, nullable=False)
     hp: Mapped[int] = mapped_column(nullable=False)
     max_hp: Mapped[int] = mapped_column(nullable=False)
     ac: Mapped[int] = mapped_column(nullable=False)
@@ -45,10 +45,10 @@ class NPCRow(Base):
     description: Mapped[str] = mapped_column(String, default="")
     personality: Mapped[str] = mapped_column(String, default="")
     location_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    aliases: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
-    secrets: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
-    knowledge: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
-    dialogue_history: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    aliases: Mapped[list] = mapped_column(JSON, default=list)
+    secrets: Mapped[list] = mapped_column(JSON, default=list)
+    knowledge: Mapped[list] = mapped_column(JSON, default=list)
+    dialogue_history: Mapped[list] = mapped_column(JSON, default=list)
     stat_block_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -65,17 +65,17 @@ class LocationRow(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(String, default="")
     arrival_hook: Mapped[str] = mapped_column(String, default="")
-    connections: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
-    exit_aliases: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
-    npcs_present: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
-    items_available: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
-    item_descriptions: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
-    state_flags: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
-    unlocked_exits: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    connections: Mapped[list] = mapped_column(JSON, default=list)
+    exit_aliases: Mapped[dict] = mapped_column(JSON, default=dict)
+    npcs_present: Mapped[list] = mapped_column(JSON, default=list)
+    items_available: Mapped[list] = mapped_column(JSON, default=list)
+    item_descriptions: Mapped[dict] = mapped_column(JSON, default=dict)
+    state_flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    unlocked_exits: Mapped[list] = mapped_column(JSON, default=list)
     generated: Mapped[bool] = mapped_column(default=True, nullable=False)
-    combat_zones: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
-    combat_triggers: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
-    npc_roles: Mapped[dict] = mapped_column(JSON, default=dict)  # type: ignore[type-arg]
+    combat_zones: Mapped[list] = mapped_column(JSON, default=list)
+    combat_triggers: Mapped[dict] = mapped_column(JSON, default=dict)
+    npc_roles: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class QuestRow(Base):
@@ -91,7 +91,7 @@ class QuestRow(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(String, default="")
     status: Mapped[str] = mapped_column(String, nullable=False)
-    objectives: Mapped[list] = mapped_column(JSON, default=list)  # type: ignore[type-arg]
+    objectives: Mapped[list] = mapped_column(JSON, default=list)
     reward_xp: Mapped[int] = mapped_column(default=0)
     reward_gold: Mapped[int] = mapped_column(default=0)
     giver_npc: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -39,7 +39,7 @@ class ClarificationView(ui.View):
             emoji="\u274c",
             custom_id="clarify_cancel",
         )
-        cancel_button.callback = self._on_cancel  # type: ignore[method-assign]
+        cancel_button.callback = self._on_cancel
         self.add_item(cancel_button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:

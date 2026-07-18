@@ -128,7 +128,7 @@ def attempt_truce(
     )
 
 
-def _is_boss_in_phase_2(sb) -> bool:  # type: ignore[no-untyped-def]
+def _is_boss_in_phase_2(sb) -> bool:
     """Return True if ``sb`` is a BOSS with a triggered phase at ≤50% HP.
 
     The plan refuses truce once a boss has entered its second phase:

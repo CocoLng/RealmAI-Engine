@@ -18,20 +18,20 @@ def _copy_fields_to_row(row: LocationRow, location: Location) -> None:
     """
     row.description = location.description
     row.arrival_hook = location.arrival_hook
-    row.connections = location.connections  # type: ignore[assignment]
-    row.exit_aliases = location.exit_aliases  # type: ignore[assignment]
-    row.npcs_present = location.npcs_present  # type: ignore[assignment]
-    row.items_available = location.items_available  # type: ignore[assignment]
-    row.item_descriptions = location.item_descriptions  # type: ignore[assignment]
-    row.state_flags = location.state_flags  # type: ignore[assignment]
-    row.unlocked_exits = location.unlocked_exits  # type: ignore[assignment]
+    row.connections = location.connections
+    row.exit_aliases = location.exit_aliases
+    row.npcs_present = location.npcs_present
+    row.items_available = location.items_available
+    row.item_descriptions = location.item_descriptions
+    row.state_flags = location.state_flags
+    row.unlocked_exits = location.unlocked_exits
     row.generated = location.generated
-    row.combat_zones = [z.model_dump() for z in location.combat_zones]  # type: ignore[assignment]
-    row.combat_triggers = {  # type: ignore[assignment]
+    row.combat_zones = [z.model_dump() for z in location.combat_zones]
+    row.combat_triggers = {
         key: trigger.model_dump()
         for key, trigger in location.combat_triggers.items()
     }
-    row.npc_roles = dict(location.npc_roles)  # type: ignore[assignment]
+    row.npc_roles = dict(location.npc_roles)
 
 
 class LocationRepository:

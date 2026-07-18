@@ -172,7 +172,7 @@ def campaign_from_db(row: CampaignRow) -> Campaign:
     return Campaign(
         id=row.id,
         name=row.name,
-        created_at=row.created_at if isinstance(row.created_at, datetime) else datetime.fromisoformat(row.created_at),  # type: ignore[arg-type]
+        created_at=row.created_at if isinstance(row.created_at, datetime) else datetime.fromisoformat(row.created_at),
         player_names=list(row.player_names) if row.player_names else [],
         current_location=row.current_location,
         interaction_count=row.interaction_count,

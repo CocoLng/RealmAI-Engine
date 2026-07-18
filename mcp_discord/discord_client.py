@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import discord
@@ -114,8 +115,14 @@ class TesterBot(discord.Client):
         return result
 
     @staticmethod
-    def _serialize_components(components: list[discord.ActionRow]) -> list[dict[str, Any]]:
+    def _serialize_components(
+        components: Sequence[discord.Component],
+    ) -> list[dict[str, Any]]:
         """Convert message components to a serializable list.
+
+        ``Message.components`` may hold top-level components that are not
+        action rows (Components V2); only rows carry ``children``, so
+        anything else is skipped rather than crashing the serializer.
 
         Returned shape per component:
             {"type": "button", "label": str, "custom_id": str, "disabled": bool}
@@ -125,6 +132,8 @@ class TesterBot(discord.Client):
         """
         result: list[dict[str, Any]] = []
         for row in components:
+            if not isinstance(row, discord.ActionRow):
+                continue
             for child in row.children:
                 if isinstance(child, discord.Button):
                     result.append({

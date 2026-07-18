@@ -56,6 +56,35 @@ dev = [
     "ruff>=0.15.9",
 ]
 
+[tool.mypy]
+python_version = "3.12"
+files = ["engine", "ai", "world", "memory", "db", "bot", "tests"]
+# Correctness checks worth failing the build over. Deliberately not
+# `strict = true`: the gate has to be green today so it can catch
+# regressions, rather than being permanently red and ignored.
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# Tests are still type-checked when imported by production modules, but
+# their own bodies are exempt: fakes, monkeypatched attributes and
+# half-built Discord objects are the point of a test double, and pytest is
+# the gate that actually proves them. Listing the ~30 error codes that
+# implies would be noise nobody maintains.
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
+# discord.py's documented idiom for dynamic components is to build a
+# Select/Button and assign its ``callback`` attribute. mypy reads that as
+# overwriting a method; subclassing every component purely to satisfy it
+# would be a large, behaviour-risking refactor for no runtime benefit.
+[[tool.mypy.overrides]]
+module = ["bot.views.*", "bot.cogs.test_bridge"]
+disable_error_code = ["method-assign"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

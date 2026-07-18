@@ -58,7 +58,7 @@ class EquipSelectView(LoggedView):
             max_values=1,
             options=options,
         )
-        self.select.callback = self._on_selected  # type: ignore[method-assign]
+        self.select.callback = self._on_selected
         self.add_item(self.select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
