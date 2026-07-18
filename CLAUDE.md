@@ -139,89 +139,117 @@ Background: STORY DIRECTOR every ~20 interactions.
 
 ## Project Structure
 
+Key files only — run `ls` for the full picture rather than trusting this
+tree to stay exhaustive.
+
 ```
 realmAI-engine/
 ├── engine/           # Pure Python game logic (NO LLM EVER)
-│   ├── dice.py       # Dice expressions ("2d6+3") → DiceResult
-│   ├── character.py  # Classes, races, stats, levels
-│   ├── combat.py     # Initiative, attacks, damage, turns
-│   ├── inventory.py  # Items, equipment, weight
-│   ├── spells.py     # Spells and effects
-│   ├── conditions.py # Status conditions
-│   ├── rules.py      # Simplified SRD 5e
-│   └── validators.py # Action legality checks
+│   ├── dice.py           # Dice expressions ("2d6+3") → DiceResult, clamped
+│   ├── character/        # PACKAGE: models, races, classes, abilities,
+│   │                     #   progression, creation, features, presets
+│   ├── combat.py         # Initiative, attacks, damage, turns, zones
+│   ├── combat_phases.py  # Boss phase transitions
+│   ├── npc_ai/           # scripted (minions), elite, boss_brain, legendary
+│   ├── npc_stat_block.py # NPC combat stats, LLM-authored values clamped here
+│   ├── npc_library.py    # Combat archetypes by tier
+│   ├── inventory.py      # Items, equipment, weight, attunement (dormant)
+│   ├── spells.py         # Spells and effects
+│   ├── conditions.py     # Status conditions
+│   ├── skill_check.py    # Skill DCs — never derived from player wording
+│   ├── beat_progression.py   # Deterministic story-beat advancement
+│   ├── objective_matchers.py # Objective gate matching
+│   ├── arc_recipes.py    # Arc archetype recipes (variety, anti-repetition)
+│   ├── contracts.py      # Shared I/O contracts (engine owns them, not ai/)
+│   └── validators.py     # Action legality checks
 ├── ai/               # GenAI layer
-│   ├── narrator.py
-│   ├── interpreter.py
-│   ├── npc_agent.py
-│   ├── world_generator.py
-│   ├── story_director.py
+│   ├── client.py         # Ollama wrapper (keep_alive + timeout policy)
+│   ├── narrator.py       # 3-tier fallback chain + invented-damage guard
+│   ├── interpreter.py    # text → JSON
+│   ├── npc_agent.py · npc_generator.py · npc_tactician.py
+│   ├── arc_generator.py · world_generator.py · story_director.py
+│   ├── beat_judge.py     # LLM tiebreak when the engine is unsure
+│   ├── prompt_safety.py  # Player input delimiting, secrets kept system-side
 │   └── prompts/
-├── memory/           # 4-layer memory
-│   ├── state.py
-│   ├── sliding_window.py
-│   ├── summarizer.py
-│   ├── semantic.py
+├── memory/           # 4-layer memory (wired into prod since chantier G)
+│   ├── state.py · sliding_window.py · summarizer.py
+│   ├── semantic.py · indexer.py     # ChromaDB write + read
+│   ├── narration_guard.py           # Dead-NPC / monotony guards
 │   └── context_assembler.py
-├── world/            # World state models
-│   ├── world_state.py
-│   ├── facts.py
-│   ├── npcs.py
-│   ├── locations.py
-│   ├── quests.py
-│   └── factions.py
-├── bot/              # Discord bot (Phase 3)
-│   ├── bot.py        # Bot setup, cog loading, intents
-│   ├── config.py     # GuildConfig (category per guild)
-│   ├── cogs/         # Slash commands by domain
-│   │   ├── session.py      # /start_campaign, /resume, /save, /end_campaign, /settings
-│   │   ├── character.py    # /create_character, /character, /level_up
-│   │   ├── inventory.py    # /inventory, /equip, /unequip, /use_item
-│   │   ├── combat.py       # Combat flow with button views
-│   │   ├── action_handler.py  # @bot mention handler (free-form actions)
-│   │   └── rolls.py           # /roll
-│   ├── views/        # Discord interactive components
-│   │   ├── combat_view.py  # Attack/Cast/Defend/Flee buttons
-│   │   ├── target_select.py
-│   │   └── spell_select.py
-│   ├── embeds/       # Embed builders
-│   │   ├── character_embed.py
-│   │   ├── inventory_embed.py
-│   │   ├── combat_embed.py
-│   │   └── narrative_embed.py
-│   └── utils/
-│       └── channel_manager.py  # Channel creation, permissions, archival
-├── db/               # SQLAlchemy models + database
-├── tests/            # pytest (mirrors engine/ structure)
-├── tasks/            # todo.md + lessons.md
-├── CLAUDE.md
-├── pyproject.toml
-├── README.md
-└── LICENSE (MIT)
+├── world/            # World state models (Pydantic)
+│   ├── campaign.py · location.py · npc.py · quest.py
+│   ├── story_arc.py       # Beats, objectives, locked facts
+│   └── combat_zone.py · combat_trigger_def.py
+├── bot/              # Discord bot
+│   ├── bot.py            # Bot setup, cog loading, intents
+│   ├── config.py         # GuildConfig (category + language per guild)
+│   ├── game_session.py   # In-memory session + AI service wiring
+│   ├── lobby_state.py    # Lobby roster (replaced CampaignLauncher)
+│   ├── pipeline/         # interpret → resolve → narrate + orchestrator
+│   ├── action_pipeline.py    # Thin delegating facade over pipeline/
+│   ├── combat_turn_manager.py · combat_entry.py · combat_end.py
+│   ├── persistence.py · world_navigation.py · scene_hydration.py
+│   ├── location_prefetch.py · npc_prefetch.py · prefetch_gate.py
+│   ├── cogs/         # session, character, inventory, combat, rolls,
+│   │                 #   hint, action_handler (@bot free text), test_bridge
+│   ├── views/        # character_setup_flow, lobby_view,
+│   │                 #   combat_action_view, *_select_view
+│   ├── embeds/       # character, inventory, combat, narrative, lobby,
+│   │                 #   dice, beat, arc_tracker, scene, ...
+│   └── utils/        # channel_manager, arc_tracker
+├── db/               # SQLAlchemy models, mappers, migrations, repositories/
+├── mcp_discord/      # MCP server driving the tester bot
+├── tests/            # pytest — mirrors source layout, plus:
+│   ├── scenarios/    # End-to-end via ScenarioRunner (headless Discord)
+│   └── simulation/   # Autonomous playthrough simulator
+├── docs/             # internal/ (architecture), audits/, superpowers/
+├── tasks/            # todo.md (task board) + lessons.md + archive/
+├── CLAUDE.md · CONTRIBUTING.md · README.md · pyproject.toml · LICENSE (MIT)
 ```
 
 -----
 
 ## Development Phases
 
-### Phase 1 — Game engine without AI [CURRENT]
+> **Current status (2026-07-18): Phases 1-3 are shipped. Phase 4 is the only
+> one still open.** Quality gates are all green — `pytest` 2890 passed,
+> `ruff` clean, `mypy` 0 errors. The 9 chantiers of the 2026-06-10 system
+> audit are closed and merged, all 5 criticals included.
+> Working task board: `tasks/todo.md`.
 
-Build engine/ with full test coverage. Playable in terminal. No LLM, no Discord.
-Order: dice → character → inventory → spells → conditions → combat → validators
+### Phase 1 — Game engine without AI ✅ shipped
 
-### Phase 2 — AI layer
+`engine/` is pure deterministic Python with full test coverage.
+dice → character → inventory → spells → conditions → combat → validators
 
-Interpreter, Narrator, 4-layer memory, quest/NPC generation, Story Director. Ollama integration.
+### Phase 2 — AI layer ✅ shipped
 
-### Phase 3 — Discord bot + multiplayer
+Interpreter, Narrator, 4-layer memory, arc/NPC/world generation, Story
+Director, Beat Progression Engine. Ollama integration.
+
+Note: the 4-layer memory was only *wired into production* in July 2026
+(chantier G). Before that the modules existed but nothing called them and
+ChromaDB was write-only — worth knowing when reading older docs.
+
+### Phase 3 — Discord bot + multiplayer ✅ shipped
 
 > Design spec: `docs/superpowers/specs/2026-04-05-discord-bot-ux-design.md`
 
 Cogs-by-domain architecture. Dedicated channel per campaign (created at `/start_campaign`, archived at `/end_campaign`). Slash commands for character/inventory/rolls with ephemeral responses (optional `public:` flag). Combat via buttons + select menus. No human GM — bot is the sole Game Master. See design spec for full details.
 
-### Phase 4 — Polish + ship
+Superseded along the way: the `/look` `/move` `/search` `/talk` slash
+commands and their `ExplorationCog` were replaced by free-text actions
+through `bot/cogs/action_handler.py`; `/create_character` was replaced by
+the `/start_campaign` lobby flow.
+
+### Phase 4 — Polish + ship [CURRENT]
 
 README with GIFs + architecture diagram, GitHub Actions CI/CD, real play sessions (3+ with friends), blog post / LinkedIn.
+
+Remaining gaps, in order: **CI/CD** (all three gates are green
+simultaneously — freeze them before they drift), then **real play sessions**
+(these also close the three live-Discord verifications that have never been
+run against an online bot), then GIFs and the write-up.
 
 -----
 
