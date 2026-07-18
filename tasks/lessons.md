@@ -178,3 +178,35 @@
 - **`git stash` dans un checkout partagé embarque le travail des autres.**
   Toujours lire `git status` avant un stash/reset ; ne jamais stasher « tout »
   quand on n'est pas seul propriétaire du tree.
+
+## 2026-07-18 — Merge des chantiers en retard, et porte mypy
+
+- **Un chantier « fait » mais non mergé n'existe pas.** C, D et G étaient
+  terminés, testés et commités depuis le 2026-06-10 — sur des branches que
+  rien ne signalait. `tasks/todo.md` affirmait que seul I était fait, alors
+  que A, B, E, F l'étaient aussi. Un fichier de suivi qui ment dans les deux
+  sens coûte plus cher que pas de suivi du tout. **Vérifier l'état réel
+  contre le code et `git branch --merged` avant de croire le tableau**, et
+  cocher au merge, jamais à la fin du travail en worktree.
+- **Ne jamais ajouter un `isinstance` juste pour satisfaire mypy.** Pour
+  taire une union de canaux Discord, j'ai narrowé
+  `isinstance(channel, discord.abc.Messageable)` : correct en prod, mais les
+  `MagicMock` des tests ne passent pas l'`isinstance`, donc le nettoyage de
+  l'Arc Tracker était **sauté en silence** — un test rouge que j'ai d'abord
+  cru causé par un autre agent. Un garde de type ajouté pour le typeur
+  devient un saut silencieux à l'exécution. Préférer `cast()` + un commentaire
+  disant quel invariant on connaît que le typeur ignore.
+- **Les erreurs mypy sont des indices de bugs, pas du bruit à museler.** Les
+  63 erreurs de prod ont livré trois vrais défauts : un `AttributeError` sur
+  Confirmer sans personnage prévisualisé, quatre commandes du test bridge qui
+  cherchaient un cog supprimé et échouaient **sans réponse ni erreur**, et un
+  sérialiseur qui itérait `.children` sur des composants qui n'en ont pas.
+  Avant de désactiver un code d'erreur, se demander ce qu'il essaie de dire.
+- **Exempter un domaine entier bat une liste de codes désactivés.** Première
+  version de la config : ~30 `disable_error_code` pour `tests.*` — illisible
+  et impossible à maintenir. `ignore_errors = true` sur `tests.*` dit la vraie
+  intention : pytest est la porte des tests, mypy celle de la prod.
+- **Un test de non-régression se prouve en le cassant.** Chaque garde ajoutée
+  cette session a été vérifiée en retirant le correctif et en constatant le
+  rouge (`git stash push <fichier>`, ou un `and False` temporaire sur la
+  branche concernée) avant de la déclarer acquise.
