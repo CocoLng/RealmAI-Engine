@@ -163,6 +163,20 @@ class TestInventory:
         assert msg[1]["ephemeral"] is True
 
     @pytest.mark.asyncio()
+    async def test_no_character_points_at_the_lobby_not_a_dead_command(
+        self, cog: InventoryCog, interaction: AsyncMock,
+    ) -> None:
+        """/create_character was removed — onboarding goes through the lobby."""
+        session = _make_session()
+        cog.bot.get_session.return_value = session
+
+        await cog.inventory.callback(cog, interaction, public=False)
+
+        text = interaction.response.send_message.call_args[0][0]
+        assert "/create_character" not in text
+        assert "Rejoindre" in text
+
+    @pytest.mark.asyncio()
     async def test_shows_embed_ephemeral(
         self, cog: InventoryCog, interaction: AsyncMock,
     ) -> None:

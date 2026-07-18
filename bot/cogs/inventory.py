@@ -52,7 +52,9 @@ class InventoryCog(commands.Cog):
         inv = session.inventories.get(user_id)
         if char is None or inv is None:
             await interaction.response.send_message(
-                "Tu n'as pas de personnage. Utilise `/create_character`.", ephemeral=True,
+                "Tu n'as pas de personnage. Rejoins la campagne via le bouton "
+                "**Rejoindre** du lobby pour en créer un.",
+                ephemeral=True,
             )
             return
 
