@@ -294,6 +294,19 @@ class TestSignatureUsesDefault:
         sig = SignatureAbility(name="Locked", usage="per_combat", uses_remaining=0)
         assert sig.uses_remaining == 0
 
+    def test_recharge_none_defaults_to_one(self) -> None:
+        # audit H19: recharge_5_6 signatures kept uses_remaining=None, which
+        # the executor reads as "unlimited" — the recharge roll is not
+        # implemented, so an unbounded nuke fired every single round.
+        sig = SignatureAbility(name="Breath", usage="recharge_5_6")
+        assert sig.uses_remaining == 1
+
+    def test_recharge_explicit_budget_untouched(self) -> None:
+        sig = SignatureAbility(
+            name="Breath", usage="recharge_5_6", uses_remaining=2
+        )
+        assert sig.uses_remaining == 2
+
 
 # ---------------------------------------------------------------------------
 # LLM-number clamps (audit M12)

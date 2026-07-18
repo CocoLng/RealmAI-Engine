@@ -65,6 +65,14 @@ def _make_boss(name: str = "Vellus") -> Combatant:
                 damage_type=DamageType.SLASHING,
                 to_hit_bonus=6,
             ),
+            NPCAttack(
+                name="Sand Bolt",
+                damage_dice="1d6+3",
+                damage_type=DamageType.FIRE,
+                to_hit_bonus=6,
+                range_type="ranged",
+                range_value=60,
+            ),
         ],
         signature_abilities=[
             SignatureAbility(
@@ -149,8 +157,30 @@ def _make_pc(name: str, hp: int = 25) -> Combatant:
     )
 
 
+def _make_minion(name: str = "Sand Hound") -> Combatant:
+    """A second ENEMY-side combatant — an ally from the boss's point of view."""
+    minion = _make_pc(name)
+    minion.side = CombatSide.ENEMY
+    return minion
+
+
 def _make_state(combatants: list[Combatant]) -> CombatState:
     return CombatState(combatants=combatants, round_number=2, current_turn_index=0)
+
+
+def _payload(**overrides: object) -> dict[str, object]:
+    """A schema-valid TacticalDecision payload with sane defaults."""
+    data: dict[str, object] = {
+        "action_type": "attack",
+        "target_name": "Thorin",
+        "weapon_name": "Sand Blade",
+        "signature_name": None,
+        "move_to_zone": None,
+        "reasoning": "Une raison suffisamment longue.",
+        "legendary_action_name": None,
+    }
+    data.update(overrides)
+    return data
 
 
 @pytest.fixture
@@ -295,3 +325,205 @@ def test_tactician_builds_context_with_stat_block(
     assert "Thorin" in ctx  # enemy
     assert "test party" in ctx  # party context
     assert "event1" in ctx  # recent event
+
+
+# ---------------------------------------------------------------------------
+# State-aware validation (audit H19 remainder)
+# ---------------------------------------------------------------------------
+
+
+class TestTacticianTargetLiveness:
+    """A decision may not point at a corpse, a runaway, or a friend."""
+
+    def test_rejects_dead_target(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        pc.is_alive = False
+        state = _make_state([boss, pc])
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(_payload())
+        )
+
+        with pytest.raises(ValueError, match="dead combatant"):
+            tactician.decide(boss, state, party_context="", recent_events=[])
+
+    def test_rejects_fled_target(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        pc.fled = True
+        state = _make_state([boss, pc])
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(_payload())
+        )
+
+        with pytest.raises(ValueError, match="fled combatant"):
+            tactician.decide(boss, state, party_context="", recent_events=[])
+
+    def test_rejects_attack_on_own_side(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        minion = _make_minion()
+        state = _make_state([boss, minion, _make_pc("Thorin")])
+        httpx_mock.add_response(
+            url=CHAT_URL,
+            json=make_ollama_response(_payload(target_name=minion.name)),
+        )
+
+        with pytest.raises(ValueError, match="own side"):
+            tactician.decide(boss, state, party_context="", recent_events=[])
+
+    def test_rejects_dead_target_for_signature(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        pc.is_alive = False
+        state = _make_state([boss, pc])
+        httpx_mock.add_response(
+            url=CHAT_URL,
+            json=make_ollama_response(
+                _payload(
+                    action_type="signature",
+                    weapon_name=None,
+                    signature_name="Dark Surge",
+                )
+            ),
+        )
+
+        with pytest.raises(ValueError, match="dead combatant"):
+            tactician.decide(boss, state, party_context="", recent_events=[])
+
+    def test_allows_signature_on_living_ally(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        """Side policy for signatures stays engine-side (buffs/heals target allies)."""
+        boss = _make_boss()
+        minion = _make_minion()
+        state = _make_state([boss, minion, _make_pc("Thorin")])
+        httpx_mock.add_response(
+            url=CHAT_URL,
+            json=make_ollama_response(
+                _payload(
+                    action_type="signature",
+                    weapon_name=None,
+                    signature_name="Silence Song",
+                    target_name=minion.name,
+                )
+            ),
+        )
+
+        decision = tactician.decide(boss, state, party_context="", recent_events=[])
+        assert decision.target_name == minion.name
+
+
+class TestTacticianRange:
+    """Melee across zones is refused, mirroring ``validators._check_range``."""
+
+    def test_rejects_melee_attack_across_zones(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()  # zone "Central"
+        pc = _make_pc("Thorin")
+        pc.current_zone = "Ledge"
+        state = _make_state([boss, pc])
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(_payload())
+        )
+
+        with pytest.raises(ValueError, match="out of melee range"):
+            tactician.decide(boss, state, party_context="", recent_events=[])
+
+    def test_allows_ranged_attack_across_zones(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        pc = _make_pc("Thorin")
+        pc.current_zone = "Ledge"
+        state = _make_state([boss, pc])
+        httpx_mock.add_response(
+            url=CHAT_URL,
+            json=make_ollama_response(_payload(weapon_name="Sand Bolt")),
+        )
+
+        decision = tactician.decide(boss, state, party_context="", recent_events=[])
+        assert decision.weapon_name == "Sand Bolt"
+
+    def test_zoneless_combat_allows_melee(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        boss.current_zone = None
+        pc = _make_pc("Thorin")
+        pc.current_zone = None
+        state = _make_state([boss, pc])
+        httpx_mock.add_response(
+            url=CHAT_URL, json=make_ollama_response(_payload())
+        )
+
+        decision = tactician.decide(boss, state, party_context="", recent_events=[])
+        assert decision.weapon_name == "Sand Blade"
+
+
+class TestTacticianSignatureBudget:
+    """An exhausted signature can never be spent again this combat."""
+
+    def test_rejects_exhausted_signature(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        assert boss.stat_block is not None
+        boss.stat_block.signature_abilities[1].uses_remaining = 0
+        state = _make_state([boss, _make_pc("Thorin")])
+        httpx_mock.add_response(
+            url=CHAT_URL,
+            json=make_ollama_response(
+                _payload(
+                    action_type="signature",
+                    weapon_name=None,
+                    signature_name="Dark Surge",
+                )
+            ),
+        )
+
+        with pytest.raises(ValueError, match="no uses remaining"):
+            tactician.decide(boss, state, party_context="", recent_events=[])
+
+    def test_allows_signature_with_budget(
+        self, httpx_mock: HTTPXMock, tactician: NPCTactician
+    ) -> None:
+        boss = _make_boss()
+        state = _make_state([boss, _make_pc("Thorin")])
+        httpx_mock.add_response(
+            url=CHAT_URL,
+            json=make_ollama_response(
+                _payload(
+                    action_type="signature",
+                    weapon_name=None,
+                    signature_name="Dark Surge",
+                )
+            ),
+        )
+
+        decision = tactician.decide(boss, state, party_context="", recent_events=[])
+        assert decision.signature_name == "Dark Surge"
+
+    def test_context_marks_exhausted_signature_unavailable(
+        self, tactician: NPCTactician
+    ) -> None:
+        """Don't offer the LLM a move it is not allowed to make."""
+        boss = _make_boss()
+        assert boss.stat_block is not None
+        boss.stat_block.signature_abilities[1].uses_remaining = 0
+        ctx = tactician._build_context(
+            boss, _make_state([boss, _make_pc("Thorin")]), "", [],
+        )
+
+        surge_line = next(
+            line for line in ctx.splitlines() if line.startswith("- Dark Surge")
+        )
+        assert "UNAVAILABLE" in surge_line

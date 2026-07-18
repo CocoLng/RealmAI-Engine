@@ -122,6 +122,9 @@ ActionCost = Literal["action", "bonus", "reaction"]
 
 SignatureUsage = Literal["at_will", "per_combat", "per_day", "recharge_5_6"]
 
+_LIMITED_USAGES: frozenset[str] = frozenset({"per_combat", "per_day", "recharge_5_6"})
+"""Usages that must carry a finite budget — everything but ``at_will``."""
+
 
 # ---------------------------------------------------------------------------
 # Models — building blocks
@@ -207,10 +210,17 @@ class SignatureAbility(BaseModel):
 
         LLM-generated stat blocks routinely omit ``uses_remaining``. The
         executor only decrements integers, so ``None`` on a per_combat /
-        per_day signature meant unlimited uses. ``0`` is preserved — that
-        is how phase-locked signatures are represented before unlock.
+        per_day / recharge_5_6 signature meant unlimited uses. ``0`` is
+        preserved — that is how phase-locked signatures are represented
+        before unlock.
+
+        ``recharge_5_6`` is budgeted like ``per_combat`` on purpose: the
+        turn-start recharge roll is not implemented anywhere in the
+        engine, so leaving it unbounded made the "recharges on 5-6" nuke
+        fire every single round. Once-per-combat is the conservative
+        reading until the recharge roll lands.
         """
-        if self.usage in ("per_combat", "per_day") and self.uses_remaining is None:
+        if self.usage in _LIMITED_USAGES and self.uses_remaining is None:
             self.uses_remaining = 1
         return self
 

@@ -29,6 +29,21 @@ _SYSTEM_PROMPT = (
 ).read_text()
 
 
+def _in_range(attacker: Combatant, target: Combatant, range_type: str) -> bool:
+    """Zone-aware range gate mirroring ``engine.validators._check_range``.
+
+    Melee and reach attacks require the same zone; ranged attacks carry
+    across zones. Combats where either side is unzoned are treated as
+    zoneless — everyone is in range, exactly as the player-side validator
+    does.
+    """
+    if attacker.current_zone is None or target.current_zone is None:
+        return True
+    if attacker.current_zone == target.current_zone:
+        return True
+    return range_type == "ranged"
+
+
 class NPCTactician:
     """Decide a boss NPC's turn via a single LLM call.
 
@@ -106,28 +121,54 @@ class NPCTactician:
         boss: Combatant,
         state: CombatState,
     ) -> None:
-        """Ensure the decision references real combatants, weapons, zones.
+        """Ensure the decision is legal against the real combat state.
 
-        Raises ``ValueError`` on any dangling reference — the caller
-        uses it to trigger a retry or fallback.
+        Checks, in order: every referenced name resolves (combatant,
+        signature, attack); the target is alive and has not fled; an
+        attack targets the other side and is in range; a signature still
+        has uses left this combat.
+
+        Two policies stay engine-side on purpose (see
+        ``engine.npc_ai.boss_brain._validate_decision``, the authoritative
+        gate): zone adjacency for ``move`` decisions and the
+        harmful-versus-beneficial side rule for signatures, both of which
+        need the ``Location`` object this layer never receives. This
+        method is the cheap first line — it fails the attempt before the
+        engine even has to look at it.
+
+        Raises ``ValueError`` on any violation — the caller
+        (``decide_boss_action``) counts it as a failed attempt and retries
+        or falls back on the scripted brain.
         """
+        target: Combatant | None = None
         if decision.target_name is not None:
-            known = {c.name for c in state.combatants}
-            if decision.target_name not in known:
-                raise ValueError(
-                    f"Tactician targeted unknown combatant {decision.target_name!r}"
-                )
+            target = self._require_living_target(decision.target_name, state)
 
         if decision.signature_name is not None:
             if boss.stat_block is None:
                 raise ValueError(
                     "Tactician referenced a signature but boss has no stat block"
                 )
-            sig_names = {s.name for s in boss.stat_block.signature_abilities}
-            if decision.signature_name not in sig_names:
+            signature = next(
+                (
+                    s
+                    for s in boss.stat_block.signature_abilities
+                    if s.name == decision.signature_name
+                ),
+                None,
+            )
+            if signature is None:
                 raise ValueError(
                     f"Tactician referenced unknown signature "
                     f"{decision.signature_name!r}"
+                )
+            if (
+                signature.uses_remaining is not None
+                and signature.uses_remaining <= 0
+            ):
+                raise ValueError(
+                    f"Tactician picked {signature.name!r} but it has "
+                    f"no uses remaining this combat"
                 )
 
         if decision.weapon_name is not None:
@@ -135,11 +176,41 @@ class NPCTactician:
                 raise ValueError(
                     "Tactician referenced a weapon but boss has no stat block"
                 )
-            atk_names = {a.name for a in boss.stat_block.attacks}
-            if decision.weapon_name not in atk_names:
+            attack = next(
+                (
+                    a
+                    for a in boss.stat_block.attacks
+                    if a.name == decision.weapon_name
+                ),
+                None,
+            )
+            if attack is None:
                 raise ValueError(
                     f"Tactician referenced unknown attack {decision.weapon_name!r}"
                 )
+            if decision.action_type == "attack" and target is not None:
+                if target.side == boss.side:
+                    raise ValueError(
+                        f"Tactician attacked {target.name!r}, on the boss's own side"
+                    )
+                if not _in_range(boss, target, attack.range_type):
+                    raise ValueError(
+                        f"Tactician picked {attack.name!r} but {target.name!r} is "
+                        f"out of melee range (zone {target.current_zone!r} vs "
+                        f"{boss.current_zone!r})"
+                    )
+
+    @staticmethod
+    def _require_living_target(name: str, state: CombatState) -> Combatant:
+        """Resolve ``name`` to a combatant still in the fight, or raise."""
+        target = next((c for c in state.combatants if c.name == name), None)
+        if target is None:
+            raise ValueError(f"Tactician targeted unknown combatant {name!r}")
+        if not target.is_alive:
+            raise ValueError(f"Tactician targeted dead combatant {name!r}")
+        if target.fled:
+            raise ValueError(f"Tactician targeted fled combatant {name!r}")
+        return target
 
     # ------------------------------------------------------------------
     # Prompt context
@@ -177,6 +248,10 @@ class NPCTactician:
                     budget = "(at will)"
                 elif sig.uses_remaining is None:
                     budget = "(unlimited)"
+                elif sig.uses_remaining <= 0:
+                    # Never offer a move the validator will refuse — a
+                    # spent signature costs a wasted LLM round-trip.
+                    budget = "(UNAVAILABLE — spent, do not pick)"
                 else:
                     budget = f"(uses left: {sig.uses_remaining})"
                 lines.append(f"- {sig.name} {budget}: {sig.description}")
