@@ -165,6 +165,7 @@ class CharacterSetupFlow(LoggedView):
                 self.kit_name or "",
                 self.motivation_key or "",
                 self.concept or "",
+                self.language,
             )
             await interaction.response.edit_message(
                 content="**Étape 6/6** — Vérifie ta fiche avant de la valider.",

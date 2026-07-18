@@ -50,10 +50,29 @@ deps with `uv add`, dev deps with `uv add --dev`.
 A change is **not done** until all three are green:
 
 ```bash
-uv run pytest                 # full suite (~2 200 tests)
+uv run pytest                 # full suite (~2 900 tests)
 uv run ruff check .           # linting
-uv run mypy .                 # type checking
+uv run mypy                   # type checking — zero errors, keep it that way
 ```
+
+`mypy` reads its configuration from `pyproject.toml`, so pass no arguments:
+the `files` key already covers every checked package. The gate is currently
+**green at zero errors** — a new error means your change, not pre-existing
+debt.
+
+Two deliberate exemptions, both documented inline in `pyproject.toml`:
+
+- `tests.*` is exempt. Test doubles, monkeypatched attributes and half-built
+  Discord objects are the point of a fake, and pytest is the gate that
+  actually proves them.
+- `method-assign` is tolerated under `bot/views/`. Building a Select/Button
+  and assigning its `.callback` is discord.py's documented idiom for dynamic
+  components; subclassing every component to satisfy mypy would be a large,
+  behaviour-risking refactor for no runtime benefit.
+
+Reach for `cast()` over `# type: ignore` when you know an invariant the type
+system cannot see, and say *why* in a comment. Prefer neither: an
+`isinstance` gate added purely to please mypy can silently skip real work.
 
 Useful subsets:
 

@@ -15,8 +15,14 @@ def build_setup_recap_embed(
     kit_name: str,
     motivation_key: str,
     concept: str,
+    language: str = "fr",
 ) -> discord.Embed:
-    """Build the recap embed (classic embed — works on all discord.py versions)."""
+    """Build the recap embed (classic embed — works on all discord.py versions).
+
+    ``kit_name`` and ``motivation_key`` are the canonical English keys the
+    engine stores; they are translated for display only, so step 6/6 reads
+    in the same language as the steps that produced it.
+    """
     embed = discord.Embed(
         title=f"📜 {character.name}",
         description=concept or "_Aucun concept renseigné._",
@@ -57,6 +63,16 @@ def build_setup_recap_embed(
             value=", ".join(s.value for s in character.skill_proficiencies),
             inline=False,
         )
-    embed.add_field(name="Kit de départ", value=kit_name, inline=True)
-    embed.add_field(name="Motivation", value=motivation_key, inline=True)
+    from bot.i18n import get_kit_label, get_motivation_label
+
+    embed.add_field(
+        name="Kit de départ",
+        value=get_kit_label(language, kit_name, "name") if kit_name else "",
+        inline=True,
+    )
+    embed.add_field(
+        name="Motivation",
+        value=get_motivation_label(language, motivation_key),
+        inline=True,
+    )
     return embed

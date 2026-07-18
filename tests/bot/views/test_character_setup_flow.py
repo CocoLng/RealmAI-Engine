@@ -269,3 +269,30 @@ async def test_confirm_without_preview_does_not_persist():
     on_complete.assert_not_called()
     content = interaction.response.edit_message.call_args.kwargs["content"]
     assert "n'a pas pu être finalisée" in content
+
+
+async def test_review_recap_translates_kit_and_motivation():
+    """Step 6/6 must not fall back to the canonical English keys.
+
+    The kit select (step 5/6) shows French labels; the recap used to render
+    the raw engine keys, so the same kit changed language between screens.
+    """
+    from engine.character import AbilityScores, CharacterClass, Race, Skill
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+    view.name = "Thorin"
+    view.concept = ""
+    view.race = Race.DWARF
+    view.char_class = CharacterClass.FIGHTER
+    view.ability_scores = AbilityScores(STR=15, DEX=14, CON=13, INT=12, WIS=10, CHA=8)
+    view.skill_proficiencies = [Skill.ATHLETICS]
+    view.kit_name = "Sword & Shield"
+    view.motivation_key = "Contract"
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    await view.transition_to(interaction, SetupStep.REVIEW)
+
+    embed = interaction.response.edit_message.call_args.kwargs["embed"]
+    fields = {f.name: f.value for f in embed.fields}
+    assert fields["Kit de départ"] != "Sword & Shield"
+    assert fields["Motivation"] != "Contract"
