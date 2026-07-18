@@ -1,7 +1,9 @@
 """Beat advancement embed — celebrates moving to the next story beat.
 
-Posted right after the scene embed when ``GameSession.advance_beat_if_ready``
-returns a new beat (Lot D — story progression).
+``engine.beat_progression.BeatProgressionEngine`` decides whether the arc
+advances; ``bot.pipeline.orchestrator`` commits the new beat onto
+``PipelineResult.new_beat``, and ``bot.cogs.action_handler`` posts this embed
+right after the scene embed (Lot D — story progression).
 """
 
 from __future__ import annotations

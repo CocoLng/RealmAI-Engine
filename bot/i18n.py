@@ -40,20 +40,6 @@ CLASS_LABELS: dict[str, dict[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Editable field labels (character edit menu)
-# ---------------------------------------------------------------------------
-
-EDIT_FIELD_LABELS: dict[str, dict[str, str]] = {
-    "fr": {
-        "race": "Race",
-        "class": "Classe",
-        "stats": "Statistiques",
-        "skills": "Competences",
-        "name": "Nom",
-    },
-}
-
-# ---------------------------------------------------------------------------
 # Starter kit labels
 # ---------------------------------------------------------------------------
 
