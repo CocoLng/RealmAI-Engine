@@ -51,6 +51,46 @@ def _factory_returning(db_session: _StubDBSession):
 
 
 # ---------------------------------------------------------------------------
+# Event-loop hygiene (M4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_change_location_db_work_runs_off_event_loop() -> None:
+    """M4 — synchronous SQLAlchemy (lookup + persist) must use to_thread."""
+    import threading
+
+    session = _make_session()
+    dest = Location(name="Donjon", description="dark")
+    factory_threads: list[bool] = []
+
+    def factory():
+        factory_threads.append(
+            threading.current_thread() is threading.main_thread(),
+        )
+        return _StubDBSession()
+
+    with (
+        patch("bot.world_navigation.LocationRepository") as loc_cls,
+        patch("bot.world_navigation.CampaignRepository") as camp_cls,
+        patch("bot.world_navigation.NPCRepository") as npc_cls,
+        patch("bot.scene_hydration.hydrate_scene"),
+    ):
+        loc_repo = MagicMock()
+        loc_repo.get_by_name.return_value = dest
+        loc_cls.return_value = loc_repo
+        camp_cls.return_value = MagicMock()
+        npc_repo = MagicMock()
+        npc_repo.list_by_location.return_value = []
+        npc_cls.return_value = npc_repo
+
+        await change_location(session, "Donjon", db_factory=factory)
+
+    assert factory_threads  # both DB sessions were opened...
+    assert all(on_main is False for on_main in factory_threads)
+
+
+# ---------------------------------------------------------------------------
 # DB-existing path
 # ---------------------------------------------------------------------------
 

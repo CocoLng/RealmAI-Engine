@@ -166,15 +166,18 @@ async def change_location(
     current = session.current_location
     current_name = current.name if current is not None else "unknown"
 
-    # 1. Try existing DB location.
-    dest: Location | None = None
-    db_session = db_factory()
-    try:
-        dest = LocationRepository(db_session).get_by_name(
-            destination_name, campaign_id,
-        )
-    finally:
-        db_session.close()
+    # 1. Try existing DB location. Synchronous SQLAlchemy — keep it off
+    # the event loop (M4).
+    def _load_destination() -> Location | None:
+        db_session = db_factory()
+        try:
+            return LocationRepository(db_session).get_by_name(
+                destination_name, campaign_id,
+            )
+        finally:
+            db_session.close()
+
+    dest: Location | None = await asyncio.to_thread(_load_destination)
 
     # 2. Decide whether we need to call the LLM (brand-new OR stub).
     needs_generation = dest is None or not dest.generated
@@ -229,33 +232,41 @@ async def change_location(
             ) from exc
 
     assert dest is not None
+    final_dest: Location = dest
 
-    # 3. Persist (upsert) and update campaign / npcs / stubs.
-    db_session = db_factory()
-    try:
-        loc_repo = LocationRepository(db_session)
-        if created_stub_or_full:
-            loc_repo.upsert(dest, campaign_id)
-            # Create/update stubs for every connection of the new location.
-            create_exit_stubs(
-                loc_repo,
-                dest.connections,
-                parent_name=dest.name,
-                campaign_id=campaign_id,
+    # Mutate in-memory state on the event loop — other coroutines may read
+    # the session while the persist below runs in a worker thread.
+    session.current_location = final_dest
+    session.campaign.current_location = final_dest.name
+
+    # 3. Persist (upsert) and update campaign / npcs / stubs — synchronous
+    # SQLAlchemy, off the event loop (M4).
+    def _persist_and_reload_npcs() -> list:
+        db_session = db_factory()
+        try:
+            loc_repo = LocationRepository(db_session)
+            if created_stub_or_full:
+                loc_repo.upsert(final_dest, campaign_id)
+                # Create/update stubs for every connection of the new location.
+                create_exit_stubs(
+                    loc_repo,
+                    final_dest.connections,
+                    parent_name=final_dest.name,
+                    campaign_id=campaign_id,
+                )
+
+            CampaignRepository(db_session).update(session.campaign)
+
+            npcs = NPCRepository(db_session).list_by_location(
+                final_dest.name, campaign_id,
             )
+            db_session.commit()
+            return npcs
+        finally:
+            db_session.close()
 
-        # Mutate in-memory state.
-        session.current_location = dest
-        session.campaign.current_location = dest.name
-
-        CampaignRepository(db_session).update(session.campaign)
-
-        npcs = NPCRepository(db_session).list_by_location(dest.name, campaign_id)
-        session.npcs = {n.name: n for n in npcs}
-
-        db_session.commit()
-    finally:
-        db_session.close()
+    npcs = await asyncio.to_thread(_persist_and_reload_npcs)
+    session.npcs = {n.name: n for n in npcs}
 
     # Lot G — hydrate npcs_present into real NPC rows for the new location.
     # Done AFTER the location was committed so the row exists.

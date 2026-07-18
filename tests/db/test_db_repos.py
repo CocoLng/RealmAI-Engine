@@ -458,6 +458,67 @@ class TestLocationRepository:
         assert result is not None
         assert result.item_descriptions == {"Healing Potion": "A red vial."}
 
+    def test_update_persists_combat_triggers_and_npc_roles(
+        self, db_session: Session, sample_campaign: Campaign, sample_location: Location,
+    ) -> None:
+        """H6 — ambush triggers and NPC roles must survive update().
+
+        Losing them on the first save/reload erased generated ambushes,
+        re-spawned enemies as 8-HP commoners, and made consumed triggers
+        re-farmable.
+        """
+        from world.combat_trigger_def import CombatTriggerDef
+
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        repo.save(sample_location, sample_campaign.id)
+        db_session.commit()
+
+        updated = sample_location.model_copy(update={
+            "combat_triggers": {
+                "levier": CombatTriggerDef(
+                    item_name="levier",
+                    spawn_npcs=["Squelette"],
+                    consumed=True,
+                ),
+            },
+            "npc_roles": {"Garde": "soldier"},
+        })
+        repo.update(updated, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_location.name, sample_campaign.id)
+        assert result is not None
+        assert "levier" in result.combat_triggers
+        assert result.combat_triggers["levier"].spawn_npcs == ["Squelette"]
+        assert result.combat_triggers["levier"].consumed is True
+        assert result.npc_roles == {"Garde": "soldier"}
+
+    def test_upsert_persists_combat_triggers_and_npc_roles(
+        self, db_session: Session, sample_campaign: Campaign, sample_location: Location,
+    ) -> None:
+        """H6 — same guarantee on the upsert (existing-row) path."""
+        from world.combat_trigger_def import CombatTriggerDef
+
+        CampaignRepository(db_session).save(sample_campaign)
+        repo = LocationRepository(db_session)
+        repo.save(sample_location, sample_campaign.id)
+        db_session.commit()
+
+        updated = sample_location.model_copy(update={
+            "combat_triggers": {
+                "coffre": CombatTriggerDef(item_name="coffre", spawn_npcs=["Mimic"]),
+            },
+            "npc_roles": {"Aubergiste": "commoner"},
+        })
+        repo.upsert(updated, sample_campaign.id)
+        db_session.commit()
+
+        result = repo.get_by_name(sample_location.name, sample_campaign.id)
+        assert result is not None
+        assert result.combat_triggers["coffre"].spawn_npcs == ["Mimic"]
+        assert result.npc_roles == {"Aubergiste": "commoner"}
+
     def test_update_missing_raises(self, db_session: Session, sample_location: Location) -> None:
         repo = LocationRepository(db_session)
         with pytest.raises(ValueError, match="not found"):

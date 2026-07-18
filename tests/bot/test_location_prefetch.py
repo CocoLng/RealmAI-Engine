@@ -19,6 +19,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import bot.location_prefetch as location_prefetch
 from bot.location_prefetch import (
@@ -37,7 +38,14 @@ from world.location import Location
 
 @pytest.fixture()
 def db_factory():
-    engine = create_engine("sqlite:///:memory:")
+    # StaticPool + check_same_thread=False mirror db.database.create_db_engine:
+    # persistence now runs off the event loop via asyncio.to_thread, and the
+    # default pool would hand each thread its own (empty) in-memory database.
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)
 

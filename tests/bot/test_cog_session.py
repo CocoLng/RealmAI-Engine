@@ -23,7 +23,7 @@ from db.repositories import (
     QuestRepository,
 )
 from engine.character import AbilityScores, CharacterClass, Race, create_character
-from engine.combat import CombatSide, CombatState, Combatant
+from engine.combat import CombatEndReason, CombatSide, CombatState, Combatant
 from engine.inventory import create_inventory
 from world.campaign import Campaign
 from world.location import Location
@@ -238,6 +238,272 @@ class TestResume:
         assert interaction.followup.send.call_args[1].get("ephemeral") is True
 
 
+def _make_combat_state(
+    *,
+    is_active: bool = True,
+    pc_zone: str | None = None,
+    enemy_zone: str | None = None,
+) -> CombatState:
+    """An active (or finished) PC-vs-goblin combat state for resume tests."""
+    char = create_character(
+        "Hero", Race.HUMAN, CharacterClass.FIGHTER,
+        AbilityScores(STR=16, DEX=12, CON=14, INT=10, WIS=13, CHA=8),
+    )
+    pc = Combatant(
+        name="Hero", side=CombatSide.PLAYER,
+        character=char, inventory=create_inventory(), initiative=15,
+        current_zone=pc_zone,
+    )
+    goblin_char = create_character(
+        "Goblin", Race.HUMAN, CharacterClass.FIGHTER,
+        AbilityScores(STR=10, DEX=12, CON=10, INT=8, WIS=8, CHA=6),
+    )
+    goblin = Combatant(
+        name="Goblin", side=CombatSide.ENEMY,
+        character=goblin_char, inventory=create_inventory(), initiative=10,
+        current_zone=enemy_zone,
+    )
+    return CombatState(
+        combatants=[pc, goblin],
+        round_number=2,
+        current_turn_index=0,
+        is_active=is_active,
+        end_reason=None if is_active else CombatEndReason.VICTORY,
+    )
+
+
+class TestResumeCombatRebuild:
+    """C5 — /resume must rebuild the TurnManager for an active combat."""
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_active_combat_rebuilds_turn_manager(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        persisted_campaign.combat_state_json = _make_combat_state().model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+
+        turn_manager = MagicMock()
+        turn_manager._prompt_turn = AsyncMock()
+        combat_cog = MagicMock()
+        combat_cog.build_turn_manager = MagicMock(return_value=turn_manager)
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        session = cog.bot.sessions[CHANNEL_ID]
+        combat_cog.build_turn_manager.assert_called_once_with(
+            interaction.channel, session,
+        )
+        assert session.combat_turn_manager is turn_manager
+        turn_manager._prompt_turn.assert_awaited_once()
+        prompted = turn_manager._prompt_turn.call_args[0][0]
+        assert prompted.name == "Hero"
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_inactive_combat_does_not_rebuild(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """A finished-combat snapshot must not resurrect a TurnManager."""
+        persisted_campaign.combat_state_json = (
+            _make_combat_state(is_active=False).model_dump_json()
+        )
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+
+        combat_cog = MagicMock()
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        session = cog.bot.sessions[CHANNEL_ID]
+        combat_cog.build_turn_manager.assert_not_called()
+        assert session.combat_turn_manager is None
+        msg = interaction.followup.send.call_args[0][0]
+        assert "combat en cours" not in msg
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_combat_rebuild_failure_does_not_break_resume(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """A TurnManager rebuild failure degrades gracefully — session stays up."""
+        persisted_campaign.combat_state_json = _make_combat_state().model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+
+        combat_cog = MagicMock()
+        combat_cog.build_turn_manager = MagicMock(side_effect=RuntimeError("boom"))
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert CHANNEL_ID in cog.bot.sessions
+        assert cog.bot.sessions[CHANNEL_ID].combat_turn_manager is None
+
+
+class TestResumeZoneSanitation:
+    """H4 — combatant.current_zone must match the zones actually loaded."""
+
+    def _arm_combat_cog(self, cog: SessionCog) -> None:
+        turn_manager = MagicMock()
+        turn_manager._prompt_turn = AsyncMock()
+        combat_cog = MagicMock()
+        combat_cog.build_turn_manager = MagicMock(return_value=turn_manager)
+        cog.bot.get_cog = MagicMock(return_value=combat_cog)
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_orphan_zone_reassigned_by_side(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """PC lands in the first zone, enemy in the last — initial layout."""
+        from world.combat_zone import Zone
+
+        loc = Location(
+            name="Bridge",
+            combat_zones=[
+                Zone(name="Front", adjacent_zone_names=["Back"]),
+                Zone(name="Back", adjacent_zone_names=["Front"]),
+            ],
+        )
+        LocationRepository(db_session).save(loc, persisted_campaign.id)
+        persisted_campaign.current_location = "Bridge"
+        persisted_campaign.combat_state_json = _make_combat_state(
+            pc_zone="Disparue", enemy_zone="Disparue",
+        ).model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+        self._arm_combat_cog(cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        state = cog.bot.sessions[CHANNEL_ID].combat_state
+        assert state is not None
+        zones = {c.name: c.current_zone for c in state.combatants}
+        assert zones["Hero"] == "Front"
+        assert zones["Goblin"] == "Back"
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_zones_cleared_when_location_has_none(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """Zone-less location (e.g. zones dropped by H4) → zone-less combat."""
+        loc = Location(name="Cellar", description="No zones here")
+        LocationRepository(db_session).save(loc, persisted_campaign.id)
+        persisted_campaign.current_location = "Cellar"
+        persisted_campaign.combat_state_json = _make_combat_state(
+            pc_zone="Ghost", enemy_zone="Ghost",
+        ).model_dump_json()
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+        self._arm_combat_cog(cog)
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        state = cog.bot.sessions[CHANNEL_ID].combat_state
+        assert state is not None
+        assert all(c.current_zone is None for c in state.combatants)
+
+
+class TestResumeCorruptBlobs:
+    """H3 — corrupt saved JSON must not brick /resume with a raw traceback."""
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_corrupt_combat_state_dropped_with_warning(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """Unparseable combat_state → dropped, combat over, exploration on."""
+        persisted_campaign.combat_state_json = '{"combatants": "nope"}'
+        CampaignRepository(db_session).update(persisted_campaign)
+        db_session.flush()
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert CHANNEL_ID in cog.bot.sessions
+        session = cog.bot.sessions[CHANNEL_ID]
+        assert session.combat_state is None
+        assert session.campaign.combat_state_json is None
+        sent = [
+            str(c.args[0]) for c in interaction.followup.send.call_args_list if c.args
+        ]
+        assert all("combat en cours" not in m for m in sent)
+        assert any("illisible" in m for m in sent)
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_corrupt_character_aborts_with_explicit_message(
+        self,
+        mock_ai: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+        db_session: Session,
+    ) -> None:
+        """A drifted character blob names the faulty field instead of crashing."""
+        from db.models import PlayerCharacterRow
+
+        db_session.add(
+            PlayerCharacterRow(
+                discord_user_id=USER_ID,
+                campaign_id=persisted_campaign.id,
+                character_json='{"name": "Ghost"}',
+                inventory_json="{}",
+            ),
+        )
+        db_session.flush()
+
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert CHANNEL_ID not in cog.bot.sessions
+        interaction.followup.send.assert_called_once()
+        msg = interaction.followup.send.call_args[0][0]
+        assert "corrompue" in msg
+        assert "Character" in msg
+        assert "champ" in msg
+
+
 # ---------------------------------------------------------------------------
 # /save
 # ---------------------------------------------------------------------------
@@ -263,13 +529,39 @@ class TestSave:
 
         await cog.save.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
 
-        interaction.response.send_message.assert_called_once()
-        assert "sauvegardee" in interaction.response.send_message.call_args[0][0]
+        # M4 — /save defers, persists off-loop, then confirms via followup.
+        interaction.response.defer.assert_called_once()
+        interaction.followup.send.assert_called_once()
+        assert "sauvegardee" in interaction.followup.send.call_args[0][0]
 
         # Verify DB was updated
         reloaded = CampaignRepository(db_session).get_by_id(persisted_campaign.id)
         assert reloaded is not None
         assert reloaded.interaction_count == 42
+
+    @pytest.mark.asyncio
+    async def test_save_persists_off_event_loop(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M4 — synchronous SQLAlchemy must not run on the event loop."""
+        import threading
+
+        session = GameSession(campaign=persisted_campaign)
+        cog.bot.sessions[CHANNEL_ID] = session
+        seen: dict[str, bool] = {}
+
+        def spy(db_factory: object, sess: object) -> None:
+            seen["on_main_thread"] = (
+                threading.current_thread() is threading.main_thread()
+            )
+
+        with patch("bot.cogs.session.persist_session", side_effect=spy):
+            await cog.save.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert seen["on_main_thread"] is False
 
     @pytest.mark.asyncio
     async def test_save_persists_characters(
@@ -371,6 +663,90 @@ class TestEndCampaign:
         interaction.response.defer.assert_not_called()
         # Session is still alive
         assert CHANNEL_ID in cog.bot.sessions
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_tears_down_turn_manager(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M3 — /end_campaign must dismantle the live combat UI.
+
+        Without teardown the auto-dodge watcher and button views outlive
+        the session and resurrect it, posting into the archived channel.
+        """
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        turn_manager = MagicMock()
+        view = MagicMock()
+        turn_manager.current_view = view
+        turn_manager._finalized = False
+        session.combat_turn_manager = turn_manager
+        session.combat_state = _make_combat_state()
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        turn_manager._cancel_timeout.assert_called_once()
+        view.stop.assert_called_once()
+        assert turn_manager._finalized is True
+        assert session.combat_turn_manager is None
+        assert CHANNEL_ID not in cog.bot.sessions
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_persists_off_event_loop(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M4 — /end_campaign's persist must not block the event loop."""
+        import threading
+
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+        seen: dict[str, bool] = {}
+
+        def spy(db_factory: object, sess: object) -> None:
+            seen["on_main_thread"] = (
+                threading.current_thread() is threading.main_thread()
+            )
+
+        with patch("bot.cogs.session.persist_session", side_effect=spy):
+            await cog.end_campaign.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        assert seen["on_main_thread"] is False
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.archive_channel")
+    async def test_end_waits_for_in_flight_action(
+        self,
+        mock_archive: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+    ) -> None:
+        """M3 — teardown must serialize behind session.action_lock."""
+        import asyncio
+
+        session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
+        cog.bot.sessions[CHANNEL_ID] = session
+
+        await session.action_lock.acquire()  # an action pipeline is running
+        task = asyncio.create_task(
+            cog.end_campaign.callback(cog, interaction),  # type: ignore[call-arg, arg-type]
+        )
+        await asyncio.sleep(0.05)
+        assert not task.done()  # blocked on the lock
+        assert CHANNEL_ID in cog.bot.sessions  # not torn down mid-action
+
+        session.action_lock.release()
+        await task
+        assert CHANNEL_ID not in cog.bot.sessions
 
     @pytest.mark.asyncio
     @patch("bot.cogs.session.archive_channel")
@@ -493,6 +869,210 @@ class TestSettings:
         interaction.response.send_message.assert_called_once()
         assert interaction.response.send_message.call_args[1].get("ephemeral") is True
 
+    @pytest.mark.asyncio
+    async def test_invalid_language_rejected_not_persisted(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        """H7 — 'French' must be refused, not persisted as a poison row.
+
+        model_copy(update=...) does not validate in Pydantic v2; a bad
+        language used to be written to DB and every subsequent
+        guild_config_from_db raised, killing /start_campaign, /resume and
+        /settings for the whole guild.
+        """
+        await cog.settings.callback(cog, interaction, None, "French")  # type: ignore[call-arg, arg-type]
+
+        interaction.response.send_message.assert_called_once()
+        msg = interaction.response.send_message.call_args[0][0]
+        assert "invalide" in msg.lower()
+        assert interaction.response.send_message.call_args[1].get("ephemeral") is True
+        assert GuildConfigRepository(db_session).get(GUILD_ID) is None
+
+    @pytest.mark.asyncio
+    async def test_language_normalized_before_persist(
+        self,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        """' EN ' is tolerated: trimmed + lowercased, then validated."""
+        await cog.settings.callback(cog, interaction, None, " EN ")  # type: ignore[call-arg, arg-type]
+
+        config = GuildConfigRepository(db_session).get(GUILD_ID)
+        assert config is not None
+        assert config.language == "en"
+
+
+# ---------------------------------------------------------------------------
+# Lobby launch re-entrance (M2)
+# ---------------------------------------------------------------------------
+
+
+class TestLobbyLaunchReentrance:
+    """M2 — double-clicking Démarrer must not launch the campaign twice."""
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_session_channel")
+    async def test_double_click_launches_once(
+        self,
+        mock_create_channel: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        import asyncio
+
+        from bot.lobby_state import LobbyPlayerStatus
+
+        channel = AsyncMock()
+        channel.id = 999_001
+        channel.name = "aventure"
+        channel.mention = "#aventure"
+        channel.send = AsyncMock(return_value=AsyncMock())
+        mock_create_channel.return_value = channel
+
+        with patch.object(
+            SessionCog, "_pregenerate_campaign_world", new=AsyncMock(),
+        ):
+            await cog.start_campaign.callback(  # type: ignore[call-arg, arg-type]
+                cog, interaction, "Theme sombre",
+            )
+
+        lobby = cog.bot.lobbies[channel.id]
+        lobby.add_player(USER_ID)
+        record = lobby.players[USER_ID]
+        record.character = create_character(
+            "Hero", Race.HUMAN, CharacterClass.FIGHTER,
+            AbilityScores(STR=16, DEX=12, CON=14, INT=10, WIS=13, CHA=8),
+        )
+        record.inventory = create_inventory()
+        record.status = LobbyPlayerStatus.READY
+
+        view = channel.send.call_args_list[0].kwargs["view"]
+
+        launch_started = asyncio.Event()
+        launch_release = asyncio.Event()
+        launch_calls: list[int] = []
+
+        async def slow_launch(**kwargs: object) -> None:
+            launch_calls.append(1)
+            if len(launch_calls) == 1:
+                launch_started.set()
+                await launch_release.wait()
+
+        def make_click() -> AsyncMock:
+            click = AsyncMock()
+            click.user = MagicMock()
+            click.user.id = USER_ID  # the host
+            click.response = AsyncMock()
+            click.response.is_done = MagicMock(return_value=False)
+            return click
+
+        with patch.object(cog, "_launch_campaign_from_lobby", side_effect=slow_launch):
+            first = asyncio.create_task(view._on_launch(make_click(), view))
+            await launch_started.wait()
+
+            second_click = make_click()
+            await view._on_launch(second_click, view)  # double-click mid-launch
+
+            launch_release.set()
+            await first
+
+        assert len(launch_calls) == 1
+        # The second click got an ephemeral "already launching" notice.
+        second_click.response.send_message.assert_called_once()
+        assert second_click.response.send_message.call_args[1].get("ephemeral") is True
+
+
+# ---------------------------------------------------------------------------
+# Lobby TTL (low — abandoned lobbies never expired)
+# ---------------------------------------------------------------------------
+
+
+class TestLobbyTTL:
+    """Abandoned lobbies must expire instead of leaking forever."""
+
+    @pytest.mark.asyncio
+    async def test_abandoned_lobby_expires(self, cog: SessionCog) -> None:
+        channel = AsyncMock()
+        channel.id = 555
+        lobby = MagicMock()
+        lobby.pregen_task = None
+        lobby.lobby_message = AsyncMock()
+        view = MagicMock()
+        cog.bot.lobbies[channel.id] = lobby
+
+        await cog._expire_lobby_after(channel, lobby, view, delay=0)
+
+        assert channel.id not in cog.bot.lobbies
+        view.stop.assert_called_once()
+        channel.send.assert_awaited_once()
+        assert "expiré" in channel.send.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_launched_lobby_is_left_alone(self, cog: SessionCog) -> None:
+        """A lobby that already launched (popped from the registry) is a no-op."""
+        channel = AsyncMock()
+        channel.id = 556
+        lobby = MagicMock()
+        view = MagicMock()
+        # Registry no longer holds THIS lobby.
+        cog.bot.lobbies.pop(channel.id, None)
+
+        await cog._expire_lobby_after(channel, lobby, view, delay=0)
+
+        view.stop.assert_not_called()
+        channel.send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_expiry_cancels_running_pregen(self, cog: SessionCog) -> None:
+        import asyncio
+
+        channel = AsyncMock()
+        channel.id = 557
+        lobby = MagicMock()
+        lobby.lobby_message = None
+        lobby.pregen_task = asyncio.create_task(asyncio.sleep(3600))
+        view = MagicMock()
+        cog.bot.lobbies[channel.id] = lobby
+
+        await cog._expire_lobby_after(channel, lobby, view, delay=0)
+        await asyncio.sleep(0)  # let the cancellation propagate
+
+        assert lobby.pregen_task.cancelled()
+
+    @pytest.mark.asyncio
+    @patch("bot.cogs.session.create_session_channel")
+    async def test_start_campaign_schedules_ttl(
+        self,
+        mock_create_channel: AsyncMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        db_session: Session,
+    ) -> None:
+        channel = AsyncMock()
+        channel.id = 999_002
+        channel.name = "aventure"
+        channel.mention = "#aventure"
+        channel.send = AsyncMock(return_value=AsyncMock())
+        mock_create_channel.return_value = channel
+
+        with patch.object(
+            SessionCog, "_pregenerate_campaign_world", new=AsyncMock(),
+        ):
+            await cog.start_campaign.callback(  # type: ignore[call-arg, arg-type]
+                cog, interaction, "Theme sombre",
+            )
+
+        try:
+            assert channel.id in cog._lobby_ttl_tasks
+        finally:
+            for task in cog._lobby_ttl_tasks.values():
+                task.cancel()
+
 
 # ---------------------------------------------------------------------------
 # Round-trip integration tests (real in-memory SQLite, no mocks)
@@ -510,6 +1090,43 @@ def db_factory():
 
 class TestPersistSessionRoundTrip:
     """Full save -> load round-trip through real DB."""
+
+    def test_location_mutations_roundtrip(self, db_factory):
+        """H5 — beat effects mutate the live location; /save must persist it.
+
+        The orchestrator unlocks exits, sets state flags, and spawns
+        NPCs/items on the in-memory location while persisting the advanced
+        arc. Without the location in the same save, a restart regresses the
+        world but not the story — soft-locking the arc.
+        """
+        from bot.persistence import persist_session
+
+        campaign = Campaign(id="rt-loc", name="Loc Persist", current_location="Plaza")
+        loc = Location(name="Plaza", description="Open square")
+
+        db = db_factory()
+        CampaignRepository(db).save(campaign)
+        LocationRepository(db).save(loc, campaign.id)
+        db.commit()
+        db.close()
+
+        session = GameSession(campaign=campaign, current_location=loc)
+        # Orchestrator-style beat-effect mutations (in memory only).
+        loc.unlocked_exits.append("Crypte")
+        loc.state_flags["porte_ouverte"] = True
+        loc.npcs_present.append("Gardien")
+        loc.items_available.append("Clef ancienne")
+
+        persist_session(db_factory, session)
+
+        db = db_factory()
+        restored = LocationRepository(db).get_by_name("Plaza", campaign.id)
+        db.close()
+        assert restored is not None
+        assert "Crypte" in restored.unlocked_exits
+        assert restored.state_flags.get("porte_ouverte") is True
+        assert "Gardien" in restored.npcs_present
+        assert "Clef ancienne" in restored.items_available
 
     def test_combat_state_roundtrip(self, db_factory):
         """Save a session with combat, reload campaign, verify combat JSON."""

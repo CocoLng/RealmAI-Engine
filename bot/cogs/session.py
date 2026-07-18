@@ -42,6 +42,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Abandoned lobbies (host never clicked Démarrer) are expired after this
+# delay so they stop leaking registry entries, views, and pregen results.
+_LOBBY_TTL_SECONDS = 2 * 60 * 60
+
 
 class _CampaignChannelArcStore:
     """Adapts CampaignChannelRepository to the ArcTrackerStore Protocol.
@@ -74,11 +78,97 @@ class _CampaignChannelArcStore:
             db_session.close()
 
 
+def _sanitize_combat_zones(combat_state: Any, location: Any) -> int:
+    """Realign every ``combatant.current_zone`` with the loaded location (H4).
+
+    A combat state can reference zones that no longer exist — either the
+    location's zones were dropped wholesale by ``location_from_db`` (one
+    invalid entry disables them all) or the location itself changed. Orphan
+    zone names would crash range checks and zone moves mid-combat.
+
+    Zone-less location → every combatant goes zone-less. Otherwise orphans
+    are re-seated like the initial layout: players in the first zone,
+    enemies in the last. Returns the number of combatants fixed.
+    """
+    from engine.combat import CombatSide
+
+    fixed = 0
+    zones = list(location.combat_zones) if location is not None else []
+    if not zones:
+        for combatant in combat_state.combatants:
+            if combatant.current_zone is not None:
+                combatant.current_zone = None
+                fixed += 1
+        return fixed
+
+    valid_names = {zone.name for zone in zones}
+    for combatant in combat_state.combatants:
+        zone_name = combatant.current_zone
+        if zone_name is not None and zone_name not in valid_names:
+            combatant.current_zone = (
+                zones[0].name
+                if combatant.side == CombatSide.PLAYER
+                else zones[-1].name
+            )
+            fixed += 1
+    return fixed
+
+
 class SessionCog(commands.Cog):
     """Campaign lifecycle: start, resume, save, end, settings."""
 
     def __init__(self, bot: RealmBot) -> None:
         self.bot = bot
+        self._lobby_ttl_tasks: dict[int, asyncio.Task[None]] = {}
+
+    # ------------------------------------------------------------------
+    # Lobby TTL
+    # ------------------------------------------------------------------
+
+    def _cancel_lobby_ttl(self, channel_id: int) -> None:
+        """Cancel the expiry watcher when the lobby launches or aborts."""
+        task = self._lobby_ttl_tasks.pop(channel_id, None)
+        if task is not None:
+            task.cancel()
+
+    async def _expire_lobby_after(
+        self,
+        channel: Any,
+        lobby: LobbyState,
+        lobby_view: LobbyView,
+        delay: float,
+    ) -> None:
+        """Expire an abandoned lobby after ``delay`` seconds.
+
+        No-ops if the registry no longer holds THIS lobby (it launched or
+        was replaced). Otherwise frees the registry entry, cancels a
+        still-running pregen, stops the view, strips the buttons from the
+        lobby message, and tells the channel.
+        """
+        await asyncio.sleep(delay)
+        if self.bot.lobbies.get(channel.id) is not lobby:
+            return
+        self.bot.lobbies.pop(channel.id, None)
+        self._lobby_ttl_tasks.pop(channel.id, None)
+        if lobby.pregen_task is not None and not lobby.pregen_task.done():
+            lobby.pregen_task.cancel()
+        lobby_view.stop()
+        if lobby.lobby_message is not None:
+            try:
+                await lobby.lobby_message.edit(view=None)
+            except Exception:
+                logger.debug("lobby TTL: message edit failed", exc_info=True)
+        try:
+            await channel.send(
+                "⌛ **Lobby expiré** — relance `/start_campaign` pour "
+                "préparer une nouvelle aventure.",
+            )
+        except Exception:
+            logger.warning("lobby TTL: expiry notice send failed")
+        logger.info(
+            "SESSION lobby_expired channel=%s campaign=%r",
+            channel.id, lobby.campaign_name,
+        )
 
     # ------------------------------------------------------------------
     # /start_campaign
@@ -304,6 +394,12 @@ class SessionCog(commands.Cog):
             modal = IdentityModal(parent_view=flow)
             await inter.response.send_modal(modal)
 
+        # M2 — re-entrance guard for the Démarrer button. Checked and set
+        # synchronously (no await in between) so a double-click cannot run
+        # the launch sequence twice. Reset only if the launch fails, so the
+        # host can retry; on success the lobby is gone anyway.
+        launch_in_flight = False
+
         async def on_launch(
             inter: discord.Interaction, lobby_view: LobbyView,
         ) -> None:
@@ -312,6 +408,7 @@ class SessionCog(commands.Cog):
             Host-only is enforced upstream by ``LobbyView.launch`` — defensive
             check kept here so direct callers (test bridge, etc.) can't bypass.
             """
+            nonlocal launch_in_flight
             from bot.lobby_state import GenerationPhase
 
             if inter.user.id != creator_id:
@@ -321,6 +418,14 @@ class SessionCog(commands.Cog):
                         "Seul le host peut démarrer la campagne.", ephemeral=True,
                     )
                 return
+
+            if launch_in_flight:
+                if not inter.response.is_done():
+                    await inter.response.send_message(
+                        "Le lancement est déjà en cours...", ephemeral=True,
+                    )
+                return
+            launch_in_flight = True
 
             try:
                 await inter.response.defer()
@@ -336,6 +441,7 @@ class SessionCog(commands.Cog):
             if not ready:
                 # Should be blocked by has_any_ready, but be defensive
                 logger.warning("on_launch called with no ready players")
+                launch_in_flight = False
                 return
 
             assert channel is not None
@@ -376,14 +482,19 @@ class SessionCog(commands.Cog):
                 except discord.HTTPException:
                     pass
 
-            await self._launch_campaign_from_lobby(
-                channel=channel,
-                campaign=campaign,
-                lobby=lobby,
-                ready_players=ready,
-                language=language,
-                lobby_view=lobby_view,
-            )
+            try:
+                await self._launch_campaign_from_lobby(
+                    channel=channel,
+                    campaign=campaign,
+                    lobby=lobby,
+                    ready_players=ready,
+                    language=language,
+                    lobby_view=lobby_view,
+                )
+            except BaseException:
+                # Failed launch — let the host click Démarrer again.
+                launch_in_flight = False
+                raise
 
         # Build view + post lobby
         lobby_view = LobbyView(
@@ -434,6 +545,12 @@ class SessionCog(commands.Cog):
         lobby.pregen_task = asyncio.create_task(
             self._pregenerate_campaign_world(lobby, campaign, language),
             name=f"pregen-{campaign.id}",
+        )
+
+        # Expiry watcher — an abandoned lobby must not leak forever.
+        self._lobby_ttl_tasks[channel.id] = asyncio.create_task(
+            self._expire_lobby_after(channel, lobby, lobby_view, _LOBBY_TTL_SECONDS),
+            name=f"lobby-ttl-{campaign.id}",
         )
 
         logger.info(
@@ -759,6 +876,7 @@ class SessionCog(commands.Cog):
                 "Relance `/start_campaign` une fois le souci résolu.",
             )
             self.bot.lobbies.pop(channel.id, None)
+            self._cancel_lobby_ttl(channel.id)
             lobby_view.stop()
             return
 
@@ -830,6 +948,7 @@ class SessionCog(commands.Cog):
         # Move the lobby state to active sessions
         self.bot.sessions[channel.id] = session
         self.bot.lobbies.pop(channel.id, None)
+        self._cancel_lobby_ttl(channel.id)
         lobby_view.stop()
 
         # Purge onboarding noise so the campaign opens on a clean canvas
@@ -960,6 +1079,8 @@ class SessionCog(commands.Cog):
             )
             return
 
+        from db.mappers import CorruptSaveError
+
         # Load campaign from DB via channel mapping
         db_session = self.bot.db_factory()
         try:
@@ -988,7 +1109,16 @@ class SessionCog(commands.Cog):
 
             # Load player characters
             pc_repo = PlayerCharacterRepository(db_session)
-            pc_rows = pc_repo.get_all_for_campaign(campaign_id)
+            try:
+                pc_rows = pc_repo.get_all_for_campaign(campaign_id)
+            except CorruptSaveError as exc:
+                logger.error("resume: corrupt save campaign=%s: %s", campaign_id, exc)
+                await interaction.followup.send(
+                    f"❌ Sauvegarde corrompue — **{exc.entity}** "
+                    f"(champ `{exc.field}`) : {exc.detail}. "
+                    "La campagne ne peut pas être reprise en l'état.",
+                )
+                return
 
             # Load location
             location = None
@@ -1006,15 +1136,50 @@ class SessionCog(commands.Cog):
 
             # Load story arc
             arc_repo = StoryArcRepository(db_session)
-            story_arc = arc_repo.get_by_campaign(campaign_id)
+            try:
+                story_arc = arc_repo.get_by_campaign(campaign_id)
+            except CorruptSaveError as exc:
+                logger.error("resume: corrupt save campaign=%s: %s", campaign_id, exc)
+                await interaction.followup.send(
+                    f"❌ Sauvegarde corrompue — **{exc.entity}** "
+                    f"(champ `{exc.field}`) : {exc.detail}. "
+                    "La campagne ne peut pas être reprise en l'état.",
+                )
+                return
         finally:
             db_session.close()
 
-        # Restore combat state from JSON
+        # Restore combat state from JSON. An unparseable blob (schema drift,
+        # truncated write) must not brick the campaign: drop it with a channel
+        # warning — the combat is over, exploration continues.
         combat_state = None
+        combat_state_dropped = False
         if campaign.combat_state_json:
+            from pydantic import ValidationError
+
             from engine.combat import CombatState
-            combat_state = CombatState.model_validate_json(campaign.combat_state_json)
+            try:
+                combat_state = CombatState.model_validate_json(
+                    campaign.combat_state_json,
+                )
+            except ValidationError:
+                combat_state_dropped = True
+                campaign.combat_state_json = None
+                logger.warning(
+                    "resume: dropping unparseable combat_state campaign=%s",
+                    campaign_id, exc_info=True,
+                )
+
+        # H4 — the location may have loaded zone-less (invalid zones are
+        # dropped wholesale by location_from_db). Realign every combatant's
+        # current_zone with the zones that actually exist.
+        if combat_state is not None:
+            fixed = _sanitize_combat_zones(combat_state, location)
+            if fixed:
+                logger.warning(
+                    "resume: realigned %d combatant zone(s) campaign=%s",
+                    fixed, campaign_id,
+                )
 
         # Rebuild in-memory session. ``creator_id`` is set from the resumer
         # — we don't persist it on Campaign yet, so /resume effectively
@@ -1042,14 +1207,15 @@ class SessionCog(commands.Cog):
 
         schedule_location_prefetch(session, db_factory=self.bot.db_factory)
 
+        combat_active = combat_state is not None and combat_state.is_active
         player_count = len(session.characters)
-        combat_msg = " (combat en cours !)" if combat_state else ""
+        combat_msg = " (combat en cours !)" if combat_active else ""
         npc_count = len(session.npcs)
         quest_count = len(session.quests)
         logger.info(
             "SESSION resume campaign=%s channel=%s characters=%d npcs=%d quests=%d combat=%s",
             campaign.id, channel_id, player_count, npc_count, quest_count,
-            combat_state is not None,
+            combat_active,
         )
 
         await interaction.followup.send(
@@ -1064,6 +1230,69 @@ class SessionCog(commands.Cog):
                     await interaction.channel.send(warning)
                 except Exception:
                     logger.warning("Failed to send AI warning to channel %s", channel_id)
+
+        if combat_state_dropped:
+            try:
+                await interaction.followup.send(
+                    "⚠️ L'état du combat sauvegardé était illisible — combat "
+                    "abandonné, l'exploration continue.",
+                )
+            except Exception:
+                logger.warning("resume: dropped-combat warning send failed")
+
+        # C5 — an active combat needs its TurnManager back, otherwise the
+        # resumed encounter is dead: no hub, no NPC turns, and the validator
+        # refuses every action with "pas ton tour".
+        if combat_active:
+            await self._rebuild_combat_turn_manager(session, interaction.channel)
+
+    async def _rebuild_combat_turn_manager(
+        self, session: GameSession, channel: Any,
+    ) -> None:
+        """Reattach a TurnManager to a resumed active combat and re-prompt.
+
+        Mirrors the fresh-bootstrap path in ``ActionHandlerCog`` (step 3b):
+        build via ``CombatCog.build_turn_manager``, store on the session,
+        then prompt the current combatant — which re-posts the combat hub
+        with live buttons (PC turn) or resumes the NPC brain (NPC turn).
+        Failures degrade to an exploration-only session with a channel
+        warning instead of breaking /resume.
+        """
+        state = session.combat_state
+        if channel is None or state is None:
+            return
+        combat_cog = self.bot.get_cog("CombatCog")
+        if combat_cog is None:
+            logger.warning(
+                "resume: CombatCog unavailable — combat %s resumed without "
+                "a TurnManager", state.combat_id,
+            )
+            return
+        try:
+            from engine.combat import get_current_combatant
+
+            turn_manager = combat_cog.build_turn_manager(  # type: ignore[attr-defined]
+                channel, session,
+            )
+            session.combat_turn_manager = turn_manager
+            current = get_current_combatant(state)
+            # Private by convention, but it is the exact "re-post the hub and
+            # prompt whoever's turn it is" entry point the fresh-bootstrap
+            # flow reaches through dispatch/advance.
+            await turn_manager._prompt_turn(current)
+        except Exception:
+            session.combat_turn_manager = None
+            logger.exception(
+                "resume: TurnManager rebuild failed campaign=%s",
+                session.campaign.id,
+            )
+            try:
+                await channel.send(
+                    "⚠️ Le combat sauvegardé n'a pas pu être réactivé — "
+                    "reprise en mode exploration.",
+                )
+            except Exception:
+                logger.warning("resume: combat rebuild warning send failed")
 
     # ------------------------------------------------------------------
     # /save
@@ -1081,10 +1310,19 @@ class SessionCog(commands.Cog):
             )
             return
 
-        self._persist_session(session)
+        # M4 — persist_session is synchronous SQLAlchemy and documents
+        # itself as to_thread-only; defer first so the interaction
+        # survives a slow disk.
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            logger.warning("save: interaction expired before defer()")
+            return
+
+        await asyncio.to_thread(self._persist_session, session)
         logger.info("SESSION save campaign=%s", session.campaign.id)
 
-        await interaction.response.send_message("Partie sauvegardee !", ephemeral=True)
+        await interaction.followup.send("Partie sauvegardee !", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /end_campaign
@@ -1116,19 +1354,57 @@ class SessionCog(commands.Cog):
             logger.warning("end_campaign: interaction expired before defer()")
             return
 
-        # Persist before archiving
-        self._persist_session(session)
-
-        # Clean up ChromaDB collection for this campaign (L5).
-        if session.semantic_memory is not None:
+        # M3 — serialize behind any in-flight action, dismantle the combat
+        # UI (watcher, button view, TurnManager), persist, and drop the
+        # session from the registry — all under the lock. Otherwise a live
+        # watcher or pipeline resurrects the ended session and posts into
+        # the archived channel.
+        async with session.action_lock:
+            # Cancel any still-running neighbor-prefetch loop for this
+            # campaign (H8) — done under the lock with the rest of the
+            # teardown so a stale loop cannot outlive the session and keep
+            # burning the shared background-generation gate.
             try:
-                session.semantic_memory.delete_campaign(session.campaign.id)
+                from bot.location_prefetch import cancel_for_campaign
+                cancel_for_campaign(session.campaign.id)
             except Exception:
                 logger.warning(
-                    "Failed to delete ChromaDB collection for campaign %s",
-                    session.campaign.id,
+                    "Failed to cancel location prefetch on /end_campaign",
                     exc_info=True,
                 )
+
+            turn_manager = session.combat_turn_manager
+            if turn_manager is not None:
+                try:
+                    turn_manager._cancel_timeout()
+                    if turn_manager.current_view is not None:
+                        turn_manager.current_view.stop()
+                    turn_manager._finalized = True
+                except Exception:
+                    logger.warning(
+                        "end_campaign: TurnManager teardown failed campaign=%s",
+                        session.campaign.id, exc_info=True,
+                    )
+                session.combat_turn_manager = None
+
+            # Persist before archiving (M4 — off the event loop).
+            await asyncio.to_thread(self._persist_session, session)
+
+            # Clean up ChromaDB collection for this campaign (L5).
+            if session.semantic_memory is not None:
+                try:
+                    session.semantic_memory.delete_campaign(session.campaign.id)
+                except Exception:
+                    logger.warning(
+                        "Failed to delete ChromaDB collection for campaign %s",
+                        session.campaign.id,
+                        exc_info=True,
+                    )
+
+            # Drop from the registry while still holding the lock so no new
+            # action can slip in between teardown and removal.
+            if channel_id is not None:
+                self.bot.sessions.pop(channel_id, None)
 
         logger.info(
             "SESSION end campaign=%s channel=%s",
@@ -1154,22 +1430,6 @@ class SessionCog(commands.Cog):
         guild = interaction.guild
         if channel and guild:
             await archive_channel(channel, guild)  # type: ignore[arg-type]
-
-        # Cancel any still-running neighbor-prefetch loop for this campaign
-        # (H8) — the session is about to be dropped, and a stale loop would
-        # otherwise keep burning the shared background-generation gate.
-        try:
-            from bot.location_prefetch import cancel_for_campaign
-            cancel_for_campaign(session.campaign.id)
-        except Exception:
-            logger.warning(
-                "Failed to cancel location prefetch on /end_campaign",
-                exc_info=True,
-            )
-
-        # Remove from in-memory sessions
-        if channel_id is not None and channel_id in self.bot.sessions:
-            del self.bot.sessions[channel_id]
 
     # ------------------------------------------------------------------
     # /settings
@@ -1198,10 +1458,30 @@ class SessionCog(commands.Cog):
             existing = repo.get(interaction.guild.id)
             config = existing or GuildConfig(guild_id=interaction.guild.id)
 
+            # H7 — model_copy(update=...) does NOT validate in Pydantic v2.
+            # An invalid language persisted here used to poison the row and
+            # crash every later guild_config_from_db for the guild. Merge,
+            # normalize, and validate BEFORE anything touches the DB.
+            merged = config.model_dump()
             if category is not None:
-                config = config.model_copy(update={"category_name": category})
+                merged["category_name"] = category.strip()
             if language is not None:
-                config = config.model_copy(update={"language": language})
+                merged["language"] = language.strip().lower()
+            from pydantic import ValidationError
+
+            try:
+                config = GuildConfig.model_validate(merged)
+            except ValidationError as exc:
+                fields = ", ".join(
+                    ".".join(str(part) for part in err.get("loc", ())) or "?"
+                    for err in exc.errors()
+                )
+                await interaction.response.send_message(
+                    f"❌ Paramètres invalides ({fields}). Langue attendue : "
+                    "code à 2 lettres (fr, en, es, de, pt).",
+                    ephemeral=True,
+                )
+                return
 
             repo.upsert(config)
             db_session.commit()
@@ -1221,9 +1501,9 @@ class SessionCog(commands.Cog):
         else:
             parts = []
             if category is not None:
-                parts.append(f"categorie: **{category}**")
+                parts.append(f"categorie: **{config.category_name}**")
             if language is not None:
-                parts.append(f"langue: **{language}**")
+                parts.append(f"langue: **{config.language}**")
             await interaction.response.send_message(
                 f"Mis a jour: {', '.join(parts)}", ephemeral=True,
             )

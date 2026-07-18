@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from sqlalchemy.orm import Session
 
 from engine.character import AbilityScores, CharacterClass, Race, create_character
@@ -295,15 +296,45 @@ class TestCorruptedDataResilience:
         assert len(restored.objectives) == 2
         assert restored.objectives[0].description == sample_quest.objectives[0].description
 
-    def test_corrupted_zone_is_skipped(self) -> None:
+    def test_corrupted_zone_drops_all_zones(self) -> None:
+        """H4 — one bad zone disables ALL zones for the location.
+
+        Dropping a single zone would leave orphan adjacency references and
+        make the whole Location unloadable (graph validator raises). The
+        location must load zone-less instead.
+        """
         from world.combat_zone import Zone
-        loc = Location(name="Hall", combat_zones=[Zone(name="Z1")])
+
+        loc = Location(
+            name="Hall",
+            combat_zones=[
+                Zone(name="Front", adjacent_zone_names=["Back"]),
+                Zone(name="Back", adjacent_zone_names=["Front"]),
+            ],
+        )
         row = location_to_db(loc, "c")
-        # Inject a bogus zone dict
         row.combat_zones = [row.combat_zones[0], {"bogus": "fields"}]  # missing name
         restored = location_from_db(row)
-        assert len(restored.combat_zones) == 1
-        assert restored.combat_zones[0].name == "Z1"
+        assert restored.combat_zones == []
+        assert restored.name == "Hall"
+
+    def test_orphan_adjacency_drops_all_zones(self) -> None:
+        """H4 — individually-valid zones with a broken graph load zone-less.
+
+        A zone referencing a neighbour that no longer exists used to crash
+        the whole Location load (ValueError from _validate_zones_graph) —
+        bricking /resume and MOVE for that campaign.
+        """
+        from world.combat_zone import Zone
+
+        loc = Location(name="Crypt", combat_zones=[Zone(name="Nave")])
+        row = location_to_db(loc, "c")
+        row.combat_zones = [
+            {"name": "Nave", "adjacent_zone_names": ["Ghost"]},  # orphan ref
+        ]
+        restored = location_from_db(row)
+        assert restored.combat_zones == []
+        assert restored.name == "Crypt"
 
     def test_corrupted_dialogue_entry_is_skipped(self) -> None:
         npc = NPC(
@@ -370,6 +401,94 @@ class TestPlayerCharacterMapper:
         row = player_character_to_db(1, "c", char, inv, None)
         assert "Test" in row.character_json
         assert "Human" in row.character_json
+
+
+class TestCorruptSaveErrors:
+    """H3 — drifted/corrupt JSON blobs must surface an explicit error
+    (player character, story arc) or degrade gracefully (spellcaster),
+    never crash campaign load with a raw ValidationError."""
+
+    def _pc_row(self) -> PlayerCharacterRow:
+        scores = AbilityScores(STR=16, DEX=14, CON=13, INT=10, WIS=12, CHA=8)
+        char = create_character("Thorin", Race.DWARF, CharacterClass.FIGHTER, scores)
+        return player_character_to_db(123, "camp-1", char, create_inventory(), None)
+
+    def test_corrupt_character_json_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError
+
+        row = self._pc_row()
+        row.character_json = '{"name": "Ghost"}'  # missing race/class/scores
+        with pytest.raises(CorruptSaveError) as exc_info:
+            player_character_from_db(row)
+        err = exc_info.value
+        assert err.entity == "Character"
+        assert err.field  # names the faulty field
+        assert "Character" in str(err)
+
+    def test_unparseable_character_json_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError
+
+        row = self._pc_row()
+        row.character_json = "{not even json"
+        with pytest.raises(CorruptSaveError) as exc_info:
+            player_character_from_db(row)
+        assert exc_info.value.entity == "Character"
+
+    def test_corrupt_inventory_json_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError
+
+        row = self._pc_row()
+        row.inventory_json = '{"items": 42}'
+        with pytest.raises(CorruptSaveError) as exc_info:
+            player_character_from_db(row)
+        assert exc_info.value.entity == "Inventory"
+        assert "items" in exc_info.value.field
+
+    def test_corrupt_spellcaster_json_degrades_to_none(self) -> None:
+        row = self._pc_row()
+        row.spellcaster_json = '{"bogus": 1}'  # missing spellcasting_ability
+        uid, char, inv, spell = player_character_from_db(row)
+        assert uid == 123
+        assert char.name == "Thorin"
+        assert spell is None
+
+    def test_corrupt_story_arc_raises_explicit_error(self) -> None:
+        from db.mappers import CorruptSaveError, story_arc_from_db
+        from db.models import StoryArcRow
+
+        row = StoryArcRow(
+            campaign_id="camp-1",
+            arc_json='{"campaign_id": "camp-1"}',  # missing beats/villain_name
+            current_beat_index=0,
+        )
+        with pytest.raises(CorruptSaveError) as exc_info:
+            story_arc_from_db(row)
+        assert exc_info.value.entity == "StoryArc"
+
+
+class TestGuildConfigDepoison:
+    """H7 — poisoned guild_config rows must fall back to defaults, not raise."""
+
+    def test_poisoned_language_falls_back_keeping_valid_fields(self) -> None:
+        from db.mappers import guild_config_from_db
+        from db.models import GuildConfigRow
+
+        row = GuildConfigRow(
+            guild_id=42, category_name="Mes Sessions", language="French",
+        )
+        config = guild_config_from_db(row)
+        assert config.guild_id == 42
+        assert config.language == "fr"  # poisoned field reset to default
+        assert config.category_name == "Mes Sessions"  # valid field kept
+
+    def test_valid_row_passes_through(self) -> None:
+        from db.mappers import guild_config_from_db
+        from db.models import GuildConfigRow
+
+        row = GuildConfigRow(guild_id=7, category_name="RPG", language="en")
+        config = guild_config_from_db(row)
+        assert config.language == "en"
+        assert config.category_name == "RPG"
 
 
 class TestCampaignChannelMapper:

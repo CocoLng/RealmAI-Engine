@@ -44,6 +44,45 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T", bound=BaseModel)
 
 
+class CorruptSaveError(Exception):
+    """A persisted JSON blob no longer validates against its domain model.
+
+    Raised on load paths where silently dropping the data would lose a
+    player character or the campaign's story arc. Carries the entity name
+    and the first faulty field so callers can tell the player exactly what
+    broke instead of surfacing a raw ValidationError traceback.
+    """
+
+    def __init__(self, entity: str, context: str, exc: ValidationError) -> None:
+        self.entity = entity
+        self.context = context
+        errors = exc.errors()
+        if errors:
+            first = errors[0]
+            self.field = ".".join(str(part) for part in first.get("loc", ())) or "?"
+            self.detail = str(first.get("msg", exc))
+        else:
+            self.field = "?"
+            self.detail = str(exc)
+        super().__init__(
+            f"{entity} ({context}): champ '{self.field}' — {self.detail}",
+        )
+
+
+def _validate_json_or_corrupt(
+    model_cls: type[_T],
+    raw_json: str,
+    *,
+    entity: str,
+    context: str,
+) -> _T:
+    """Validate a JSON string, raising :class:`CorruptSaveError` on failure."""
+    try:
+        return model_cls.model_validate_json(raw_json)
+    except ValidationError as exc:
+        raise CorruptSaveError(entity, context, exc) from exc
+
+
 def _validate_list(
     model_cls: type[_T],
     raw_items: list | None,
@@ -233,8 +272,27 @@ def location_to_db(location: Location, campaign_id: str) -> LocationRow:
 
 
 def location_from_db(row: LocationRow) -> Location:
-    """Convert a LocationRow to a Location domain model."""
-    return Location(
+    """Convert a LocationRow to a Location domain model.
+
+    Combat zones are all-or-nothing (H4): dropping a single invalid zone
+    would leave orphan adjacency references behind, and the Location graph
+    validator would then make the whole row unloadable — crashing /resume
+    and MOVE. If any zone entry is invalid, or the zone graph itself no
+    longer validates, ALL zones are disabled and the location loads
+    zone-less (combat falls back to the legacy spatial-free flow).
+    """
+    zones: list[Zone] = []
+    if row.combat_zones:
+        try:
+            zones = [Zone.model_validate(z) for z in row.combat_zones]
+        except ValidationError as exc:
+            logger.warning(
+                "Combat zones disabled for location %r: invalid zone entry: %s",
+                row.name, exc,
+            )
+            zones = []
+
+    fields: dict = dict(
         name=row.name,
         description=row.description,
         arrival_hook=row.arrival_hook or "",
@@ -249,9 +307,6 @@ def location_from_db(row: LocationRow) -> Location:
         state_flags=dict(row.state_flags) if row.state_flags else {},
         unlocked_exits=list(row.unlocked_exits) if row.unlocked_exits else [],
         generated=bool(row.generated),
-        combat_zones=_validate_list(
-            Zone, row.combat_zones, context=f"Location combat_zones name={row.name!r}",
-        ),
         combat_triggers=_validate_dict(
             CombatTriggerDef,
             row.combat_triggers,
@@ -262,6 +317,16 @@ def location_from_db(row: LocationRow) -> Location:
             for key, value in (row.npc_roles or {}).items()
         },
     )
+    try:
+        return Location(**fields, combat_zones=zones)
+    except ValidationError as exc:
+        if not zones:
+            raise  # not a zone problem — genuine corruption, surface it
+        logger.warning(
+            "Combat zones disabled for location %r: inconsistent zone graph: %s",
+            row.name, exc,
+        )
+        return Location(**fields, combat_zones=[])
 
 
 # ---------------------------------------------------------------------------
@@ -381,12 +446,36 @@ def guild_config_to_db(config: GuildConfig) -> GuildConfigRow:
 
 
 def guild_config_from_db(row: GuildConfigRow) -> GuildConfig:
-    """Convert a GuildConfigRow to a GuildConfig domain model."""
-    return GuildConfig(
-        guild_id=row.guild_id,
-        category_name=row.category_name,
-        language=row.language,
-    )
+    """Convert a GuildConfigRow to a GuildConfig domain model.
+
+    Rows written before /settings validated its input can hold poisoned
+    values (e.g. ``language="French"``). Each field falls back to its
+    default individually — a bad language must not kill /start_campaign,
+    /resume and /settings for the whole guild (H7).
+    """
+    try:
+        return GuildConfig(
+            guild_id=row.guild_id,
+            category_name=row.category_name,
+            language=row.language,
+        )
+    except ValidationError as exc:
+        logger.warning(
+            "Poisoned guild_config row for guild %s — resetting invalid "
+            "fields to defaults: %s",
+            row.guild_id, exc,
+        )
+        valid: dict = {"guild_id": row.guild_id}
+        for field_name, value in (
+            ("category_name", row.category_name),
+            ("language", row.language),
+        ):
+            try:
+                GuildConfig.model_validate({"guild_id": row.guild_id, field_name: value})
+            except ValidationError:
+                continue
+            valid[field_name] = value
+        return GuildConfig.model_validate(valid)
 
 
 # ---------------------------------------------------------------------------
@@ -440,13 +529,20 @@ def player_character_from_db(
     Returns:
         Tuple of (discord_user_id, Character, Inventory, SpellcasterState | None).
     """
-    character = Character.model_validate_json(row.character_json)
+    context = f"user_id={row.discord_user_id} campaign={row.campaign_id!r}"
+    character = _validate_json_or_corrupt(
+        Character, row.character_json, entity="Character", context=context,
+    )
     character = backfill_character_features(character)
-    inventory = Inventory.model_validate_json(row.inventory_json)
-    spellcaster = (
-        SpellcasterState.model_validate_json(row.spellcaster_json)
-        if row.spellcaster_json
-        else None
+    inventory = _validate_json_or_corrupt(
+        Inventory, row.inventory_json, entity="Inventory", context=context,
+    )
+    # Spellcaster state is optional — a drifted blob degrades to None
+    # (spell slots reset) instead of blocking the whole character load.
+    spellcaster = _safe_validate_json(
+        SpellcasterState,
+        row.spellcaster_json,
+        context=f"PlayerCharacter spellcaster {context}",
     )
     return row.discord_user_id, character, inventory, spellcaster
 
@@ -496,7 +592,12 @@ def story_arc_from_db(row: StoryArcRow) -> StoryArc:
     The dedicated ``current_beat_index`` column is authoritative;
     the value inside ``arc_json`` is ignored for this field.
     """
-    arc = StoryArc.model_validate_json(row.arc_json)
+    arc = _validate_json_or_corrupt(
+        StoryArc,
+        row.arc_json,
+        entity="StoryArc",
+        context=f"campaign={row.campaign_id!r}",
+    )
     if arc.current_beat_index != row.current_beat_index:
         arc = arc.model_copy(update={"current_beat_index": row.current_beat_index})
     return arc

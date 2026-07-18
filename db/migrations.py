@@ -43,7 +43,20 @@ class SchemaReport:
 
 
 def ensure_schema(engine: Engine) -> SchemaReport:
-    """Create all tables, add any missing columns, and stamp the schema version."""
+    """Create all tables, add any missing columns, and stamp the schema version.
+
+    Refuses to run against a database stamped by NEWER code: the
+    reconciliation below is forward-only, and letting an older binary
+    loose on a newer schema risks silent corruption. The stamp is written
+    only after the DDL succeeded, so a failed run never advances it.
+    """
+    existing = get_schema_version(engine)
+    if existing > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Database schema version {existing} is newer than this code's "
+            f"SCHEMA_VERSION ({SCHEMA_VERSION}) — refusing to modify it. "
+            "Update the bot instead of downgrading.",
+        )
     Base.metadata.create_all(engine)
     added = _add_missing_columns(engine)
     _stamp_version(engine, SCHEMA_VERSION)
