@@ -2,10 +2,13 @@
 
 Commit at the end of a phase, do not co author claude.
 
-> **État au 2026-07-18.** `main` = 2864 tests verts, ruff clean, mypy 63 erreurs
-> en prod / 470 avec les tests (pas de config mypy — c'est le chantier H).
-> Les 9 chantiers de l'audit 2026-06-10 sont tous mergés sauf **H**.
+> **État au 2026-07-18.** `main` = **2890 tests verts**, `ruff` clean,
+> **`mypy` 0 erreur** sur 334 fichiers. Les **9 chantiers de l'audit
+> 2026-06-10 sont clos et mergés**, les 5 critiques compris.
 > Historique détaillé des chantiers clos : `tasks/archive/`.
+>
+> Reste : les vérifications live Discord (bot en ligne requis), le jet de
+> recharge 5-6, et les fonctionnalités de jeu différées — voir plus bas.
 
 -----
 
@@ -24,11 +27,28 @@ périmètre disjoint, chacun mené en worktree isolé.
 | E. Robustesse génération | H10-H13, M6-M8, M10, M13 | ✅ mergé |
 | F. Clamps anti-triche | H20, M12, skill DC | ✅ mergé (H19 partiel) |
 | G. Mémoire 4 couches & locked facts | H9, H17 | ✅ mergé 2026-07-18 |
-| H. Porte mypy + qualité | M14 | ⬜ **seul chantier restant** |
+| H. Porte mypy + qualité | M14 | ✅ clos 2026-07-18 |
 | I. Latence | H8 | ✅ mergé |
 
 **Les 5 critiques sont clos.** C5 était le dernier ouvert ; il est tombé avec
 le merge de C.
+
+### Branches et worktrees à nettoyer
+
+Les 5 branches de chantier sont désormais toutes ancêtres de `main`. Elles et
+leurs worktrees sous `.claude/worktrees/` peuvent être supprimés — opération
+destructive, laissée à l'utilisateur :
+
+```bash
+git worktree remove .claude/worktrees/chantier-c-save-load
+git worktree remove .claude/worktrees/chantier-d-orchestrator
+git worktree remove .claude/worktrees/chantier-f-anti-cheat
+git worktree remove .claude/worktrees/chantier-g-memory
+git worktree remove .claude/worktrees/generation-robustness
+git branch -d chantier/save-load-session worktree-chantier-d-orchestrator \
+  feat/memory-coherence chantier/anti-cheat-clamps fix/generation-robustness \
+  worktree-generation-robustness
+```
 
 ### Merge des chantiers C, D, G (2026-07-18)
 
@@ -70,26 +90,39 @@ plus write-only**.
 
 -----
 
-## Chantier restant : H — porte mypy + qualité (M14)
+## Chantier H — porte mypy + qualité (M14) — CLOS 2026-07-18
 
-Le seul chantier de l'audit jamais entamé. Volontairement gardé pour la fin :
-il touche tout le repo, donc il devait passer après le merge des autres.
+Dernier chantier de l'audit. `uv run mypy` passait sans configuration et
+sortait 470 erreurs : aucune porte réelle. Désormais **0 erreur sur 334
+fichiers** (commit `c9509b3`).
 
-État actuel :
-- `pyproject.toml` n'a **aucune** section `[tool.mypy]` — mypy tourne sans
-  configuration, d'où l'absence de porte de qualité.
-- `uv run mypy .` → **470 erreurs** dans 42 fichiers.
-- `uv run mypy engine/ bot/ ai/ world/ memory/ db/` → **63 erreurs** dans
-  4 fichiers seulement. L'essentiel du bruit vient donc des tests.
-
-- [ ] H1 — ajouter `[tool.mypy]` à `pyproject.toml` (cible : code de prod
-      strict, tests plus permissifs)
-- [ ] H2 — résorber les 63 erreurs de prod. Les 4 fichiers concernés :
-      `bot/cogs/session.py` (unions de type de canal Discord sur
-      `end_campaign` / `ArcTrackerManager.remove`), `bot/utils/arc_tracker.py`,
-      `bot/views/character_setup_flow.py`, `bot/cogs/test_bridge.py`
-- [ ] H3 — décider du régime pour `tests/` (ignorer, ou assouplir par module)
-- [ ] H4 — une fois vert, documenter la porte dans `CONTRIBUTING.md`
+- [x] H1 — `[tool.mypy]` dans `pyproject.toml`. Pas `strict = true` : la
+      porte doit être verte aujourd'hui pour attraper les régressions
+      demain. `tests.*` exempté via `ignore_errors` (pytest est leur vraie
+      porte) plutôt qu'une liste de ~30 codes que personne ne maintiendrait.
+      `method-assign` toléré sur `bot/views/*` : assigner `.callback` est
+      l'idiome documenté de discord.py pour les composants dynamiques.
+- [x] H2 — les 63 erreurs de prod résorbées. **Trois vrais bugs trouvés au
+      passage, pas seulement du typage** :
+      - `CharacterSetupFlow._on_confirm` plantait (`AttributeError`) sur une
+        vue sans personnage prévisualisé, et pouvait passer `None` à
+        `on_complete` → garde + test de non-régression.
+      - `test_bridge` : `look`/`move`/`search`/`talk` cherchaient
+        `ExplorationCog`, supprimé en `5681a6b`. Le lookup renvoyait `None`
+        et la branche tombait **en silence** — un test piloté par MCP
+        n'obtenait ni réponse ni erreur. Routés vers le pipeline texte libre
+        qui les a remplacés (`_exploration_text`), avec 6 tests.
+      - `mcp_discord._serialize_components` itérait `.children` sur des
+        composants qui n'en ont pas (Components V2) → ignorés proprement.
+      Aussi : 68 `# type: ignore` morts supprimés, `arc_tracker` typé pour de
+      vrai (il annotait `object` avec le type en commentaire), 10 lambdas de
+      callback renommées (mypy compare les noms de paramètres des protocoles).
+- [x] H3 — régime `tests/` : exemptés, cf. H1.
+- [x] H4 — porte documentée dans `CONTRIBUTING.md`, avec la règle
+      « `cast()` plutôt que `# type: ignore`, et surtout pas un `isinstance`
+      ajouté pour faire plaisir à mypy — il peut sauter du travail réel en
+      silence » (leçon tirée d'une régression commise puis corrigée dans
+      cette session même).
 
 -----
 
@@ -98,20 +131,22 @@ il touche tout le repo, donc il devait passer après le merge des autres.
 Vérification de 21 plans + 24 specs contre le code réel. La quasi-totalité est
 implémentée et câblée. Reliquats réels :
 
-- [ ] **`KIT_LABELS` / `get_kit_label` sont du code mort.** `bot/i18n.py:60,214`
-      n'a aucun appelant : les options de kit de départ sont construites avec
-      le nom anglais brut (`bot/views/character_setup_flow.py:439-442`,
-      `label=k.name`), donc les kits s'affichent « Sword & Shield », « Shadow
-      Blade »… quelle que soit la langue. La Task 3 du plan i18n
-      (`docs/superpowers/plans/2026-04-06-i18n-ui-labels.md`) n'est pas
-      réellement livrée.
-- [ ] **`EDIT_FIELD_LABELS` (`bot/i18n.py:46`) est mort** — vestige des vues
-      d'édition supprimées par la refonte de création de personnage. À retirer.
-- [ ] **Message obsolète** : `bot/cogs/inventory.py:55` dit encore « Utilise
-      `/create_character` » — commande supprimée en `1a17995`.
-- [ ] **Docstring périmée** : `bot/embeds/beat_embed.py:3` référence
-      `GameSession.advance_beat_if_ready`, disparu avec le Beat Progression
-      Engine.
+- [x] **`KIT_LABELS` / `get_kit_label` câblés** (`54b4e9c`) — les kits
+      s'affichaient « Sword & Shield » quelle que soit la langue. La Task 3
+      du plan i18n est maintenant réellement livrée. La `value` de l'option
+      reste la clé anglaise canonique (le moteur indexe dessus) ; seul le
+      libellé est traduit.
+- [x] **Récap de fiche traduit** (`b5b1561`) — corollaire trouvé en câblant
+      ci-dessus : l'étape 5/6 affichait du français mais l'étape 6/6 rendait
+      encore les clés brutes, donc le même kit changeait de langue entre deux
+      écrans. `build_setup_recap_embed` prend désormais `language`.
+- [x] **`EDIT_FIELD_LABELS` supprimé** (`bea1bae`) — zéro appelant confirmé.
+- [x] **Message obsolète corrigé** (`a89ab76`) — `bot/cogs/inventory.py`
+      renvoie vers le bouton **Rejoindre** du lobby au lieu de
+      `/create_character`. C'était la seule occurrence côté joueur.
+- [x] **Docstring périmée corrigée** (`bea1bae`) — `bot/embeds/beat_embed.py`
+      décrit le vrai chemin (`BeatProgressionEngine` → `orchestrator` →
+      `action_handler`).
 - [x] **H19 (reliquat)** — clos en deux temps. `977fa26` avait déjà posé la
       garde moteur (`engine/npc_ai/boss_brain._validate_decision` : cible
       vivante / bon camp, mêlée same-zone, budget signature, zone adjacente
@@ -123,9 +158,13 @@ implémentée et câblée. Reliquats réels :
       **Reste ouvert** : le jet de recharge 5-6 en début de tour (il faudrait
       un hook tour-par-tour dans `bot/combat_turn_manager` ; en attendant, une
       capacité « recharge » vaut 1×/combat).
-- [ ] **`attune_item` / `unattune_item`** (`engine/inventory.py:338,378`) :
-      implémentés et testés, zéro appelant en production — l'attunement n'est
-      jamais exposé au joueur. Décider : câbler ou retirer.
+- [x] **`attune_item` / `unattune_item`** — décision : **on garde, dormant**.
+      Vérification faite : `grep -c "requires_attunement=True"` sur
+      `engine/inventory.py` → **0**. Aucun objet du catalogue ne requiert
+      d'attunement, donc l'API n'est pas un câblage oublié mais une capacité
+      moteur en attente d'objets magiques. Correcte, testée, sans coût
+      d'exécution — la retirer serait du churn à refaire au premier objet
+      magique. À câbler en même temps que le catalogue d'objets magiques.
 
 Non-sujets (vérifiés, à ne pas rouvrir) :
 - Le durcissement du prompt arc-generator (Task 1 du plan 2026-04-17) est
