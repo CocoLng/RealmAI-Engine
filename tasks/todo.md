@@ -115,10 +115,23 @@ sessions pilotées par script tester autonome (pattern du skill).
 
 ### 1.3 — README : GIFs + diagramme
 
-- [ ] Créer `docs/assets/`, y déposer les captures/GIFs (les sessions du 1.2
-      sont l'occasion de les enregistrer)
-- [ ] Décommenter la section Demo du README (placeholders déjà en place)
-- [ ] Diagramme d'architecture
+- [x] **Diagramme d'architecture** — flowchart Mermaid rendu nativement par
+      GitHub, remplace l'ASCII (+ statut juillet, compteurs réels ~2 890/63,
+      correction du piège `mypy .` dans Quality gates)
+- [ ] Captures/GIFs → `docs/assets/` puis décommenter la section Demo —
+      **à ta main** (il faut un client Discord graphique). Checklist de
+      capture, tout est prêt :
+      1. Le bot tourne en TEST_MODE (sinon :
+         `TEST_MODE=true uv run python -c "from bot.bot import run_bot; run_bot()"`)
+         et la campagne « Dark Fantasy » (Thorin, combat au round 2 contre le
+         Brigand) est reprise via `/resume` dans #test-realmai — ou lance une
+         partie neuve avec `/start_campaign` pour filmer le vrai lobby.
+      2. Shot 1 : `/start_campaign` → lobby → 🎭 Rejoindre → flux de création
+         (modal, race/classe, stats, compétences, kit) → récap → Démarrer.
+      3. Shot 2 : une action libre `@bot j'examine l'autel` → embed de
+         progression 6 phases → narration + mécanique brute.
+      4. Shot 3 : un tour de combat (boutons Attaque/Sort/Défense/Fuite).
+      5. Shot 4 : le message épinglé Arc Tracker (`📖 Chapitre 1 …`).
 
 ### 1.4 — Billet blog / LinkedIn
 
@@ -154,10 +167,20 @@ sessions pilotées par script tester autonome (pattern du skill).
 
 ### 2.3 — Qualité narrative
 
-- [~] Monotonie du narrateur : le run **mock-llm** ne peut pas juger la
-      garde (narrations canned identiques par construction → R2 à chaque
-      tour, artefact du mode). Run **réel Ollama** lancé le 2026-07-19 —
-      verdict à consigner ici à la fin du run.
+- [x] **Monotonie du narrateur : réglée côté narrateur** (run réel Ollama du
+      2026-07-19, 16 tours, `tests/simulation/runs/20260719_180539__seed581176`).
+      Décomposition : les 5 alertes R2 restantes tombent TOUTES sur des tours
+      à 0.0 s — des `look` répétés servis sans LLM (réaffichage déterministe
+      de la description statique du lieu), pas le narrateur. **Zéro
+      répétition sur les tours narrés** (talk/move/improvise, 25-60 s) — la
+      garde du chantier G fonctionne. (Le mock-llm ne peut pas juger : ses
+      narrations canned déclenchent R2 par construction.)
+      Suivis mineurs notés, non bloquants : le checker R2 compte le re-look
+      statique comme répétition (faux positif à affiner, ou varier les
+      re-look) ; 1 alerte R1.phantom_npc isolée (T09) à surveiller sur les
+      prochaines vraies parties ; le brainstorm du Story Director en
+      think=True sature ses 2048 tokens (~112 s perdues puis fallback propre
+      single-call — envisager think=False ou un budget dédié).
 
 -----
 
