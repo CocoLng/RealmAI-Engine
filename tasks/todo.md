@@ -60,10 +60,14 @@ pytest 7.1 s (2890 passed, 1 skipped).
 **Ceci referme d'un coup les trois vérifications live jamais faites.** Ne pas
 les traiter comme des tâches séparées — une vraie partie les couvre toutes.
 
-- [ ] Session 1 — création de perso via le lobby (couvre le smoke test C8 du
-      plan 2026-04-26 ; artefact attendu :
-      `tasks/logs/2026-04-26-lobby-live-test.txt`, le dossier `tasks/logs/`
-      n'existe pas encore)
+- [x] **Session 1 — PASS bout en bout (2026-07-19 13:04)**. Flux lobby réel
+      complet : Rejoindre → IdentityModal (Thorin, « Vétéran grisonnant ») →
+      Nain/Guerrier → stats préset → Athletics+Intimidation → Épée &
+      Bouclier/Contrat → récap → Confirmer → roster ✅ → Démarrer →
+      **narration d'ouverture 33 s après le clic** (pregen de fond déjà
+      prête — baseline d'avril : 438-478 s). Artefact :
+      `tasks/logs/2026-04-26-lobby-live-test.txt`. Piloté par script tester
+      autonome (scratchpad `c8_lobby_smoke.py`).
 - [ ] Session 2 — exploration + combat, avec mesure de latence H8. Inclure
       explicitement **un MOVE en plein prefetch** et **un round de combat
       avec prefetch actif**. Le gain annoncé (~57-80 s → <2 s) est **attendu,

@@ -1,0 +1,70 @@
+[12:58:52] tester connecté: test1-stories-bot#8543 → canal 1528353821615718451
+[12:58:52] ========================================================================
+[12:58:52] C8 LIVE SMOKE — lobby + création de personnage (protocole 2026-04-26, exécuté 2026-07-19)
+[12:58:52] ========================================================================
+[12:58:52] >>> !test lobby theme="Dark Fantasy"
+[12:58:56] <<< [1528355443917721632] embed(title='🏰 Campagne : Dark Fantasy', desc='**Thème** : Dark Fantasy\n**Host** : User 200000001', fields=['Aventuriers (0/6)':"_Personne n'a encore rejoint. Clique 🎭 Rejoindre pour entrer", '🌍 Génération du monde':"⏳ Trame narrative en cours d'écriture…"]) | button(label='Rejoindre', disabled=False) | button(label='Quitter', disabled=False) | button(label="Démarrer l'aventure", disabled=False)
+[12:58:56] <<< [1528355445348241480] content='Lobby ouvert dans <#1528353821615718451> — les joueurs peuvent rejoindre.'
+[12:58:56] <<< [1528355447000530945] content='TestBridge: lobby ouvert, message=1528355443917721632'
+[12:58:56]     (durée 4.1s)
+[12:58:56] [PASS] étape 1-2: embed lobby avec bouton Rejoindre
+[12:58:56] [PASS] thème complet « Dark Fantasy » (quoting shlex)
+[12:58:56] >>> !test player=2 click_button msg=1528355443917721632 button=Rejoindre
+[12:59:22] <<< AUCUNE réponse en 25s
+[12:59:22] >>> !test player=2 submit_modal "field_Nom du personnage=Thorin" "field_Concept (optionnel)=Vétéran grisonnant"
+[12:59:26] <<< [1528355570904731901] content='**Étape 2/6** — Choisis ta race et ta classe.' | select(placeholder='Choisis ta race...', min=1, max=1, opts=['Humain'='Human', 'Elfe'='Elf', 'Nain'='Dwarf', 'Halfelin'='Halfling', 'Demi-Orc'='Half-Orc', 'Gnome'='Gnome', 'Tieffelin'='Tiefling']) | select(placeholder='Choisis ta classe...', min=1, max=1, opts=['Guerrier'='Fighter', 'Mage'='Wizard', 'Roublard'='Rogue', 'Clerc'='Cleric', 'Rôdeur'='Ranger', 'Barbare'='Barbarian']) | button(label='Continuer', disabled=True)
+[12:59:26]     (durée 3.9s)
+[12:59:26] [PASS] étape 4: vue race/classe reçue après le modal
+[12:59:26]     races proposées: ['Human', 'Elf', 'Dwarf', 'Halfling', 'Half-Orc', 'Gnome', 'Tiefling']
+[12:59:26] >>> !test player=2 select_option msg=1528355570904731901 value=Dwarf
+[12:59:51] <<< AUCUNE réponse en 25s
+[12:59:51] >>> !test player=2 select_option msg=1528355570904731901 value=Fighter
+[13:00:17] <<< AUCUNE réponse en 25s
+[13:00:17] >>> !test player=2 click_button msg=1528355570904731901 button=Continuer
+[13:00:42] <<< AUCUNE réponse en 25s
+[13:00:42] === état actuel [1528355570904731901] content='**Étape 3/6 — Stats Fighter**  🔥 STR · CON\n_Choisis une méthode :_' | button(label='Optimisé pour Fighter', disabled=False) | button(label='Aléatoire (4d6)', disabled=False) | button(label='Continuer', disabled=True)
+[13:00:42] [PASS] étape 6: bouton « Optimisé pour ... » présent
+[13:00:42] >>> !test player=2 click_button msg=1528355570904731901 button="Optimisé pour Fighter"
+[13:01:08] <<< AUCUNE réponse en 25s
+[13:01:08] >>> !test player=2 click_button msg=1528355570904731901 button=Continuer
+[13:01:33] <<< AUCUNE réponse en 25s
+[13:01:34] === état actuel [1528355570904731901] content='**Étape 4/6** — Choisis 2 compétences pour ton Fighter.' | select(placeholder='Choisis 2 compétences...', min=2, max=2, opts=['Acrobatics (DEX)'='Acrobatics', 'Animal Handling (WIS)'='Animal Handling', 'Athletics (STR)'='Athletics', 'History (INT)'='History', 'Insight (WIS)'='Insight', 'Intimidation (CHA)'='Intimidation', 'Perception (WIS)'='Perception', 'Survival (WIS)'='Survival']) | button(label='Continuer', disabled=True)
+[13:01:34]     compétences proposées: ['Acrobatics', 'Animal Handling', 'Athletics', 'History', 'Insight', 'Intimidation', 'Perception', 'Survival']
+[13:01:34] [PASS] étape 8: deux compétences choisies ['Athletics', 'Intimidation']
+[13:01:34] >>> !test player=2 select_option msg=1528355570904731901 value=Athletics,Intimidation
+[13:01:59] <<< AUCUNE réponse en 25s
+[13:01:59] >>> !test player=2 click_button msg=1528355570904731901 button=Continuer
+[13:02:25] <<< AUCUNE réponse en 25s
+[13:02:25] === état actuel [1528355570904731901] content='**Étape 5/6** — Choisis ton équipement et ta motivation.' | select(placeholder='Choisis ton kit de départ...', min=1, max=1, opts=['Épée & Bouclier'='Sword & Shield', 'Guerrier à deux mains'='Two-Handed Warrior', 'Archer'='Archer']) | select(placeholder='Choisis ta motivation...', min=1, max=1, opts=['Contrat / Payé'='Contract', 'Dette ou vengeance'='Personal', 'Curiosité / Découverte'='Curiosity', 'Conviction / Foi'='Conviction']) | button(label='Continuer', disabled=True)
+[13:02:25]     kits: ['Sword & Shield', 'Two-Handed Warrior', 'Archer'] | motivations: ['Contract', 'Personal', 'Curiosity', 'Conviction']
+[13:02:25] [PASS] étape 9: kits et motivations proposés
+[13:02:25] >>> !test player=2 select_option msg=1528355570904731901 value="Sword & Shield"
+[13:02:50] <<< AUCUNE réponse en 25s
+[13:02:50] >>> !test player=2 select_option msg=1528355570904731901 value="Contract"
+[13:03:16] <<< AUCUNE réponse en 25s
+[13:03:16] >>> !test player=2 click_button msg=1528355570904731901 button=Continuer
+[13:03:41] <<< AUCUNE réponse en 25s
+[13:03:42] === état actuel [1528355570904731901] content='**Étape 6/6** — Vérifie ta fiche avant de la valider.' | embed(title='📜 Thorin', desc='Vétéran grisonnant', fields=['Identité':'**Dwarf Fighter** — Niveau 1', 'Caractéristiques':'```STR 15  DEX 13  CON 16\nINT 10  WIS 12  CHA  8```', 'Vie & Défense':'❤️ HP 13/13  •  🛡️ AC 11', 'Bonus de maîtrise':'+2', 'Sauvegardes maîtrisées':'STR, CON', 'Compétences':'Athletics, Intimidation', 'Kit de départ':'Épée & Bouclier', 'Motivation':'Contrat / Payé']) | button(label='Confirmer', disabled=False) | button(label='Recommencer', disabled=False) | button(label='Annuler', disabled=False)
+[13:03:42] [PASS] étape 10: récap mentionne Thorin
+[13:03:42] >>> !test player=2 click_button msg=1528355570904731901 button=Confirmer
+[13:04:07] <<< AUCUNE réponse en 25s
+[13:04:07] === état actuel [1528355443917721632] embed(title='🏰 Campagne : Dark Fantasy', desc='**Thème** : Dark Fantasy\n**Host** : User 200000001', fields=['Aventuriers (1/6)':'✅ **User 200000002** — Thorin (Dwarf Fighter)']) | button(label='Rejoindre', disabled=False) | button(label='Quitter', disabled=False) | button(label="Démarrer l'aventure", disabled=False)
+[13:04:07] [PASS] étape 12: roster du lobby affiche Thorin
+[13:04:07] --- lancement (pregen arc+lieu réelle via Ollama, patience) ---
+[13:04:07] >>> !test player=1 click_button msg=1528355443917721632 button="Démarrer l'aventure"
+[13:04:40] <<< [1528356783427420284] embed(title='「 1 」', desc="*L'aventure commence...*", footer='Dark Fantasy')
+[13:04:40] <<< [1528356806546427995] embed(title='Thorin — Nain Guerrier', desc='Niveau 1 · 13 PV · CA 11', fields=['\u200b':'```\nFOR 15(+2)  DEX 13(+1)  CON 16(+3)\nINT 10(+0)  SAG 12(+1'], footer='???')
+[13:04:40] <<< [1528356809117798411] content='━━━━━━━━━━ ✦ ━━━━━━━━━━'
+[13:04:40] <<< [1528356811424403510] embed(title='📜 Dark Fantasy', desc="Des tempêtes de cendre noircissent les vallées oubliées sous un ciel qui refuse l'aube. Les ruines d'anciens sanctuaires crachent des gaz toxiques dans une solitude absolue. L'air ", fields=['🌍 La situation':'Une griffe de glace a scindé les terres en deux, piégeant un', '🎯 Votre appel':'Vous avez répondu à une invitation cryptique parvenue du fer'])
+[13:04:40] <<< [1528356812540350547] embed(title='📍 Salle des offrandes', desc="Des flammes bleues lèchent le sol de la salle où un sceau ancestral s'inscrit dans du givre éternel.", fields=['🕯️ Votre arrivée':"Vous vous approchez précipitamment d'une porte scellée par u", '👥 Personnages présents':'Aucun', '🚪 Sorties':'Autel central entouré de flammes bleues, Salle du sanctuaire', '🔍 Objets visibles':'Pince en fer forgé'], footer='Tape `@bot` suivi de ce que tu veux faire.')
+[13:04:40] <<< [1528356814544965638] embed(title='📖 Chapitre 1 — Début de la campagne  ·  Progression ░░░░░░░░░░ 0%', desc='🎯 **Objectif courant**\nDécouvrez le monde et le pourquoi de votre quête.', footer="Mise à jour : à l'instant")
+[13:04:40] <<< [1528356816176545893] (vide)
+[13:04:40]     (durée 32.7s)
+[13:04:40] [PASS] étape 13-14: narration d'ouverture postée (33s après le clic Démarrer)
+[13:04:40] >>> !test game_state
+[13:04:43] <<< [1528356903170867311] content='```json\n{\n  "campaign": {\n    "name": "Dark Fantasy",\n    "id": "260558f3-e07c-43b3-ad2a-819d0b6d6ba2"\n  },\n  "characters": [\n    {\n      "user_id": 200000002,\n      "name": "Thorin",\n      "race": "D'
+[13:04:43]     (durée 3.3s)
+[13:04:43] [PASS] post-vérif: game_state contient Thorin
+[13:04:43] ========================================================================
+[13:04:43] VERDICT: PASS — flux lobby complet, bout en bout
+[13:04:43] ========================================================================

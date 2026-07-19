@@ -43,7 +43,9 @@ data/
 *.sqlite3
 
 # --- Runtime artifacts ---
-logs/
+# Bot runtime logs at the repo root only — tasks/logs/ holds versioned
+# live-test artifacts (C8 smoke & co) and must stay tracked.
+/logs/
 
 # --- OS ---
 .DS_Store
