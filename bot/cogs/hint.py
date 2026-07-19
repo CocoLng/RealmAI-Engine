@@ -144,7 +144,12 @@ class HintCog(commands.Cog):
 
         # Level 3: defer (LLM call may take 1-3s)
         await interaction.response.defer(ephemeral=not public)
-        text = await self._build_level3(beat, session)
+        text, delivered = await self._build_level3(beat, session)
+        if not delivered:
+            # No hint was produced (judge timeout/error) — the player pays
+            # nothing: the 5-turn cooldown is only armed on delivery.
+            await interaction.followup.send(text, ephemeral=not public)
+            return
         repo.set_level3_last_used_turn(
             campaign_id=session.campaign.id,
             beat_number=beat.beat_number,
@@ -183,8 +188,13 @@ class HintCog(commands.Cog):
             lines.append(f"◯ {obj.description}")
         return "\n".join(lines)
 
-    async def _build_level3(self, beat, session) -> str:
-        """Run the BeatJudge in verbose mode and format its reasoning."""
+    async def _build_level3(self, beat, session) -> tuple[str, bool]:
+        """Run the BeatJudge and format its reasoning.
+
+        Returns ``(text, delivered)`` — ``delivered=False`` when the judge
+        degraded (timeout/error sentinel): the text is then an apology, the
+        caller must not arm the cooldown nor brand it « Niveau 3 ».
+        """
         from engine.beat_progression import JudgeRequest, ObjectivePartialMatch
         from ai.models import InterpretedAction
         from engine.validators import ActionType
@@ -220,13 +230,26 @@ class HintCog(commands.Cog):
         # evaluate() wraps a blocking httpx POST — keep it off the event
         # loop (H2).
         resp = await asyncio.to_thread(judge.evaluate, req)
+
+        from ai.beat_judge import JUDGE_ERROR_REASON, JUDGE_TIMEOUT_REASON
+
+        if resp.reasoning in (JUDGE_TIMEOUT_REASON, JUDGE_ERROR_REASON):
+            return (
+                "💡 L'oracle reste muet — l'indice de niveau 3 n'a pas pu "
+                "être préparé. Rien n'est consommé : réessaie dans un instant.",
+                False,
+            )
         if resp.suggested_next_action:
             return (
                 f"Pour avancer :\n"
                 f"• {resp.suggested_next_action}\n\n"
-                f"_{resp.reasoning}_"
+                f"_{resp.reasoning}_",
+                True,
             )
-        return f"_{resp.reasoning or 'Mes pensées s embrouillent — réessaie autre chose.'}_"
+        return (
+            f"_{resp.reasoning or 'Mes pensées s embrouillent — réessaie autre chose.'}_",
+            True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:

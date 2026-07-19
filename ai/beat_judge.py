@@ -19,6 +19,12 @@ from engine.beat_progression import JudgeRequest
 
 logger = logging.getLogger(__name__)
 
+# Sentinel `reasoning` values for degraded verdicts. Consumers that surface
+# `reasoning` to players (bot/cogs/hint.py) must treat these as "no verdict",
+# never as display text.
+JUDGE_TIMEOUT_REASON = "judge_timeout"
+JUDGE_ERROR_REASON = "judge_error"
+
 _SYSTEM_PROMPT = (
     Path(__file__).parent / "prompts" / "system_beat_judge.txt"
 ).read_text()
@@ -88,7 +94,7 @@ class BeatJudge:
         except LLMParseError:
             logger.warning("JUDGE parse error for beat=%r", request.beat_title)
             return JudgeResponse(
-                passed=False, confidence=0.0, reasoning="judge_error",
+                passed=False, confidence=0.0, reasoning=JUDGE_ERROR_REASON,
             )
         except (TimeoutError, OllamaUnavailableError):
             # httpx timeouts surface as OllamaUnavailableError (ai/client.py
@@ -96,12 +102,12 @@ class BeatJudge:
             # and silently rather than crash the pipeline.
             logger.warning("JUDGE timeout for beat=%r", request.beat_title)
             return JudgeResponse(
-                passed=False, confidence=0.0, reasoning="judge_timeout",
+                passed=False, confidence=0.0, reasoning=JUDGE_TIMEOUT_REASON,
             )
         except Exception:
             logger.exception("JUDGE unexpected error for beat=%r", request.beat_title)
             return JudgeResponse(
-                passed=False, confidence=0.0, reasoning="judge_error",
+                passed=False, confidence=0.0, reasoning=JUDGE_ERROR_REASON,
             )
         elapsed_ms = int((time.monotonic() - start) * 1000)
 

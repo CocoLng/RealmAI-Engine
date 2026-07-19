@@ -265,3 +265,52 @@ async def test_no_active_session_returns_friendly_error(cog: HintCog, monkeypatc
 
     sent_text = interaction.response.send_message.call_args[0][0]
     assert "campagne" in sent_text.lower() or "active" in sent_text.lower()
+
+
+@pytest.mark.parametrize("sentinel", ["judge_timeout", "judge_error"])
+async def test_level3_judge_failure_is_clean_and_free(
+    cog: HintCog, monkeypatch: pytest.MonkeyPatch, sentinel: str,
+) -> None:
+    """A failed judge (timeout/error) must NOT leak its internal sentinel to
+    Discord, and must NOT consume the 5-turn cooldown — the player got no
+    hint. Seen live 2026-07-19: `_judge_timeout_` shown, cooldown burned."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    interaction.channel_id = 123
+
+    fake_beat = MagicMock(
+        title="Beat", judge_rubric=None, description="...", beat_number=1,
+        player_visible_hint="vague",
+    )
+    fake_beat.objectives = []
+    fake_session = MagicMock()
+    fake_session.story_arc.beats = [fake_beat] * 5
+    fake_session.story_arc.current_beat_index = 0
+    fake_session.campaign.id = "c1"
+    fake_session.campaign.interaction_count = 20
+    fake_session.current_location.name = "Forge"
+    monkeypatch.setattr(cog, "_get_session", lambda channel_id: fake_session)
+
+    fake_repo = MagicMock()
+    fake_repo.get_or_create.return_value = MagicMock(
+        level1_uses=1, level2_used=True, level3_last_used_turn=None,
+    )
+    monkeypatch.setattr(cog, "_get_repo", lambda: fake_repo)
+
+    fake_judge = MagicMock()
+    fake_judge.evaluate.return_value = MagicMock(
+        passed=False, confidence=0.0, reasoning=sentinel,
+        suggested_next_action=None,
+    )
+    monkeypatch.setattr(cog, "_build_judge", lambda session: fake_judge)
+
+    await cog.hint.callback(cog, interaction)
+
+    interaction.followup.send.assert_called_once()
+    args, kwargs = interaction.followup.send.call_args
+    sent_text = args[0] if args else kwargs.get("content", "")
+    assert sentinel not in sent_text, "internal sentinel leaked to Discord"
+    assert "oracle" in sent_text.lower() or "réessaie" in sent_text.lower()
+    fake_repo.set_level3_last_used_turn.assert_not_called()
