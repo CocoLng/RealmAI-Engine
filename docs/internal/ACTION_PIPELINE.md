@@ -1,13 +1,14 @@
 # Pipeline d'action — Comment le joueur interagit avec le monde
 
-Toute action d'un joueur (en combat ou en exploration) passe par **la même pipeline à 6 phases** orchestrée dans [bot/action_pipeline.py](../../bot/action_pipeline.py). Elle est déclenchée par `ActionHandlerCog` ([bot/cogs/action_handler.py](../../bot/cogs/action_handler.py)) lorsqu'un joueur `@mentionne` le bot dans un salon de campagne.
+Toute action d'un joueur (en combat ou en exploration) passe par **la même pipeline à 6 phases** orchestrée par `PipelineRunner` dans [bot/pipeline/orchestrator.py](../../bot/pipeline/orchestrator.py) — [bot/action_pipeline.py](../../bot/action_pipeline.py) n'est plus qu'une façade de compatibilité qui y délègue (les phases vivent dans `bot/pipeline/interpret.py`, `resolve.py` et `narrate.py`). Elle est déclenchée par `ActionHandlerCog` ([bot/cogs/action_handler.py](../../bot/cogs/action_handler.py)) lorsqu'un joueur `@mentionne` le bot dans un salon de campagne.
 
 ## Contrat d'entrée
 
 ```python
-ActionPipeline.run(
+ActionPipeline(actor_name=..., interpreter=..., narrator=..., session=..., ...)  # actor_name au constructeur
+
+pipeline.process(
     player_text: str,            # phrase libre "j'attaque le gobelin"
-    actor_name: str,             # nom in-game du perso joueur
     progress_callback=None,      # async callback(phase, status) pour l'embed progress
 ) -> ActionPipelineResult | AmbiguityResult | UnknownEntityResult
 ```
@@ -33,7 +34,7 @@ Un **embed de progression** est posté dès le début (phases `⚪ pending → �
 - objets visibles
 - combat actif (round, tour courant, enemies)
 
-**Sortie** : `InterpretedAction` (pydantic) avec `action_type` parmi 15 enum values (`ATTACK`, `CAST_SPELL`, `DEFEND`, `FLEE`, `USE_ITEM`, `PICK_UP`, `LOOK`, `SEARCH`, `TALK`, `MOVE`, `INTERACT`, `IMPROVISE`, `QUESTION`), `target_name`, `item_name`, `spell_name`, `talk_topic`, `search_detail`, `confidence`.
+**Sortie** : `InterpretedAction` (pydantic) avec `action_type` parmi 15 enum values (`ATTACK`, `CAST_SPELL`, `DEFEND`, `DISENGAGE`, `FLEE`, `USE_ITEM`, `EQUIP`, `LOOK`, `SEARCH`, `TALK`, `MOVE`, `INTERACT`, `PICKUP`, `IMPROVISE`, `QUESTION`), `target_name`, `item_name`, `spell_name`, `talk_topic`, `search_detail`, `confidence`.
 
 **Resilience** :
 - Wrappé dans [bot/llm_retry.py](../../bot/llm_retry.py) `retry_llm_call(max_retries=2, delays=(5, 15))`.
@@ -108,7 +109,7 @@ Checks :
 
 - **Lot C — Combat bootstrap** : via `detect_combat_trigger` + `enter_combat` + `start_combat`. Les NPCs combat-worthies (`stat_block` non nul, `disposition == HOSTILE`, ou `max_hp >= 10` / `ac > 12`) déclenchent un combat party-wide avec initiative et surprise 5e. Les NPCs faibles/pacifiques tombent dans le Lot E.
 - **Lot E — Trivial resolve** : si PNJ pacifique (`disposition ≥ NEUTRAL`) et fragile (`max_hp < TRIVIAL_RESOLVE_HP_THRESHOLD`, =10), appelle `engine.combat.trivial_resolve()` qui résout l'attaque en one-shot sans démarrer un `CombatState` complet. Flip l'état `is_alive=False` du PNJ.
-- **Hostile witnessing** : si un PNJ ami voit un kill gratuit, il passe `HOSTILE` (logique de propagation simpliste, voir `bot/action_pipeline.py`).
+- **Hostile witnessing** : si un PNJ ami voit un kill gratuit, il passe `HOSTILE` (logique de propagation simpliste, voir `bot/pipeline/resolve.py`).
 
 ### Détection de trigger combat (`bot/combat_entry.py`)
 
@@ -167,20 +168,11 @@ Toutes les conditions de fin passent maintenant par un point d'entrée unique : 
 
 ### Phase 4b — BEAT COMPLETION CHECK
 
-Après Phase 4, si l'action n'est pas `QUESTION`, le pipeline vérifie si le beat courant est complété.
+Après Phase 4, le pipeline évalue la progression du beat courant via **`BeatProgressionEngine.evaluate()`** ([engine/beat_progression.py](../../engine/beat_progression.py), appelé dans `bot/pipeline/orchestrator.py`) — point de décision unique sur les **`BeatObjective` structurés** du beat (`objectives` + `advance_rule` ALL_REQUIRED / M_OF_N). L'ancien `completion_trigger` unique est du legacy : il est auto-migré en `BeatObjective` au chargement de l'arc (`world/story_arc.py::_migrate_legacy_completion_triggers`).
 
-**Trigger déterministe** : chaque `StoryBeat` possède un `completion_trigger: CompletionTrigger(type, target)` optionnel. Le pipeline compare `action_type` et `target_name` (fuzzy match ≥ 0.6) contre le trigger.
+L'engine confronte l'action interprétée, l'outcome, la location, les flags monde et l'inventaire aux objectifs, et rend une décision : `ADVANCE`, `STAY`, ou `NEEDS_JUDGE`. Dans ce dernier cas, **`BeatJudge`** ([ai/beat_judge.py](../../ai/beat_judge.py)) tranche — avance seulement si `passed == True` et `confidence ≥ 0.7`. Le code reste l'arbitre final. Les objectifs complétés sans avancement sont accumulés sur `beat.objectives_completed` — les beats multi-actions progressent tour après tour au lieu de recomputer de zéro.
 
-| trigger.type | action_type attendu |
-|---|---|
-| `interact` | `INTERACT` |
-| `defeat` | `ATTACK` |
-| `talk` | `TALK` |
-| `arrive` | `MOVE` |
-| `search` | `SEARCH` |
-| `pickup` | `PICKUP` |
-
-Si match → `_apply_beat_effects(beat.on_complete)` mute la `Location` :
+Si la décision est d'avancer → `_apply_beat_effects(beat.on_complete)` mute la `Location` :
 - `unlock_exits` → ajoutés à `location.unlocked_exits`
 - `add_npcs` / `remove_items` / `add_items` → mutations directes
 - `state_flags` → merges dans `location.state_flags`
@@ -188,11 +180,9 @@ Si match → `_apply_beat_effects(beat.on_complete)` mute la `Location` :
 
 Puis `advance_beat(arc)` incrémente `current_beat_index`.
 
-**Fallback LLM** : si le trigger déterministe ne match pas mais que (1) le joueur est au bon lieu (fuzzy ≥ 0.5), (2) l'action est non-triviale (pas LOOK/QUESTION), et (3) le beat a un trigger, un appel rapide au modèle 4b juge si l'action résout créativement l'objectif. Seuil : `confidence ≥ 0.85`. Le code reste l'arbitre final.
-
 ## Phase 5 — ASSEMBLING_CONTEXT
 
-**Acteur** : `memory.context_assembler.ContextAssembler.assemble(campaign_id, …)` (4 couches) OR `bot.action_pipeline._assemble_context()` (version simplifiée sans RAG pour certains chemins).
+**Acteur** : `bot.pipeline.narrate.assemble_context()` (la façade `ActionPipeline._assemble_context()` y délègue). Le contexte du tour = préfixe mémoire caché sur `session.memory_context` (résumés + fenêtre glissante + RAG, pré-calculé en fin de tour précédent par `ContextAssembler.assemble_memory_prefix`) + locked facts + scene snapshot (`describe_scene_for_narrator`, qui joue le rôle de la Layer 1).
 
 Construit une chaîne markdown avec :
 - Layer 1 : état structuré (HP/AC/inventory highlights/location/NPCs/quest active) — max 450 tokens.
@@ -202,7 +192,7 @@ Construit une chaîne markdown avec :
 
 Budget total : **2500 tokens**. Truncation par priorité croissante : on tronque Layer 4 en premier, Layer 1 jamais. Voir [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md).
 
-Side-effect : peut déclencher `Summarizer.summarize()` si seuil de 20 exchanges non-résumés atteint.
+Side-effect : en fin de tour, `update_memory_after_turn` planifie `Summarizer.summarize()` en tâche de fond si le backlog d'exchanges non-résumés a dépassé le seuil (voir [MEMORY_SYSTEM.md](MEMORY_SYSTEM.md)).
 
 ## Phase 6 — NARRATING
 
@@ -224,11 +214,8 @@ Side-effect : peut déclencher `Summarizer.summarize()` si seuil de 20 exchanges
 1. **Embed narratif** posté via `bot/embeds/narrative_embed.py` (description + footer `PublicEffects`).
 2. **Story bible** : `session.story_bible.log_turn(turn_number, actor, command, outcome_summary, narrative_excerpt)` — Markdown append-only.
 3. **Exchange persisté** en Layer 2 : `PLAYER` entry + `NARRATOR` entry.
-4. **Beat advancement** : deux mécanismes, par priorité :
-   - **Trigger déterministe (Phase 4b)** : si `action_type` + `target_name` matchent le `completion_trigger` du beat courant → `on_complete` appliqué, beat avancé.
-   - **Fallback location (Lot D hérité)** : `session.advance_beat_if_ready()` — fuzzy match location courante vs `arc.beats[current + 1].location_hint`, seuil 0.7. Sert de filet pour les beats de type `arrive`.
-   Dans les deux cas : persist arc + poste un `beat_embed`.
-5. **Story Director (tous les ~20 tours)** : `StoryDirector.check_coherence(campaign_id, context)` → `DirectorNote(coherence_issues, suggested_hooks, priority)`, persisté en `SemanticMemory` comme `SemanticDocument`. Voir [NARRATIVE_COHERENCE.md](NARRATIVE_COHERENCE.md).
+4. **Beat advancement** : décision unique par `BeatProgressionEngine.evaluate()` sur les `BeatObjective` structurés (Phase 4b), avec arbitrage `BeatJudge` (confidence ≥ 0.7) quand l'engine hésite. `advance_beat_if_ready()` (Lot D) n'existe plus. Sur avancement : `on_complete` appliqué, persist arc + poste d'un `beat_embed`.
+5. **Story Director** : planifié par l'orchestrateur via `should_run_director` (`bot/pipeline/orchestrator.py`) — cadence primaire toutes les 6 interactions, plus fin de combat, drift narratif détecté, ou force ; un chemin legacy à 20 tours subsiste dans `bot/story_bible_logger.py`. `StoryDirector.check_coherence(campaign_id, context, beat_progress)` → `DirectorNote(coherence_issues, suggested_hooks, priority)`, persisté en `SemanticMemory` comme `SemanticDocument`. Voir [NARRATIVE_COHERENCE.md](NARRATIVE_COHERENCE.md).
 
 ## Cas d'erreur
 

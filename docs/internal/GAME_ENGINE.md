@@ -79,6 +79,7 @@ Thresholds hardcoded (pas de constantes nommées). Nat 1/20 overrides margin.
 - `Weapon(Item)` : + damage_dice, damage_type, category, properties, range_ft
 - `Armor(Item)` : + category, base_ac, dex_cap, strength_required, stealth_disadvantage
 - `Inventory(items, equipped: dict[EquipmentSlot, Item], attuned: list[str], gold)`
+- `AnyItem = Annotated[SerializeAsAny[Item], BeforeValidator(_revive_item)]` — type des champs d'`Inventory` : sérialise le sous-type **runtime** (préserve `Weapon`/`Armor` au round-trip DB, là où l'annotation `Item` seule les aplatissait) et re-type au chargement via `item_type` ; les rows legacy tronquées sont réparées depuis l'`ITEM_CATALOG` (quantité préservée), sinon dégradées en `Item` de base plutôt que de casser un `/resume`.
 
 ### Enums
 

@@ -13,13 +13,10 @@ Défini dans [db/database.py](../../db/database.py).
 
 - **SQLite** (`data/realm.db` par défaut, paramétrable par env).
 - `PRAGMA foreign_keys=ON` forcé à chaque connexion.
-- **Migrations versionnées** via `PRAGMA user_version`. Chaque version correspond à une fonction `_migrate_vN_to_vN+1(raw)` exécutée dans une transaction avec rollback automatique en cas d'échec.
-  - **V0→V1** : colonnes historiques (`combat_state_json`, `language`, `aliases`, `secrets`, `knowledge`, `dialogue_history`, `item_descriptions`). Gardes d'existence conservées pour compatibilité avec les BDD existantes.
-  - **V1→V2** : extraction de `current_beat_index` en colonne dédiée sur `story_arcs` (auparavant enfoui dans le blob JSON).
-  - **V2→V3** : colonnes `state_flags` (JSON) et `unlocked_exits` (JSON) sur `locations`. State flags track l'état mutable de l'environnement (puzzles résolus, mécanismes activés). Unlocked exits stocke les sorties débloquées par complétion de beats.
-- Pattern d'ajout de migration : créer `_migrate_vN_to_vN+1(raw)` et l'ajouter à la liste `_MIGRATIONS`. Le système exécute automatiquement les migrations manquantes au startup.
+- **Réconciliation de schéma additive** via [db/migrations.py](../../db/migrations.py)::`ensure_schema` : `create_all()` crée les tables manquantes, puis toute colonne définie par un modèle et absente d'une table existante est ajoutée par `ALTER TABLE … ADD COLUMN`. Une table `schema_version` est stampée après succès (`SCHEMA_VERSION = 1`) ; le run **refuse** une DB stampée par un code plus récent (protection anti-downgrade).
+- Pas d'Alembic, pas de `PRAGMA user_version` : l'ajout d'une colonne est automatique dès qu'elle apparaît sur un modèle SQLAlchemy. Les changements structurels (rename, changement de type, backfill) exigeront une migration explicite, séquencée par un bump de `SCHEMA_VERSION`.
 
-## Schéma — 10 tables
+## Schéma — 11 tables
 
 | Table | PK | FK | Rôle |
 |---|---|---|---|
@@ -33,6 +30,7 @@ Défini dans [db/database.py](../../db/database.py).
 | `player_characters` | `(user_id, campaign_id)` | `campaign_id` CASCADE | Personnages joueurs |
 | `campaign_channels` | `channel_id` | `campaign_id` CASCADE | Mapping Discord channel → campagne |
 | `guild_configs` | `guild_id` | — | Préférences par serveur Discord |
+| `hint_usage` | `(campaign_id, beat_number)` | `campaign_id` CASCADE | Usage `/hint` par beat (compteurs de niveaux + cooldown), reset à l'avancement du beat |
 
 ### Détails des tables
 
@@ -84,7 +82,7 @@ objectives (JSON), reward_xp, reward_gold, giver_npc
 id, campaign_id, role (PLAYER/NARRATOR/SYSTEM),
 content, interaction_number, created_at
 ```
-`campaign_id` indexé. Index composite `(campaign_id, interaction_number)` reste un nice-to-have.
+`campaign_id` indexé + index composite `ix_exchanges_campaign_interaction (campaign_id, interaction_number)`.
 
 #### `summaries`
 ```
@@ -245,8 +243,8 @@ Tout est `CASCADE` delete : supprimer une `campaigns` row nettoie tout l'état S
 Voir [ISSUES.md](ISSUES.md). Extraits :
 
 - 🟠 `NPCRepository.update()` perd `aliases/secrets/knowledge/dialogue_history`.
-- 🟡 Pas d'index sur `(campaign_id, interaction_number)` dans `exchanges`.
-- ~~🟡 Migrations manuelles via `ALTER TABLE` sans rollback.~~ ✅ Corrigé — migrations versionnées via `PRAGMA user_version`.
+- ~~🟡 Pas d'index sur `(campaign_id, interaction_number)` dans `exchanges`.~~ ✅ Corrigé — index composite `ix_exchanges_campaign_interaction`.
+- ~~🟡 Migrations manuelles via `ALTER TABLE` sans rollback.~~ ✅ Traité — réconciliation additive `ensure_schema` + stamp `schema_version` (voir « Moteur »).
 - ~~🟡 `StoryArc` en JSON blob unique → pas d'update partiel possible.~~ ✅ Corrigé — `current_beat_index` extrait en colonne dédiée.
 - 🟢 Orphan ChromaDB collections si `/delete campaign` (non implémenté actuellement).
 - 🟢 `guild_configs.language` stocké mais i18n dynamique incomplète.

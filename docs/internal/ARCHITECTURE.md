@@ -35,7 +35,7 @@ Le moteur de règles est en Python pur (déterministe, testé à ~98%). Les LLM 
 
 ### `engine/` — moteur de règles (pur Python, zéro LLM)
 - `dice.py` : parseur `"2d6+3"`, 6 tiers d'outcome d20.
-- `character.py` : Pydantic `Character`, `AbilityScores`, races, classes, XP, level-up.
+- `character/` (package) : Pydantic `Character`, `AbilityScores`, races, classes, XP, level-up — éclaté en `models` / `abilities` / `progression` / `creation` / `features` / `presets`.
 - `inventory.py` : items, armures, armes, slots, attunement, AC.
 - `spells.py` : slots, cantrips scaling, 20+ sorts SRD.
 - `conditions.py` : 15 conditions SRD + effets (advantage/disadvantage).
@@ -50,7 +50,7 @@ Le moteur de règles est en Python pur (déterministe, testé à ~98%). Les LLM 
 - `npc_agent.py` (4b) : génère le dialogue d'un PNJ + `disposition_change`.
 - `npc_generator.py` : fiches PNJ lazily à la première rencontre.
 - `world_generator.py`, `arc_generator.py` : contenu de campagne.
-- `story_director.py` : check de cohérence périodique (tous les ~20 tours).
+- `story_director.py` : check de cohérence périodique (toutes les 6 interactions + triggers : fin de combat, drift narratif, force).
 - `entity_resolver.py` : résolveur rule-based (lemmatisation FR + fuzzy) avec fallback LLM.
 - `scene_context.py` : snapshot de ce que l'acteur perçoit.
 - `models.py` : contrats I/O Pydantic v2 (14 modèles).
@@ -60,23 +60,23 @@ Le moteur de règles est en Python pur (déterministe, testé à ~98%). Les LLM 
 ### `memory/` — système de mémoire 4 couches
 1. **Layer 1 — État structuré** (`state.py`) : snapshot SQLite, max 450 tokens, jamais tronqué.
 2. **Layer 2 — Fenêtre glissante** (`sliding_window.py`) : 12 derniers échanges, 700 tokens.
-3. **Layer 3 — Résumés compressés** (`summarizer.py`) : générés tous les 20 tours, 400 tokens.
+3. **Layer 3 — Résumés compressés** (`summarizer.py`) : générés en tâche de fond quand ~20 exchanges quittent la fenêtre, 400 tokens.
 4. **Layer 4 — RAG sémantique** (`semantic.py`) : ChromaDB, 1 collection/campagne, 350 tokens.
-- `context_assembler.py` : orchestre et tronque par priorité pour respecter le budget total (2500 tokens).
+- `context_assembler.py` : orchestre et tronque par priorité pour respecter le budget total (2500 tokens). En prod, le pipeline consomme `assemble_memory_prefix()` (couches 2-3-4) — le scene snapshot du narrateur joue le rôle de la Layer 1.
 
 ### `world/` — domaine métier (Pydantic v2)
 Modèles in-memory : `Campaign`, `NPC`, `Location`, `Quest`, `StoryArc` (+ `StoryBeat`). Enums : `Disposition`, `QuestStatus`, `EncounterType`.
 
 ### `db/` — persistance
 - `database.py` : moteur SQLite + migrations incrémentales (`ALTER TABLE`).
-- `models.py` : 10 tables SQLAlchemy (`campaigns`, `npcs`, `locations`, `quests`, `exchanges`, `summaries`, `story_arcs`, `player_characters`, `campaign_channels`, `guild_configs`).
+- `models.py` : 11 tables SQLAlchemy (`campaigns`, `npcs`, `locations`, `quests`, `exchanges`, `summaries`, `story_arcs`, `player_characters`, `campaign_channels`, `guild_configs`, `hint_usage`).
 - `mappers.py` : `to_db`/`from_db` pour chaque entité (sérialisation JSON des listes/dicts).
 - `repositories/` : 11 repositories CRUD.
 
 ### `bot/` — couche Discord
 - `bot.py` : `RealmBot`, chargement des 7 cogs + `test_bridge` (si `TEST_MODE=true`).
-- `cogs/` : `session`, `character`, `inventory`, `combat`, `exploration`, `rolls`, `action_handler`, `test_bridge`.
-- `action_pipeline.py` : les 6 phases (voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md)).
+- `cogs/` : `rolls`, `session`, `character`, `inventory`, `combat`, `action_handler`, `hint`, `test_bridge` (l'ancien `exploration` a été supprimé, remplacé par le free-text `action_handler`).
+- `pipeline/` : l'orchestration des 6 phases (`orchestrator.py::PipelineRunner`, phases dans `interpret.py` / `resolve.py` / `narrate.py`) ; `action_pipeline.py` est une façade de compatibilité (voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md)).
 - `campaign_launcher.py` : orchestrateur d'onboarding (arc + location + persos + gear en parallèle).
 - `game_session.py` : conteneur in-memory d'une campagne active (chars, inv, npcs, arc, lock asyncio).
 - `scene_hydration.py` : promeut les NPCs string de `Location.npcs_present` en vraies lignes DB.
@@ -95,7 +95,7 @@ Expose 7 outils MCP à Claude Code pour piloter un bot « testeur » qui envoie 
 Joueur ─ "@Realm j'attaque le gobelin avec mon épée"
    │
    ▼  bot/cogs/action_handler.py  (filtre OOC, prend session.action_lock)
-ActionPipeline (bot/action_pipeline.py)
+ActionPipeline (façade bot/action_pipeline.py → bot/pipeline/orchestrator.py)
    │
    ├─ 1. INTERPRETING    → ai/interpreter.py  (qwen3.5:4b, JSON)
    │                       → InterpretedAction(action_type=ATTACK, target_name="gobelin")
@@ -113,7 +113,8 @@ ActionPipeline (bot/action_pipeline.py)
    │                        → DB writes si mutation (move, kill, pickup)
    │
    ├─ 5. ASSEMBLING_CONTEXT → memory/context_assembler.py
-   │                          → 4 couches concaténées, budget 2500 tokens
+   │                          → préfixe mémoire 3 couches (RAG + résumés + fenêtre)
+   │                            + scene snapshot (rôle Layer 1), budget 2500 tokens
    │
    └─ 6. NARRATING       → ai/narrator.py  (qwen3.5:9b, JSON {narrative, tone})
                            → NarrativeResult
@@ -124,7 +125,7 @@ ActionPipeline (bot/action_pipeline.py)
                            ↓
        session.story_bible.log_turn(...)   + exchange persisté (Layer 2)
                            ↓
-         session.advance_beat_if_ready()   (Lot D — fuzzy match location)
+         BeatProgressionEngine.evaluate()   (objectifs structurés + BeatJudge)
 ```
 
 ## Stack

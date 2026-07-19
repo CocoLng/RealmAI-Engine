@@ -1,6 +1,6 @@
 # Tests et infrastructure QA
 
-~1 260 tests dans 42+ modules, ~18 000 lignes de test, couverture engine ~98%.
+~2 900 tests (2026-07-19), en miroir de l'arborescence source, couverture engine ~98%.
 
 ## Commandes
 
@@ -66,6 +66,8 @@ Couverts par le serveur MCP `mcp_discord/` (voir plus bas) + l'agent `discord-li
 - Un vrai bot Discord de test (`DISCORD_BOT_TOKEN`).
 - Un bot testeur (`TESTER_BOT_TOKEN`) qui envoie des `!test` commandes.
 - `TEST_MODE=true` pour activer le cog `test_bridge` côté jeu.
+
+Commandes `!test` notables, en plus des commandes joueur/combat simulées : `!test lobby` (ouvre le **vrai** lobby de campagne sur le canal de test — production code, pilotable via `click_button`/`submit_modal`) et `!test hint` (invoque le `HintCog` réel).
 
 ### 4. Tests d'observabilité
 
@@ -139,7 +141,7 @@ Parmi les plus importantes :
 
 ## CI/CD
 
-Pas encore de CI GitHub Actions (phase 4 planifiée). Les quality gates sont manuels : `pytest`, `ruff check .`, `mypy .`.
+CI GitHub Actions en place : [.github/workflows/ci.yml](../../.github/workflows/ci.yml) — 3 jobs (`uv run ruff check .`, `uv run mypy` **sans argument** pour respecter le périmètre défini dans pyproject, `uv run pytest`), avec cache du modèle ONNX ChromaDB (~79 MB, `~/.cache/chroma`) pour accélérer le job pytest.
 
 ## Gaps
 

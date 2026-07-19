@@ -25,13 +25,13 @@ Total budget : **2500 tokens** (≥ layer1_max, enforced par `ContextBudget` Pyd
 - Personnages joueurs + inventaires + combat state (passés en in-memory)
 
 **Sortie** : `GameStateSummary` Pydantic avec :
-- `campaign_name`, `current_location`
+- `campaign_name`, `current_location`, `location_description`
 - `player_characters: list[CharacterSummary]` (name, race, class, level, hp/max, ac, conditions)
-- `nearby_npcs: list[NPC]`
-- `active_quests: list[Quest]`
+- `nearby_npcs: list[str]`
+- `active_quests: list[str]`
 - `combat: CombatSummary | None` (round, current turn, combatants)
 - `inventory_highlights`
-- `story_context`
+- `current_story_beat`, `upcoming_story_beat`, `villain_context`
 
 **Rendu** : `.render()` → texte structuré. **Jamais tronqué** — si cette couche dépasse son budget, elle est postée telle quelle et les couches 2/3/4 sont compressées/droppées.
 
@@ -66,15 +66,15 @@ Budget 700 tokens. Tronqué en retirant les exchanges les plus anciens d'abord.
 
 **But** : mémoire long terme compactée.
 
-`Summarizer.should_summarize(campaign_id)` → True si ≥ 20 exchanges non-résumés. Déclenché par `ContextAssembler` en side-effect lors de l'assemblage, ou explicitement.
+`Summarizer.should_summarize(campaign_id)` → True quand ≥ 20 exchanges non-résumés ont **quitté la fenêtre glissante** (`count_unsummarized - window_size >= 20`, soit ~32 exchanges au total avec la fenêtre de 12). En prod, le déclenchement est une tâche de fond planifiée après chaque tour par `bot/pipeline/narrate.py` (voir Side-effects) ; `assemble()` conserve un déclenchement inline pour les appels directs.
 
 ### Fonctionnement
 
 1. Récupère les exchanges non-résumés via `ExchangeRepository.get_unsummarized()`.
-2. Appelle `OllamaClient.chat_json(model="qwen3.5:9b", …)` avec un prompt système demandant un résumé concis en français.
+2. Appelle `OllamaClient.chat_json(model="qwen3.5:9b", …)` avec un prompt système (rédigé en anglais) demandant un résumé de 2-4 phrases centré sur les faits utiles à la continuité.
 3. Parse `{"summary": "…"}` via un `_SummaryResponse` Pydantic interne.
 4. Persiste `CompressedSummary(start_interaction, end_interaction, summary_text)` via `SummaryRepository`.
-5. Les exchanges résumés restent en DB (pas de soft-delete).
+5. Les exchanges résumés sont **purgés** de la DB (`ExchangeRepository.delete_before(campaign_id, end_interaction + 1)`) — la table `exchanges` reste bornée. Rien n'est supprimé si le LLM échoue.
 
 `build(campaign_id)` → `get_recent(limit=4)` des résumés les plus récents, concaténés chronologiquement. Budget 400 tokens.
 
@@ -106,7 +106,7 @@ Documents indexés :
 
 ### Query
 
-`build(campaign_id, query: str, top_k=5)` → top matches par cosine similarity, optionnellement filtré par `doc_type`. Concaténés en texte, budget 350 tokens.
+`query(campaign_id, query_text, n_results=3, doc_type=None)` → top matches par cosine similarity (3 par défaut), optionnellement filtré par `doc_type`. Concaténés en texte via `render()`, budget 350 tokens.
 
 Le query string par défaut est la dernière action joueur (ou le nom de la location courante). Cela permet d'injecter les fiches des PNJs présents + le lore lié à la scène.
 
@@ -118,20 +118,26 @@ Le query string par défaut est la dernière action joueur (ou le nom de la loca
 def assemble(
     self,
     campaign_id: str,
-    game_state_inputs: StateBuilderInputs,
-    query: str,
+    player_input: str,
+    player_characters: list[Character] | None = None,
+    combat_state: CombatState | None = None,
+    inventories: dict[str, Inventory] | None = None,
 ) -> str:
-    layer1 = self._state_builder.build(...).render()
-    layer2 = self._sliding_window.build(campaign_id)
-    layer3 = self._summarizer.build(campaign_id)
-    layer4 = self._semantic_memory.build(campaign_id, query)
-
-    # Token estimation (word_count * 1.3)
-    # Respect ContextBudget
-    # Truncate in priority order: layer4, layer3, layer2 (never layer1)
-
-    return "\n\n".join([layer1, layer2, layer3, layer4])
+    # 1. Side-effect : summarization si le backlog dépasse le seuil
+    # 2. layer1 = StateBuilder ; layer2 = SlidingWindow ;
+    #    layer3 = Summarizer ; layer4 = SemanticMemory.query
+    # 3. Token estimation (word_count * 1.3), respect ContextBudget,
+    #    truncation par priorité : layer4, layer3, layer2 (jamais layer1)
 ```
+
+**Chemin de prod** : le pipeline n'appelle pas `assemble()` mais
+**`assemble_memory_prefix(campaign_id, query_text)`**, invoqué en fin de tour
+par `bot/pipeline/narrate.py::update_memory_after_turn`. Ce préfixe **exclut la
+Layer 1** — le scene snapshot du narrateur (`describe_scene_for_narrator`) joue
+déjà ce rôle — et concatène Layer 4 → Layer 3 → Layer 2 (ordre chronologique :
+lore, puis résumés, puis fenêtre fraîche). Le résultat est caché sur
+`session.memory_context` et préfixé au contexte du tour **suivant** par
+`narrate.assemble_context`.
 
 `ContextBudget` Pydantic :
 ```python
@@ -149,7 +155,7 @@ ContextBudget(
 
 ### Side-effects
 
-- Si `Summarizer.should_summarize()` est True pendant `assemble()` → déclenche la summarization immédiatement.
+- En prod, la summarization n'est pas déclenchée pendant l'assemblage : `update_memory_after_turn` teste `should_summarize()` après chaque tour et planifie `_schedule_summarization` en tâche de fond fire-and-forget (`bot/pipeline/narrate.py`), avec garde de ré-entrance via `session.memory_summarize_task`. `assemble()` conserve le déclenchement inline pour les appels directs.
 - L'exchange courant (player text) est appendé en Layer 2 **après** le narration (pas pendant l'assemblage).
 
 ## Persistance — tables concernées
@@ -157,13 +163,13 @@ ContextBudget(
 - `exchanges` — Layer 2. Indexé par `interaction_number`.
 - `summaries` — Layer 3. Indexé par `end_interaction`.
 - ChromaDB `data/chromadb/campaign_<id>/` — Layer 4 (hors SQL).
-- `campaigns.interaction_count` — compteur incrémenté à chaque tour pour déclencher la summarization et le story director.
+- `campaigns.interaction_count` — compteur incrémenté à chaque tour (`bot/story_bible_logger.py`). Il cadence le Story Director (6 interactions + triggers côté orchestrateur, chemin legacy à 20 dans le logger) — **pas** la summarization, qui est pilotée par le comptage d'exchanges non-résumés.
 
 ## Anomalies connues
 
 - Estimation de tokens heuristique, pas de tokenizer Qwen.
-- Pas d'index SQL sur `(campaign_id, interaction_number)` pour `exchanges` → scan O(n) sur campagnes longues.
-- `SemanticMemory` : pas de cleanup des collections orphelines si une campagne est supprimée — fuite de storage potentielle.
+- ~~Pas d'index SQL sur `(campaign_id, interaction_number)` pour `exchanges`~~ — résolu : index composite `ix_exchanges_campaign_interaction` (db/models.py), et la table est bornée par la purge post-summarization.
+- ~~`SemanticMemory` : pas de cleanup des collections orphelines~~ — résolu : `/end_campaign` supprime la collection via `SemanticMemory.delete_campaign()` (fix L5).
 - `Summarizer` suppose que Ollama est up — pas de fallback si down (exchanges s'accumulent jusqu'à reprise).
 - `SemanticMemory` silencieusement désactivé si ChromaDB indispo à l'init — le Layer 4 retourne une string vide sans avertir le caller.
 

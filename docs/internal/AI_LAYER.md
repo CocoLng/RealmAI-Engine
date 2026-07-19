@@ -164,11 +164,11 @@ Construit un user message incluant : context + fiche NPC (perso, race, dispositi
 
 **Modèle** : `qwen3.5:9b` **avec `think=True`**, temperature 0.7.
 
-`check_coherence(campaign_id, context_prompt) -> DirectorNote`.
+`check_coherence(campaign_id, context_prompt, beat_progress=None) -> DirectorNote` — `beat_progress` (snapshot `BeatProgress` du BeatProgressionEngine, passé par l'orchestrateur) est appendu au contexte comme vérité autoritaire sur l'état du beat.
 
 **Side-effect** : persiste le `DirectorNote` comme `SemanticDocument` dans `SemanticMemory` pour consommation aux tours suivants.
 
-⚠ **Ne s'auto-déclenche pas** — c'est au caller de vérifier `interaction_count % 20 == 0`. Actuellement hooké dans `action_handler_cog`.
+⚠ **Ne s'auto-déclenche pas** — c'est le caller qui décide de la cadence : `should_run_director` dans `bot/pipeline/orchestrator.py` (toutes les 6 interactions + fin de combat + drift + force), plus un chemin legacy à 20 tours dans `bot/story_bible_logger.py`.
 
 **Prompt** : `system_story_director.txt` — identifie issues de cohérence (contradictions, threads abandonnés) et suggère hooks. Priorité high/medium/low.
 

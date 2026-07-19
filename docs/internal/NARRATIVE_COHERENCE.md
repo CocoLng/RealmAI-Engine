@@ -14,7 +14,7 @@ Le principe : **le code est seul propriétaire de la vérité mécanique et fact
 | Disposition PNJ | `NPC.disposition` | `ai.npc_agent` (retourne un delta) → appliqué par `action_pipeline` → persisté |
 | Nom, description, exits d'une location | `Location` | `ai.world_generator` (une fois) puis immuable |
 | Items d'une location | `Location.items_available` + `item_descriptions` | `world_generator` (avec validation stricte) |
-| État d'arc | `StoryArc.current_beat_index` | `session.advance_beat_if_ready()` |
+| État d'arc | `StoryArc.current_beat_index` | `BeatProgressionEngine` (via l'orchestrateur) |
 | State flags location | `Location.state_flags` | `action_pipeline._apply_beat_effects()` |
 | Sorties débloquées | `Location.unlocked_exits` | `action_pipeline._apply_beat_effects()` |
 | Mort d'un PNJ | `NPC.is_alive` | `engine.combat.trivial_resolve()` ou apply_damage |
@@ -94,7 +94,9 @@ StoryBeat(
     encounter_type: Literal["social", "combat", "exploration", "puzzle", "boss"],
     encounter_subtype: str | None,
     is_twist: bool,
-    completion_trigger: CompletionTrigger | None,  # condition de complétion
+    objectives: list[BeatObjective],               # objectifs structurés (source de vérité)
+    advance_rule: AdvanceRule,                      # ALL_REQUIRED / M_OF_N
+    completion_trigger: CompletionTrigger | None,  # legacy — auto-migré en BeatObjective au chargement
     on_complete: BeatEffects,                       # mutations monde à appliquer
 )
 ```
@@ -103,23 +105,19 @@ L'arc est généré **une fois** à la création de la campagne, avec `think=Tru
 
 ### Avancement
 
-Deux mécanismes, par priorité :
+Point de décision unique : **`BeatProgressionEngine.evaluate()`** ([engine/beat_progression.py](../../engine/beat_progression.py)), appelé par `bot/pipeline/orchestrator.py` après chaque action résolue.
 
-**1. Trigger déterministe** (dans `action_pipeline._check_beat_completion()`) :
-- Chaque beat possède un `CompletionTrigger(type, target)` optionnel, généré par l'arc generator.
-- Après chaque résolution de mécanique, le pipeline compare `action_type` + `target_name` contre le trigger (fuzzy match ≥ 0.6).
-- Si match → `_apply_beat_effects(beat.on_complete)` mute la `Location` (unlock exits, add/remove items/NPCs, set state_flags) → `advance_beat()`.
+**1. Évaluation déterministe** :
+- Chaque beat porte des `BeatObjective` structurés, générés par l'arc generator (les `completion_trigger` legacy sont auto-migrés au chargement par `world/story_arc.py::_migrate_legacy_completion_triggers`).
+- L'engine confronte l'action interprétée, l'outcome, la location, les flags monde et l'inventaire aux objectifs selon l'`advance_rule` (ALL_REQUIRED / M_OF_N), et rend `ADVANCE`, `STAY` ou `NEEDS_JUDGE`.
+- Les objectifs complétés sans avancement sont accumulés sur `beat.objectives_completed` — les beats multi-actions progressent tour après tour.
 
-**2. Fallback LLM** (dans `action_pipeline`) :
-- Si le trigger ne match pas mais que le joueur est au bon lieu et fait une action non-triviale, un appel rapide au modèle 4b (`qwen3.5:4b`, temperature 0.1) juge si l'action résout créativement l'objectif.
-- Seuil : `completed == true AND confidence ≥ 0.85`.
+**2. Arbitrage LLM — `BeatJudge`** ([ai/beat_judge.py](../../ai/beat_judge.py)) :
+- Sollicité uniquement quand l'engine rend `NEEDS_JUDGE`.
+- Avance si `passed == true AND confidence ≥ 0.7`.
 - Le code reste l'arbitre final.
 
-**3. Fallback location (hérité Lot D)** (dans `game_session.advance_beat_if_ready()`) :
-- Fuzzy match `current_location.name` vs `next_beat.location_hint`, seuil 0.7.
-- Sert de filet pour les beats de type `arrive` sans trigger explicite.
-
-Si un nouveau beat est atteint → post d'un `beat_embed` + persist arc.
+Sur `ADVANCE` → `_apply_beat_effects(beat.on_complete)` mute la `Location` (unlock exits, add/remove items/NPCs, set state_flags) → `advance_beat()` → post d'un `beat_embed` + persist arc.
 
 ## 4. Story Director — coherence check périodique
 
@@ -127,7 +125,7 @@ Défini dans [ai/story_director.py](../../ai/story_director.py) + `ai/prompts/sy
 
 ### Déclenchement
 
-Auto-déclenché toutes les 20 interactions (`turn_number % _DIRECTOR_INTERVAL == 0`) dans `StoryBibleLogger.log_turn()`.
+Cadence primaire : planifié par l'orchestrateur via `should_run_director` (`bot/pipeline/orchestrator.py`) — toutes les 6 interactions, ou dès qu'un combat vient de se terminer, qu'un drift narratif est détecté (`DriftTracker`), ou sur demande explicite (force, ex. `/story_catch_up`). Un chemin legacy toutes les 20 interactions subsiste dans `bot/story_bible_logger.py::record_turn_and_maybe_check`.
 
 ### Fonctionnement
 
@@ -169,7 +167,7 @@ Défini dans [bot/story_bible_logger.py](../../bot/story_bible_logger.py). Un fi
    - Mechanics summary.
    - Narrative excerpt (400 premiers caractères).
 
-3. **Coherence checks** (tous les 20 tours) :
+3. **Coherence checks** (quand le Director tourne — voir §4 pour la cadence) :
    - Issues + hooks du Story Director.
    - Priority flag.
 

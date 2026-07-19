@@ -99,10 +99,10 @@ Pour chaque tour :
 - `session.action_lock.acquire()` — un seul pipeline à la fois par campagne.
 - Exécution des 6 phases — voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md).
 - Persistance immédiate quand il y a mutation concrète : move (update location courante), kill (update NPC), pickup (update inventory).
-- `session.advance_beat_if_ready()` — fuzzy match (`difflib ratio ≥ 0.7`) entre la location courante et le `location_hint` du prochain beat (Lot D).
+- Progression de beat : `BeatProgressionEngine.evaluate()` sur les `BeatObjective` structurés du beat courant, avec arbitrage `BeatJudge` (confidence ≥ 0.7) quand l'engine hésite — `advance_beat_if_ready()` (Lot D) n'existe plus.
 - **Auto-checkpoint** : après chaque action résolue, `persist_session()` sauvegarde l'intégralité de la session (campagne + combat_state_json, personnages, PNJs, quêtes, arc). Un crash ne perd plus que l'action en cours de traitement.
 - Exchange sauvé en Layer 2 (`ExchangeRepository`).
-- Tous les 20 tours : `Summarizer.summarize()` (Layer 3) + `StoryDirector.check_coherence()` (si déclenché par le cog).
+- `Summarizer.summarize()` (Layer 3) tourne en tâche de fond dès que ~20 exchanges non-résumés ont quitté la fenêtre glissante ; `StoryDirector.check_coherence()` est auto-planifié par l'orchestrateur (toutes les 6 interactions + fin de combat + drift + force), avec un chemin legacy à 20 tours dans `story_bible_logger`.
 
 ## 4. `/save`
 
@@ -114,10 +114,10 @@ Défini dans [bot/cogs/session.py](../../bot/cogs/session.py).
 
 ## 5. `/resume <campaign_id>`
 
-- Charge la `Campaign`, la `Location` courante, les `NPCs`, `Quests`, `StoryArc`, `PlayerCharacters`.
+- Charge la `Campaign`, la `Location` courante, les `NPCs`, `Quests`, `StoryArc`, `PlayerCharacters`, **et le `CombatState` actif** (`campaigns.combat_state_json` — zones des combattants réalignées via `_sanitize_combat_zones` ; un blob illisible est droppé avec warning plutôt que de bloquer la reprise).
 - Reconstruit un `GameSession` identique.
 - Ré-instancie les services IA.
-- Ne ré-hydrate PAS la sliding window en contexte : les prochains tours repartent sur des exchanges neufs, mais les anciens restent en DB pour le Layer 2 et le `context_assembler`.
+- La sliding window n'est pas rechargée en RAM au `/resume` (`session.memory_context` repart à `None`), mais dès le tour suivant `assemble_memory_prefix` relit les exchanges persistés depuis la DB — la continuité narrative est conservée (chantier G).
 
 ## 6. `/end_campaign`
 

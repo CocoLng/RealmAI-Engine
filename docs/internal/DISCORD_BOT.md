@@ -12,7 +12,7 @@ main.py  →  bot.bot.run_bot()
               └─ RealmBot(intents).run(token)
                      │
                      ├─ setup_hook()
-                     │    ├─ load 7 cogs : rolls, session, character, inventory, combat, exploration, action_handler
+                     │    ├─ load 7 cogs : rolls, session, character, inventory, combat, action_handler, hint
                      │    ├─ load test_bridge cog si TEST_MODE=true
                      │    └─ tree.sync()
                      │
@@ -70,9 +70,13 @@ Toute la logique de tour (prompt PC, brain NPC par tier, timeout 5 min, finalize
 
 Les helpers `build_pc_combatants(session)` et `build_npc_combatant(npc)` vivent désormais dans [bot/combat_entry.py](../../bot/combat_entry.py) pour garder un unique point d'entrée combat-bootstrap.
 
-### `exploration.py` — `ExplorationCog`
+### `exploration.py` — supprimé
 
-Slash commands `/look`, `/search`, `/talk`, `/move` — **deprecated** en faveur des `@mentions` libres traitées par `ActionHandlerCog`. Maintenues pour rétrocompat et tests.
+L'ancien `ExplorationCog` (`/look`, `/search`, `/talk`, `/move`) a été **supprimé** — remplacé par les actions free-text via `ActionHandlerCog` (`@Realm <action>`).
+
+### `hint.py` — `HintCog`
+
+`/hint` — trois niveaux progressifs d'indice sur le beat courant : niveau 1 déterministe (indice vague, illimité), niveau 2 déterministe (liste des objectifs, 1 fois par beat), niveau 3 via BeatJudge LLM (actions concrètes, cooldown 5 tours). L'usage est persisté par beat dans la table `hint_usage` et reset à l'avancement du beat.
 
 ### `rolls.py` — `RollsCog`
 
@@ -85,15 +89,15 @@ Slash commands `/look`, `/search`, `/talk`, `/move` — **deprecated** en faveur
 1. Filtre : message court (<4 chars), interjections OOC, non-joueurs.
 2. `async with session.action_lock:` — un seul pipeline à la fois.
 3. Poste un embed de progression.
-4. Instancie `ActionPipeline(session, interpreter, narrator, npc_agent, entity_resolver, …)`.
-5. Exécute `pipeline.run(player_text, actor_name, progress_callback)`.
+4. Instancie `ActionPipeline(actor_name=…, interpreter=…, narrator=…, session=…, …)` — façade sur `bot/pipeline/orchestrator.py`, `actor_name` au constructeur.
+5. Exécute `pipeline.process(player_text, progress_callback)`.
 6. Dispatch selon retour : `ActionPipelineResult` → embed narratif ; `AmbiguityResult` → `ClarificationView` ; `UnknownEntityResult` → refus in-character.
    - `_render_success` route vers `build_state_embed` (bleu, 0x4A90D9) pour les actions `QUESTION`, affichant items/PNJs/sorties/beat inline.
-7. Log dans `story_bible`, persiste `exchanges`, check `advance_beat_if_ready()`, déclenche Story Director tous les 20 tours.
+7. Log dans `story_bible`, persiste `exchanges` ; la progression de beat (`BeatProgressionEngine`) et la planification du Story Director (6 interactions + triggers) sont gérées dans l'orchestrateur.
 
 ### `test_bridge.py` — `TestBridgeCog`
 
-Chargé uniquement si `TEST_MODE=true`. Écoute `!test <command>` depuis le `TesterBot` (voir `mcp_discord/`). Simule des messages joueurs, des créations de personnages, des actions de combat pour les scénarios pytest et tests live via MCP.
+Chargé uniquement si `TEST_MODE=true`. Écoute `!test <command>` depuis le `TesterBot` (voir `mcp_discord/`). Simule des messages joueurs, des créations de personnages, des actions de combat pour les scénarios pytest et tests live via MCP. Commandes notables : `!test lobby` ouvre le **vrai** lobby de campagne sur le canal de test (production code — LobbyView, CharacterSetupFlow, pregen — pilotable via `click_button`/`submit_modal`), `!test hint` invoque le `HintCog` réel.
 
 ## Views (`bot/views/`)
 
@@ -172,9 +176,7 @@ class GameSession:
     action_lock: asyncio.Lock
 ```
 
-Méthodes clés :
-- `advance_beat_if_ready()` — fuzzy match location vs prochain beat (Lot D)
-- `get_actor_character(user_id)`, `get_inventory(user_id)`, `get_spellcaster(user_id)`
+`GameSession` est désormais une pure dataclass sans méthode : l'accès se fait directement par les dicts (`characters[user_id]`, `inventories[user_id]`, `spellcasters[user_id]`). La progression de beat ne vit plus ici — `advance_beat_if_ready()` (Lot D) a été remplacée par `BeatProgressionEngine` côté orchestrateur.
 
 ## `combat_turn_manager.py` — `TurnManager`
 
@@ -203,7 +205,7 @@ Points d'extension / non-négociables :
 
 ## `action_pipeline.py` — `ActionPipeline`
 
-Voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md). Point d'entrée : `pipeline.run(player_text, actor_name, progress_callback)`. Pour le combat, la méthode publique supplémentaire `pipeline.process_interpreted_action(action)` permet aux boutons du hub de sauter la phase d'interprétation avec un `InterpretedAction` déjà structuré.
+Voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md). Façade de compatibilité sur `bot/pipeline/orchestrator.py::PipelineRunner` — `actor_name` passe au constructeur. Point d'entrée : `pipeline.process(player_text, progress_callback)`. Pour le combat, la méthode publique supplémentaire `pipeline.process_interpreted_action(action)` permet aux boutons du hub de sauter la phase d'interprétation avec un `InterpretedAction` déjà structuré.
 
 ## `scene_hydration.py` — `hydrate_scene()`
 
@@ -264,11 +266,9 @@ Persisté via `GuildConfigRepository` (table `guild_configs`). Fetché à chaque
 Extraits — voir [ISSUES.md](ISSUES.md) pour le détail.
 
 - Pas de persistance à chaud de `bot.sessions` : crash = perte de session.
-- Pas d'initiative rolls complets — attacker agit en premier (traité comme surprise).
 - PNJs en bootstrap combat fight bare-handed (pas de weapon attached).
 - Dialogue state non maintenu entre tours non-TALK.
 - Emoji selection de scène par keyword anglais — fragile.
-- Beat advancement par fuzzy 0.7 — peut rater si noms divergent.
 - Trivial kill détection : `max_hp < 10` hardcodé.
 - Pas de spell slot recovery on rest implémenté.
 

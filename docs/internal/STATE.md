@@ -1,6 +1,6 @@
-# État actuel du code (snapshot 2026-04-11)
+# État actuel du code (snapshot 2026-07-19)
 
-Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou non commencé**. Basé sur le code présent au commit `7c0f9a0`.
+Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou non commencé**.
 
 > **Mise à jour 2026-06-02 :** Phase 3 (bot Discord) est désormais fonctionnelle
 > de bout en bout (combat 5e, beat progression, simulateur de playthrough
@@ -14,6 +14,12 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 > `db/migrations.py::ensure_schema` ajoute automatiquement les colonnes
 > manquantes (`ALTER TABLE ADD COLUMN`) + `schema_version` ; `create_all()` seul
 > ne le faisait pas.
+>
+> **Mise à jour 2026-07-19 :** passe de cohérence post-chantiers C/D/G.
+> CI GitHub Actions en place (3 jobs ruff/mypy/pytest, verts) ; mémoire
+> 4 couches réellement branchée en prod (chantier G) ; Story Director
+> auto-planifié (6 interactions + triggers) ; `/resume` restaure tout,
+> combat actif inclus (chantier C). ~2 900 tests.
 
 ## Phases du projet
 
@@ -21,10 +27,10 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 |---|---|---|
 | **Phase 1 — Engine** | 🟢 Terminée | `engine/` complet, ~98% coverage |
 | **Phase 2a — World + DB** | 🟢 Terminée | `world/`, `db/`, 11 repos, mappers |
-| **Phase 2b — Memory 4 couches** | 🟢 Terminée | `memory/`, ChromaDB, context assembler |
+| **Phase 2b — Memory 4 couches** | 🟢 Terminée | `memory/`, ChromaDB, context assembler — modules écrits tôt mais **branchés en prod seulement au chantier G** (2026-07-18) |
 | **Phase 2c — AI Core** | 🟢 Terminée | `ai/` (8 services), prompts, entity resolver |
 | **Phase 3 — Discord Bot** | 🟢 Fonctionnelle | Cogs, pipeline, views, embeds, launcher, combat 5e, beat progression — bout en bout |
-| **Phase 4 — Polish + ship** | 🟡 En cours | README/ARCHITECTURE à jour + LICENSE/CONTRIBUTING ; reste CI, migrations, blog post |
+| **Phase 4 — Polish + ship** | 🟡 En cours | README/ARCHITECTURE à jour + LICENSE/CONTRIBUTING + CI GitHub Actions ; reste sessions de jeu réelles, GIFs, blog post |
 
 ## Chantier combat D&D 5e (tasks/combat/)
 
@@ -123,7 +129,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ Scene context inclut beat info et state flags pour le narrator
 
 ### Testing
-- ✅ ~1 530 tests unitaires
+- ✅ ~2 900 tests unitaires
 - ✅ ScenarioRunner end-to-end (8 scénarios)
 - ✅ MCP Discord server (7 tools)
 - ✅ TesterBot pour live Discord
@@ -133,20 +139,19 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 
 | Feature | État | Gap |
 |---|---|---|
-| `/save` / `/resume` | 🟡 | Tests basiques OK, pas tous les edge cases (sessions concurrentes). Combat actif persiste maintenant après chaque tour (task 80.7) + à la fin. |
+| `/save` / `/resume` | 🟢 | Chantier C : `/resume` recharge personnages + inventaires + arc + **combat actif** (`combat_state_json`, zones réalignées via `_sanitize_combat_zones`) ; auto-checkpoint `persist_session()` après chaque action résolue. |
 | Combat state persistance | 🟢 | Sérialisé en JSON dans `campaigns.combat_state_json` (roundtrip Pydantic incluant `combat_id`, `end_reason`, `pending_phase_narrations`, `ActionBudget`). Auto-checkpointé après chaque tour (PC via `ActionPipeline` auto-checkpoint + NPC via `TurnManager._persist_state`) et à la finalisation (task 80.7) — reprise après déconnexion Discord garantie. |
 | i18n dynamique | 🟡 | Labels statiques OK ; contenu dynamique repose sur la compliance du prompt |
-| Story Director | 🟡 | Implémenté mais ne s'auto-déclenche pas ; silent fail si ChromaDB down |
+| Story Director | 🟢 | Auto-planifié par l'orchestrateur (`should_run_director` : toutes les 6 interactions + fin de combat + drift + force) ; chemin legacy à 20 tours dans `story_bible_logger` |
 | Initiative complète | 🟢 | 3 cas supportés via `CombatTrigger` : PLAYER surprise (agresseur en tête, enemies SURPRISED), NPC surprise (ambushers en tête, tous les PCs SURPRISED), BOTH_READY (roll standard + DEX tiebreak) |
 | Spell slots recovery | 🟡 | Long rest fonction existe mais pas intégrée à une mécanique de repos dans l'UX |
 | Combat rests / short rest | 🔴 | Non implémenté |
 | Check de concentration conflict | 🔴 | `cast_spell` n'interrompt pas l'ancienne concentration |
 | Proficiency check | 🔴 | Bonus toujours ajouté, pas de check actuel |
-| Persistance à chaud `bot.sessions` | 🔴 | Crash = perte de session en cours |
+| Persistance à chaud `bot.sessions` | 🟢 | Auto-checkpoint `persist_session()` après chaque action résolue (fix B1, complété au chantier C) — un crash ne perd que l'action en cours ; `/resume` restaure tout, combat inclus |
 
 ## Non commencé / pas dans le code
 
-- CI GitHub Actions
 - Loader custom spells / items (catalogues hardcodés)
 - Système de factions / témoins complexe
 - Multi-narrator / multi-MJ
@@ -159,7 +164,6 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - Tests end-to-end avec vrai Ollama
 - Tests de migration DB
 - Rollback de migration
-- Cleanup ChromaDB sur delete campagne
 
 ## Observabilité
 
@@ -196,7 +200,6 @@ Tout ce qui est hors de ce happy path est possible mais **susceptible** de casse
 
 - Travail Phase 3 restant : persistance robuste des sessions, tests d'intégration plus complets, gestion de crash.
 - Fix du bug `NPCRepository.update()` qui perd `dialogue_history/secrets/knowledge/aliases`.
-- Auto-trigger Story Director.
 - Logger les filtrages silencieux de `WorldGenerator`.
 - Uniformisation des patterns de mutation dans `engine/`.
-- Phase 4 : README joueur, CI, blog post.
+- Phase 4 : sessions de jeu réelles, GIFs, blog post.

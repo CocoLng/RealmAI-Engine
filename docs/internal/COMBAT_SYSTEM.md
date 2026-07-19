@@ -31,6 +31,7 @@ Joueur clique "Attack" (Discord button)
               │   └─ consume_action / consume_movement / etc.
               │
               ├─ advance_turn (tick conditions, skip morts/fuis, reset budget,
+              │                jet de recharge 5-6 des signatures épuisées,
               │                check_combat_end, queue legendary actions boss)
               │
               ├─ TurnManager.on_action_resolved
@@ -147,6 +148,8 @@ Chaque combattant, à chaque tour :
 | **Reaction** | 1 par **round** (off-turn) | Opportunity attacks + futurs Shield/Counterspell |
 
 **Reset** : Move/Action/Bonus sont reset au début du tour par `ActionBudget.reset_for_new_turn(speed)`. La Reaction persiste entre tours et reset quand le round wrappe (via `advance_turn`).
+
+**Recharge 5-6 (SRD)** : au début du tour d'un combattant à stat block, chaque signature `usage="recharge_5_6"` épuisée (`uses_remaining == 0`) fait l'objet d'un jet de `1d6` — sur 5+, elle récupère son usage ([engine/combat.py](../../engine/combat.py)). Une signature encore chargée n'est jamais re-rollée ni stackée. Le cue est queue sur `CombatState.pending_legendary_summaries` pour affichage par le TurnManager.
 
 Les helpers de mutation (`consume_action`, `consume_bonus_action`, `consume_movement`, `consume_reaction`) dans [engine/combat.py](../../engine/combat.py) sont les **seuls** points de décrémentation autorisés — ils raise si le budget est déjà consommé, ce qui permet aux validators et aux brains NPC de détecter les erreurs tôt.
 
