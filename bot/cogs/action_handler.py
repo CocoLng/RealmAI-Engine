@@ -159,7 +159,7 @@ class ActionHandlerCog(commands.Cog):
         """
         start = time.monotonic()
 
-        # Pause the combat auto-dodge watcher while the CURRENT combatant's
+        # Pause the combat reminder watcher while the CURRENT combatant's
         # own free-text action runs through the pipeline — an LLM run slower
         # than the watcher timeout must not fire a spurious "Défense
         # automatique" that queues a second resolution of the same turn on
@@ -184,7 +184,7 @@ class ActionHandlerCog(commands.Cog):
         finally:
             # The action never produced a result (pipeline error, dropped
             # progress message, cancelled clarification, or an exception
-            # escaping the render) — put the auto-dodge safety net back or
+            # escaping the render) — put the reminder safety net back or
             # combat soft-stalls forever. Non-None results go through
             # on_action_resolved below, which either advances the turn
             # (arming a fresh watcher on the next PC prompt) or re-arms

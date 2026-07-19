@@ -1,7 +1,7 @@
 """Tests for bot/combat_turn_manager.py (task 64).
 
 Covers the turn lifecycle primitives in isolation: hub upsert, NPC brain
-dispatch, timeout cancellation, finalize XP stub, and the auto-Dodge
+dispatch, timeout cancellation, finalize XP stub, and the turn-reminder
 timeout path. Discord interactions are mocked — the TurnManager's job is
 orchestration, not Discord protocol details.
 """
@@ -1081,7 +1081,7 @@ class TestTurnAdvanceGuard:
     ) -> None:
         """QUESTION is off-turn-legal and informational — no turn consumed.
 
-        The current PC's auto-dodge watcher was paused on the way into the
+        The current PC's reminder watcher was paused on the way into the
         pipeline; the no-advance path must put the safety net back.
         """
         session, _, tm, pc = self._setup()
@@ -1095,7 +1095,7 @@ class TestTurnAdvanceGuard:
         watcher = tm.pending_timeout
         assert watcher is not None and not watcher.done(), (
             "watcher not re-armed after a non-consuming action — combat "
-            "would soft-stall with no auto-dodge"
+            "would soft-stall with no reminder net"
         )
         tm._cancel_timeout()
 
@@ -1113,7 +1113,7 @@ class TestTurnAdvanceGuard:
     @pytest.mark.asyncio
     async def test_off_turn_actor_does_not_advance_turn(self) -> None:
         """A teammate's pipeline output must not consume the current turn —
-        and must not disarm the current PC's auto-dodge watcher either.
+        and must not disarm the current PC's reminder watcher either.
         """
         session, _, tm, _ = self._setup()
 
@@ -1208,93 +1208,43 @@ class TestTurnAdvanceGuard:
 
 
 # ---------------------------------------------------------------------------
-# Auto-dodge circuit breaker — combat without players must not loop forever
+# Turn reminder — the game NEVER acts in the player's place
 # ---------------------------------------------------------------------------
 
 
-class TestAutoDodgeCircuitBreaker:
-    """Live finding 2026-07-19: a test combat left running produced 49
-    consecutive auto-dodges in 1h45 (15 Story Director passes, GPU burned).
-    After _MAX_CONSECUTIVE_AUTO_ACTIONS auto-dodges with no human action,
-    the next timeout SUSPENDS combat instead of dodging; any human action
-    resets the streak and normal flow resumes."""
+class TestTurnReminder:
+    """Design decision 2026-07-19: no auto-action on timeout, ever. A turn
+    may stay open for 5 minutes or 8 hours — the watcher posts ONE gentle
+    reminder and then waits. (Replaces both the old auto-dodge and the
+    short-lived circuit breaker.)"""
 
     @pytest.mark.asyncio
-    async def test_watcher_still_dodges_under_threshold(
+    async def test_timeout_posts_one_reminder_and_nothing_else(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0)
+        monkeypatch.setattr("bot.combat_turn_manager._REMINDER_SECONDS", 0)
         session = _fake_session([_pc()])
         tm = _turn_manager(session, _fake_channel())
         tm.dispatch_action = AsyncMock()  # type: ignore[method-assign]
         tm._safe_send = AsyncMock()  # type: ignore[method-assign]
-        tm._consecutive_auto_actions = 2
 
         await tm._timeout_watcher("Aragorn")
 
-        tm.dispatch_action.assert_awaited_once()
-        assert tm._consecutive_auto_actions == 3
-
-    @pytest.mark.asyncio
-    async def test_timeout_past_threshold_suspends_combat(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0)
-        session = _fake_session([_pc()])
-        tm = _turn_manager(session, _fake_channel())
-        tm.dispatch_action = AsyncMock()  # type: ignore[method-assign]
-        tm._safe_send = AsyncMock()  # type: ignore[method-assign]
-        tm._consecutive_auto_actions = 3
-
-        await tm._timeout_watcher("Aragorn")
-
-        tm.dispatch_action.assert_not_awaited()  # no 4th dodge
-        assert tm.pending_timeout is None  # watcher NOT re-armed
-        sent = " ".join(
-            str(call) for call in tm._safe_send.await_args_list
-        )
-        assert "pause" in sent.lower()
-        # Combat state untouched — resumes on the next human action.
+        tm.dispatch_action.assert_not_awaited()  # no action in the player's place
+        assert tm.pending_timeout is None  # no re-arm: one reminder, then silence
+        sent = " ".join(str(c) for c in tm._safe_send.await_args_list)
+        assert "toujours ton tour" in sent
+        # Combat state untouched — the turn stays open indefinitely.
         assert session.combat_state.is_active
 
     @pytest.mark.asyncio
-    async def test_human_button_action_resets_streak(self) -> None:
-        session = _fake_session([_pc()])
-        session.combat_state = None  # early-return path — reset still fires
-        tm = _turn_manager(session, _fake_channel())
-        tm._consecutive_auto_actions = 3
-
-        action = InterpretedAction(
-            action_type=ActionType.DEFEND,
-            actor_name="Aragorn",
-            raw_input="je pare",
-        )
-        await tm.dispatch_action(action)
-
-        assert tm._consecutive_auto_actions == 0
-
-    @pytest.mark.asyncio
-    async def test_watcher_dispatch_does_not_reset_its_own_streak(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0)
+    async def test_cancelled_watcher_stays_silent(self) -> None:
         session = _fake_session([_pc()])
         tm = _turn_manager(session, _fake_channel())
         tm._safe_send = AsyncMock()  # type: ignore[method-assign]
-        # Real dispatch_action runs, hits the combat_state guard and
-        # returns — but it must NOT zero the streak the watcher just grew.
-        session.combat_state = None
-        tm._consecutive_auto_actions = 1
 
-        await tm._timeout_watcher("Aragorn")
+        tm.pending_timeout = asyncio.create_task(tm._timeout_watcher("Aragorn"))
+        tm._cancel_timeout()
+        await asyncio.sleep(0)
 
-        assert tm._consecutive_auto_actions == 2
-
-    def test_free_text_entry_resets_streak(self) -> None:
-        session = _fake_session([_pc()])
-        tm = _turn_manager(session, _fake_channel())
-        tm._consecutive_auto_actions = 3
-
-        tm.pause_timeout_for("Aragorn")
-
-        assert tm._consecutive_auto_actions == 0
+        tm._safe_send.assert_not_awaited()

@@ -6,8 +6,9 @@ Drives the turn lifecycle of a combat encounter inside a Discord channel:
 - Maintains a single "combat hub" :class:`discord.Message` edited in place
   round after round (modern discord.py 2.7 pattern — no channel spam).
 - On PC turns, pings the player, posts the ``CombatActionView``, and arms
-  a 5-minute asyncio timeout watcher. Expiry dispatches an auto-Dodge via
-  the same pipeline path a button click uses.
+  a 5-minute reminder watcher. Expiry posts ONE gentle reminder and then
+  waits: the game never acts in the player's place (design decision
+  2026-07-19) — a turn may stay open for hours until a human acts.
 - On NPC turns, dispatches the right brain by tier (minion → scripted,
   elite → behavior profile, boss → LLM tactician with scripted fallback),
   executes the plan, posts a dice embed + compact summary, and advances
@@ -80,14 +81,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_TIMEOUT_SECONDS = 300
-
-# Circuit breaker for the AFK safety net: after this many CONSECUTIVE
-# auto-dodges with no human action in between, the next timeout suspends
-# the combat instead of dodging again. Without it, a combat left running
-# with no players loops forever (49 auto-dodges in 1h45 observed live on
-# 2026-07-19, dragging a Story Director pass behind each one).
-_MAX_CONSECUTIVE_AUTO_ACTIONS = 3
+# Delay before the one-and-only turn reminder. NOT an action timeout:
+# nothing is ever played in the player's place (design decision
+# 2026-07-19) — after the reminder the turn simply stays open.
+_REMINDER_SECONDS = 300
 
 # Action types that never consume the actor's combat turn. QUESTION and
 # LOOK are the informational actions the validator deliberately allows
@@ -160,15 +157,6 @@ class TurnManager:
         next successful checkpoint clears it — ``persist_session`` always
         writes the full session snapshot, so the retry is implicit."""
         self._checkpoint_warned = False
-        self._consecutive_auto_actions = 0
-        """AFK streak: auto-dodges dispatched since the last human action.
-        Past ``_MAX_CONSECUTIVE_AUTO_ACTIONS`` the watcher suspends combat
-        instead of dodging (see :meth:`_timeout_watcher`)."""
-        self._auto_dispatch_in_flight = False
-        """True only while the watcher's own dispatch runs, so it is not
-        mistaken for a human action by the streak reset. A human action
-        landing inside that window keeps the streak — benign: the worst
-        case is one early suspension, healed by any next action."""
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -199,7 +187,7 @@ class TurnManager:
         actually consumed their action. Refused actions
         (:class:`UnknownEntityResult`), unresolved ambiguities, off-turn-legal
         QUESTION/LOOK, free actions, and outputs authored by another player
-        leave the rotation untouched — they re-arm the auto-dodge watcher
+        leave the rotation untouched — they re-arm the reminder watcher
         instead. ``result=None`` is the trusted internal form (NPC turns,
         surprise skip) whose action economy the engine already enforced:
         it always advances.
@@ -220,7 +208,7 @@ class TurnManager:
 
             if not self._turn_was_consumed(result, state):
                 # No turn consumed — keep the rotation in place and make
-                # sure the AFK safety net is back up (rearm_timeout no-ops
+                # sure the reminder net is back up (rearm_timeout no-ops
                 # when a live watcher exists, e.g. off-turn chatter that
                 # never paused the current PC's watcher).
                 self.rearm_timeout()
@@ -274,14 +262,13 @@ class TurnManager:
     async def dispatch_action(self, action: InterpretedAction) -> None:
         """Run one interpreted action through the pipeline and advance the turn.
 
-        Used by the :class:`CombatActionView` button callbacks and by the
-        auto-Dodge timeout watcher. Free-text actions come in through
+        Used by the :class:`CombatActionView` button callbacks. Free-text
+        actions come in through
         :class:`ActionHandlerCog` and bypass this method — the cog handles
         them directly and then calls :meth:`on_action_resolved`.
 
         The turn can advance between this coroutine being scheduled and it
-        acquiring ``action_lock``: a detached watcher races a free-text
-        action FIFO on the lock, and a button click can outlive its turn
+        acquiring ``action_lock``: a button click can outlive its turn
         when the old hub's delete failed. The guard below re-checks, under
         the lock, that combat is still live and that the action's actor is
         still the current combatant — and drops the action WITHOUT
@@ -289,10 +276,6 @@ class TurnManager:
         after the guard: a stale dispatch must not disarm the watcher
         protecting the new current turn.
         """
-        if not self._auto_dispatch_in_flight:
-            # A human acted — the AFK streak is broken.
-            self._consecutive_auto_actions = 0
-
         if self.session.combat_state is None:
             return
 
@@ -329,7 +312,7 @@ class TurnManager:
         # refused action, unresolved ambiguity — re-prompt the same
         # combatant instead of advancing: the clicked view disabled
         # itself, so without a fresh hub the player would be stuck until
-        # the auto-dodge timeout fired.
+        # the reminder watcher fired.
         state = self.session.combat_state
         if (
             state is not None
@@ -769,50 +752,33 @@ class TurnManager:
     # ------------------------------------------------------------------
 
     async def _timeout_watcher(self, actor_name: str) -> None:
+        """Post one gentle reminder after ``_REMINDER_SECONDS``, then wait.
+
+        The game NEVER acts in the player's place (design decision
+        2026-07-19): no auto-dodge, no suspension — the turn stays open
+        for as long as it takes (5 minutes or 8 hours), and any human
+        action resumes the normal flow through the usual entry points.
+        """
         try:
-            await asyncio.sleep(_TIMEOUT_SECONDS)
+            await asyncio.sleep(_REMINDER_SECONDS)
         except asyncio.CancelledError:
             return
 
-        # The timeout has fired — this task IS pending_timeout. Detach it
-        # before dispatching, otherwise dispatch_action's _cancel_timeout
-        # cancels the running watcher itself and the CancelledError kills
-        # the auto-dodge at the next suspension point inside the pipeline.
+        # This task IS pending_timeout — detach so a later action's
+        # _cancel_timeout does not try to cancel a finished watcher.
         if self.pending_timeout is asyncio.current_task():
             self.pending_timeout = None
 
-        if self._consecutive_auto_actions >= _MAX_CONSECUTIVE_AUTO_ACTIONS:
-            # Circuit breaker: nobody is playing. Freeze the rotation (no
-            # dodge, no re-arm) — combat state stays intact and any human
-            # action (button or free text) resumes the normal flow.
-            logger.info(
-                "AUTO-DODGE circuit breaker: %d consecutive auto-actions, "
-                "combat suspended campaign=%s",
-                self._consecutive_auto_actions,
-                getattr(self.session.campaign, "id", "?"),
-            )
-            await self._safe_send(
-                "⏸️ **Combat en pause** — personne n'agit depuis un moment. "
-                "La partie reprend à votre prochaine action.",
-            )
-            return
-
-        self._consecutive_auto_actions += 1
+        logger.info(
+            "TURN reminder posted for %s campaign=%s — waiting for a "
+            "human action, no auto-play",
+            actor_name,
+            getattr(self.session.campaign, "id", "?"),
+        )
         await self._safe_send(
-            f"⏱️ **{actor_name}** n'a pas agi à temps — Défense automatique.",
+            f"⏱️ **{actor_name}** — c'est toujours ton tour, prends ton "
+            "temps. Le combat attend ta prochaine action.",
         )
-        auto_action = InterpretedAction(
-            action_type=ActionType.DEFEND,
-            actor_name=actor_name,
-            raw_input="(auto-dodge sur timeout)",
-        )
-        self._auto_dispatch_in_flight = True
-        try:
-            await self.dispatch_action(auto_action)
-        except Exception as exc:
-            logger.exception("Auto-dodge dispatch failed: %s", exc)
-        finally:
-            self._auto_dispatch_in_flight = False
 
     def _cancel_timeout(self) -> None:
         if self.pending_timeout is not None and not self.pending_timeout.done():
@@ -820,25 +786,20 @@ class TurnManager:
         self.pending_timeout = None
 
     def pause_timeout_for(self, actor_name: str) -> bool:
-        """Pause the auto-dodge watcher while ``actor_name`` acts via free text.
+        """Pause the reminder watcher while ``actor_name`` acts via free text.
 
         Called by ``ActionHandlerCog._run_pipeline`` before it enters the
-        LLM pipeline: a run slower than ``_TIMEOUT_SECONDS`` must not let
-        the watcher fire mid-pipeline and queue a second resolution of the
-        same turn on ``action_lock``. Only pauses when ``actor_name`` IS
-        the current combatant and a live watcher exists — an off-turn
-        player's message must not disarm the current player's timeout.
+        LLM pipeline: a run slower than ``_REMINDER_SECONDS`` must not let
+        the watcher nag a player who is in fact acting. Only pauses when
+        ``actor_name`` IS the current combatant and a live watcher exists —
+        an off-turn player's message must not disarm the current player's
+        reminder.
 
         Returns ``True`` when a watcher was cancelled. The caller then owns
-        the safety net: it MUST call :meth:`rearm_timeout` on every path
-        where the action does not resolve the turn, otherwise combat
-        soft-stalls with no auto-dodge.
+        the net: it MUST call :meth:`rearm_timeout` on every path where the
+        action does not resolve the turn, otherwise a genuinely idle turn
+        never gets its reminder.
         """
-        # Any free-text attempt is a human at the table — break the AFK
-        # streak even when the message is off-turn or the watcher is gone
-        # (that is precisely how a suspended combat wakes up).
-        self._consecutive_auto_actions = 0
-
         state = self.session.combat_state
         if state is None or not state.is_active:
             return False
@@ -850,11 +811,11 @@ class TurnManager:
         return True
 
     def rearm_timeout(self) -> None:
-        """Re-arm the auto-dodge watcher after a paused action failed to resolve.
+        """Re-arm the reminder watcher after a paused action failed to resolve.
 
         Counterpart of :meth:`pause_timeout_for`. The turn did not advance,
         so the current combatant is still the player whose watcher was
-        paused — they get a fresh full ``_TIMEOUT_SECONDS`` window. No-ops
+        paused — they get a fresh full ``_REMINDER_SECONDS`` window. No-ops
         when combat is over, when a watcher is already armed (e.g. the turn
         DID advance and ``_prompt_pc_turn`` armed the next one), or on NPC
         turns (which never have a watcher).

@@ -115,7 +115,7 @@ Toutes héritent de `LoggedView(ui.View)` pour un logging uniforme des erreurs.
 | `StartOnboardingView` | Bouton « Créer Personnage » (re-cliquable pour recommencer) | — |
 | `ForceLaunchView` | Bouton « Lancer la partie » réservé au créateur (exclut joueurs non-ready) | 10 min |
 
-`CombatActionView` et les trois selects secondaires vérifient `interaction.user.id == acting_user_id` dans `interaction_check` (tout autre clic reçoit un message éphémère « Ce n'est pas ton tour. »). Les boutons sont désactivés quand leur pré-condition est vide (pas de cible vivante → Attaquer grisé, pas de sort jetable → Sort grisé, pas de zone adjacente → Se déplacer grisé). La vue elle-même a `timeout=None` — c'est le `TurnManager` qui surveille le 5-minute timeout via une task asyncio et déclenche l'auto-Dodge.
+`CombatActionView` et les trois selects secondaires vérifient `interaction.user.id == acting_user_id` dans `interaction_check` (tout autre clic reçoit un message éphémère « Ce n'est pas ton tour. »). Les boutons sont désactivés quand leur pré-condition est vide (pas de cible vivante → Attaquer grisé, pas de sort jetable → Sort grisé, pas de zone adjacente → Se déplacer grisé). La vue elle-même a `timeout=None` — c'est le `TurnManager` qui arme une task asyncio de 5 min qui poste **un rappel unique** (« c'est toujours ton tour »). Aucune action n'est jouée à la place du joueur (décision 2026-07-19) : le tour reste ouvert indéfiniment.
 
 `ClarificationView` vérifie via `interaction_check` que seul l'acteur original peut cliquer.
 `ForceLaunchView` vérifie que seul le créateur de la campagne (`creator_id`) peut cliquer.
@@ -186,13 +186,13 @@ Responsabilités :
 
 1. **Bannière de démarrage** : `start(trigger)` poste `build_combat_start_embed(state, trigger)` une seule fois.
 2. **Hub édité en place** : un seul `discord.Message` long-lived par combat (`self.hub_message`). Chaque tour édite `content`/`embed`/`view` via `discord.abc.Messageable.edit`. Les résultats (narration, dice embed) sont postés en dessous pour garder l'historique lisible.
-3. **Tour PC** : `_prompt_pc_turn` pose un `CombatActionView` avec `<@user_id>` en ping, start un watcher `asyncio.create_task(self._timeout_watcher(…))` de 5 min. Le watcher dispatch un auto-Dodge via la même route que les boutons.
+3. **Tour PC** : `_prompt_pc_turn` pose un `CombatActionView` avec `<@user_id>` en ping, start un watcher `asyncio.create_task(self._timeout_watcher(…))` de 5 min. À l'expiration, le watcher poste un rappel unique puis attend — le jeu ne joue jamais à la place du joueur (décision 2026-07-19).
 4. **Tour NPC** : `_prompt_npc_turn` passe la main à `_resolve_npc_turn` qui dispatch par tier :
    - `MINION` → `engine.npc_ai.scripted.decide_minion_action`
    - `ELITE` → `engine.npc_ai.elite.decide_elite_action`
    - `BOSS` → `engine.npc_ai.boss_brain.decide_boss_action(tactician=…)` avec `NPCTactician(session.ollama_client)` si disponible, fallback sur `decide_elite_action` sinon.
    Exécute le plan via `execute_action_plan`, poste un `build_attack_roll_embed` pour les attaques, puis appelle `advance_turn` + `on_action_resolved` en récursion jusqu'au prochain PC ou à la fin du combat.
-5. **Dispatch boutons / auto-Dodge** : `dispatch_action(interpreted)` acquiert `session.action_lock`, construit un `ActionPipeline` frais, appelle la méthode publique `pipeline.process_interpreted_action(action)` (bypass interpreter), rend la narration + dice embeds, puis délègue à `on_action_resolved`.
+5. **Dispatch boutons** : `dispatch_action(interpreted)` acquiert `session.action_lock`, construit un `ActionPipeline` frais, appelle la méthode publique `pipeline.process_interpreted_action(action)` (bypass interpreter), rend la narration + dice embeds, puis délègue à `on_action_resolved`.
 6. **Cues off-turn** : `_flush_pending_cues` vide `state.pending_legendary_summaries` et `state.pending_phase_narrations` en messages compacts (⚡ / 🔥), puis enrichit chaque transition de phase via `narrate_phase_transition`.
 7. **Fin de combat** : `_finalize` délègue à `bot.combat_end.finalize_combat(session, end_reason)` (idempotent via flag `_finalized` sur `CombatState`), poste le `build_combat_end_embed(summary)`, fige le hub avec le label emoji correspondant, et clear `session.combat_turn_manager`. **Ne nettoie plus `session.combat_state`** : l'état reste posé avec `is_active=False` pour l'historique / tests / inspection ; le reset à `None` arrive à la prochaine entrée en combat via `bot/combat_entry.py`.
 8. **Persistance post-tour** : `TurnManager` reçoit `db_factory` (via `CombatCog.build_turn_manager`) et appelle `_persist_state` (async, off-thread `persist_session`) après `advance_turn` et après `_finalize`. Les actions PC sont déjà auto-checkpointées par le pipeline ; cet ajout couvre les tours NPC et l'état terminal, garantissant qu'une déconnexion Discord n'efface pas la progression du combat.

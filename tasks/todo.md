@@ -200,13 +200,17 @@ sessions pilotées par script tester autonome (pattern du skill).
 - Hygiène : la suite pytest écrit des `logs/realm_*.log` réels (fixtures
   d'échec incluses) — ça a piégé deux diagnostics aujourd'hui. Rediriger le
   FileHandler vers tmp_path sous pytest.
-- ~~**Combat sans joueur = boucle infinie d'auto-dodge**~~ **FIXÉ le soir
-  même** (constat : 49 esquives automatiques en 1 h 45, 15 Story Directors,
-  ~26 min de GPU brûlées). Disjoncteur dans le TurnManager : après 3
-  auto-actions consécutives sans action humaine, le timeout suivant
-  suspend le combat (watcher désarmé, état intact, message ⏸️) ; toute
-  action humaine — bouton ou texte libre — casse la série et relance le
-  flux. 5 tests (`TestAutoDodgeCircuitBreaker`). Le bot de test a été
+- ~~**Combat sans joueur = boucle infinie d'auto-dodge**~~ **RÉGLÉ par une
+  décision de design (2026-07-19 soir)** : **le jeu ne joue plus jamais à
+  la place du joueur.** L'auto-dodge sur timeout est supprimé (et le
+  disjoncteur intermédiaire avec) — au bout de 5 min le watcher poste UN
+  rappel (« c'est toujours ton tour ») puis attend indéfiniment : un tour
+  peut rester ouvert 5 min ou 8 h, c'est voulu. La machinerie
+  pause/rearm/stale-guard du watcher est conservée (elle protège le rappel
+  des faux positifs mid-pipeline). Constat déclencheur : 49 esquives
+  automatiques en 1 h 45 sur un combat de test sans joueur, 15 Story
+  Directors traînés (~26 min de GPU). Tests adaptés
+  (`TestTurnReminder`, concurrency bugs 2-4 reformulés). Le bot de test est
   arrêté ; l'état est persisté, la campagne reprend au `/resume`.
 
 -----

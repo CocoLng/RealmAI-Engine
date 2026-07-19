@@ -675,7 +675,7 @@ class TestEndCampaign:
     ) -> None:
         """M3 — /end_campaign must dismantle the live combat UI.
 
-        Without teardown the auto-dodge watcher and button views outlive
+        Without teardown the reminder watcher and button views outlive
         the session and resurrect it, posting into the archived channel.
         """
         session = GameSession(campaign=persisted_campaign, creator_id=USER_ID)
