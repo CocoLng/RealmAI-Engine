@@ -214,11 +214,10 @@ class SignatureAbility(BaseModel):
         preserved — that is how phase-locked signatures are represented
         before unlock.
 
-        ``recharge_5_6`` is budgeted like ``per_combat`` on purpose: the
-        turn-start recharge roll is not implemented anywhere in the
-        engine, so leaving it unbounded made the "recharges on 5-6" nuke
-        fire every single round. Once-per-combat is the conservative
-        reading until the recharge roll lands.
+        ``recharge_5_6`` starts with the same 1-use budget: the ability
+        opens charged, and ``engine.combat.advance_turn`` rolls the SRD
+        turn-start d6 (5+) to restore a spent one — see
+        ``tests/engine/combat/test_recharge.py``.
         """
         if self.usage in _LIMITED_USAGES and self.uses_remaining is None:
             self.uses_remaining = 1

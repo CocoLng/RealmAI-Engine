@@ -504,6 +504,20 @@ def advance_turn(state: CombatState) -> CombatState:
         new_current.legendary_points_remaining = (
             new_current.stat_block.legendary_points_per_round
         )
+    # SRD 5e recharge: at the start of the creature's turn, a spent
+    # « Recharge 5-6 » ability comes back on a d6 of 5+. Only rolled when
+    # actually spent — a charged ability is never re-rolled nor stacked.
+    if new_current.stat_block is not None:
+        for sig in new_current.stat_block.signature_abilities:
+            if sig.usage != "recharge_5_6" or sig.uses_remaining != 0:
+                continue
+            recharge_roll = roll("1d6")
+            if recharge_roll.total >= 5:
+                sig.uses_remaining = 1
+                state.pending_legendary_summaries.append(
+                    f"{new_current.name} récupère « {sig.name} » "
+                    f"(jet de recharge : {recharge_roll.total})",
+                )
 
     # 5. Check for end of combat.
     end = check_combat_end(state)
