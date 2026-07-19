@@ -68,15 +68,35 @@ les traiter comme des tâches séparées — une vraie partie les couvre toutes.
       prête — baseline d'avril : 438-478 s). Artefact :
       `tasks/logs/2026-04-26-lobby-live-test.txt`. Piloté par script tester
       autonome (scratchpad `c8_lobby_smoke.py`).
-- [ ] Session 2 — exploration + combat, avec mesure de latence H8. Inclure
-      explicitement **un MOVE en plein prefetch** et **un round de combat
-      avec prefetch actif**. Le gain annoncé (~57-80 s → <2 s) est **attendu,
-      jamais mesuré** contre un vrai Ollama →
-      `docs/audits/2026-06-10-h8-latency-measurements.md:70`
-- [ ] Session 3 — `/hint` de bout en bout (3 niveaux + cooldown), avec
-      `DISCORD_TEST_BOT_TOKEN`
-- [ ] Consigner les résultats : mettre à jour le doc de mesures H8, et noter
-      tout écart de comportement observé
+- [x] **Session 2 — exploration + latences H8 : PASS, mesures consignées**
+      dans `docs/audits/2026-06-10-h8-latency-measurements.md` (section
+      « Mesures live 2026-07-19 »). MOVE préfetché = **0 génération**
+      (35,7 s de pipeline LLM seulement) ; **MOVE en plein prefetch = une
+      seule génération**, le MOVE attend le job (comportement verrouillé le
+      matin même par le fix CI). Resume post-restart : 6 s.
+- [x] **Session 3 — `/hint` : PASS** (niveau 1 vague → niveau 2 objectifs →
+      niveau 3 + cooldown « réessaie dans 5 tour(s) »).
+- [x] Consigner les résultats — doc H8 à jour + transcripts commités
+      (`tasks/logs/`).
+
+**Trouvailles des sessions live (les 3 vérifications ont payé) :**
+- **Bug majeur fixé** — le round-trip DB aplatissait tout item en `Item` de
+  base : après CHAQUE save/resume, toute attaque était refusée (« Attack
+  requires a weapon », `damage_dice` perdu, AC d'armure fantôme). Invisible
+  des 2890 tests (inventaires construits au catalogue, jamais round-trippés).
+  Fix `fix(inventory)` + 4 tests, réparation auto des rows tronquées par le
+  catalogue. Combat live re-prouvé après fix.
+- **Bug UX fixé** — `/hint` niveau 3 affichait `_judge_timeout_` brut et
+  consommait le cooldown quand le BeatJudge timeout sous contention Ollama.
+  Fix `fix(hint)` + 2 tests.
+- Écarts mineurs notés (Temps 3 ou différé) : `equip` répond « not found in
+  inventory » pour un item déjà équipé (trompeur) ; `inject_scene` ne prend
+  pas l'`action_lock` (écrase le lieu pendant une action en vol — outillage
+  de test) ; MCP discord-test peu fiable (wait_for qui rate les réponses,
+  flag `online` faux, IDs arrondis en float côté client) — les scripts
+  tester autonomes sont la voie ; la doc du skill `discord-live-testing`
+  décrit un `create_character` à vues qui n'existe plus (quick-only,
+  remplacé par `!test lobby`).
 
 Outillage disponible : skill `discord-live-testing`, MCP `discord-test`
 (`discord_status` d'abord pour vérifier que le bot répond), et

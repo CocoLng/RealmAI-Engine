@@ -1,0 +1,177 @@
+[18:20:25] tester connecté: test1-stories-bot#8543 → canal 1528353821615718451
+[18:20:25] ========================================================================
+[18:20:25] SESSIONS 2+3 LIVE — resume, prefetch H8, combat, /hint (2026-07-19, bot fraîchement redémarré)
+[18:20:25] ========================================================================
+[18:20:25] >>> !test resume
+[18:20:31] <<< [1528436366143131648] content='Session reprise ! Campagne **Dark Fantasy** -- 1 personnage(s), 0 PNJ(s), 0 quete(s).'
+[18:20:31]     (1re réponse 1.3s, total 6.3s)
+[18:20:31] [PASS] resume: la campagne se recharge après le restart
+[18:20:31] --- 6s : le job prefetch sur « Crypte oubliée » démarre ---
+[18:20:37] >>> !test player=2 move direction="Crypte oubliée"
+[18:20:43] <<< [1528436414218502198] embed(title='En cours — Thorin', desc='> je vais vers Crypte oubliée', fields=["🔄 Interprétation de l'action":'\u200b', '⚪ Vérification du contexte':'\u200b', '⚪ Application des règles':'\u200b', '⚪ Résolution mécanique':'\u200b', '⚪ Préparation du contexte':'\u200b', '⚪ Narration':'\u200b'])
+[18:20:43]     (1re réponse 0.5s, total 5.5s)
+[18:20:43] [PASS] MOVE 1: arrivée à la Crypte oubliée
+[18:20:43] >>> !test player=2 move direction="Salle des offrandes"
+[18:20:48] <<< [1528436438360916128] content='⏳ action en cours, réessaie.'
+[18:20:48]     (1re réponse 0.7s, total 5.7s)
+[18:20:48] [FAIL] MOVE 2: retour Salle des offrandes
+[18:20:48] >>> !test inject_scene name=Clairière~du~péage description=Un~brigand~bloque~le~passage~et~exige~un~péage. npcs=Brigand
+[18:20:55] <<< [1528436466143723671] content='Scene injected: Clairière du péage (items=0, descriptions=0, npcs=1)'
+[18:20:55]     (1re réponse 1.7s, total 6.7s)
+[18:20:55] >>> !test player=2 narrate text="j'attaque le Brigand avec mon épée"
+[18:21:01] <<< [1528436490110242857] content='⏳ action en cours, réessaie.'
+[18:21:01]     (1re réponse 0.8s, total 5.8s)
+[18:21:01] [FAIL] combat: le Brigand est engagé
+[18:21:01] >>> !test game_state
+[18:21:06] <<< [1528436513598210099] content='```json\n{\n  "campaign": {\n    "name": "Dark Fantasy",\n    "id": "260558f3-e07c-43b3-ad2a-819d0b6d6ba2"\n  },\n  "characters": [\n    {\n      "user_id": 200000002,\n      "name": "Thorin",\n      "race": "Dwarf",\n      "class": "Fighter",\n      "hp": 13,\n      "max_hp": 13,\n      "ac":'
+[18:21:06]     (1re réponse 0.5s, total 5.5s)
+[18:21:06] [FAIL] game_state: combat_active=true
+[18:21:06] --- SESSION 3 : /hint 3 niveaux + cooldown ---
+[18:21:06] >>> !test player=2 hint
+[18:21:12] <<< [1528436536297656525] content='Étudiez le code et énoncez votre traduction sans détour.\n\n💡 Niveau 1'
+[18:21:12]     (1re réponse 0.5s, total 5.5s)
+[18:21:12] >>> !test player=2 hint
+[18:21:17] <<< [1528436559601336511] content="Voici ce qu'il te reste à faire :\n◯ Décrypter le code (Le code du sang glacé).\n◯ Le joueur énonce explicitement la traduction — engagement clair.\n\n💡 Niveau 2"
+[18:21:17]     (1re réponse 0.5s, total 5.5s)
+[18:21:17] >>> !test player=2 hint
+[18:21:28] <<< [1528436604404764845] content='_judge_timeout_\n\n💡 Niveau 3'
+[18:21:28]     (1re réponse 5.7s, total 10.7s)
+[18:21:28] [PASS] hint: escalade visible (3 réponses distinctes)
+[18:21:28] >>> !test player=2 hint
+[18:21:33] <<< [1528436627112857823] content='💡 Niveau 3 indisponible — réessaie dans 5 tour(s).'
+[18:21:33]     (1re réponse 0.4s, total 5.4s)
+[18:21:33] [PASS] hint 4: cooldown signalé ('💡 Niveau 3 indisponible — réessaie dans 5 tour(s).')
+[18:21:33] ========================================================================
+[18:21:33] TIMINGS wall-clock (pipeline complet interprète+moteur+narration) :
+[18:21:33]   - resume post-restart: 6.3s
+[18:21:33]   - MOVE en plein prefetch (Crypte oubliée): 5.5s
+[18:21:33]   - MOVE retour (lieu généré depuis 13:05): 5.7s
+[18:21:33]   - entrée en combat (action libre): 5.8s
+[18:21:33]   - /hint niveau 1: 5.5s
+[18:21:33]   - /hint niveau 2: 5.5s
+[18:21:33]   - /hint niveau 3: 10.7s
+[18:21:33]   - /hint n°4 (cooldown attendu): 5.4s
+[18:21:33] Décomposition moteur : voir logs/realm_*.log (OLLAMA time=, LOCATION changed, Location prefetch)
+[18:21:33] VERDICT: ÉCHEC (voir FAIL)
+[18:21:33] ========================================================================
+
+[19:27:11] tester connecté: test1-stories-bot#8543
+[19:27:11] ========================================================================
+[19:27:11] MESURES FINALES H8 — MOVE lieu généré + combat (2026-07-19)
+[19:27:11] ========================================================================
+[19:27:11] >>> !test player=2 move direction="Salle des offrandes"
+[19:32:11]     PAS de message terminal en 300s
+[19:32:11] [FAIL] arrivée Salle des offrandes
+[19:32:11] >>> !test inject_scene name=Clairière~du~péage description=Un~brigand~bloque~le~passage. npcs=Brigand
+[19:32:41]     PAS de message terminal en 30s
+[19:32:41] >>> !test player=2 narrate text="j'attaque le Brigand avec mon épée"
+[19:37:41]     PAS de message terminal en 300s
+[19:37:41] >>> !test game_state
+[19:38:11]     PAS de message terminal en 30s
+[19:38:11] [FAIL] combat_active=true après l'attaque
+[19:38:11] ========================================================================
+[19:38:11] TIMINGS terminaux (wall-clock action → message final) :
+[19:38:11]   - MOVE vers lieu généré (arrivée scène) (timeout): 300.0s
+[19:38:11]   - inject_scene (timeout): 30.0s
+[19:38:11]   - entrée en combat (action libre) (timeout): 300.0s
+[19:38:11]   - game_state (timeout): 30.0s
+[19:38:11] VERDICT: ÉCHEC (voir FAIL)
+[19:38:11] ========================================================================
+
+[19:39:18] tester connecté: test1-stories-bot#8543
+[19:39:18] ========================================================================
+[19:39:18] MESURES FINALES H8 — MOVE lieu généré + combat (2026-07-19)
+[19:39:18] ========================================================================
+[19:39:18] >>> !test player=2 move direction="Salle des offrandes"
+[19:39:19] <<< [1528456217645551737] embed(title='En cours — Thorin', desc='> je vais vers Salle des offrandes', fields=["🔄 Interprétation de l'action":'\u200b', '⚪ Vérification du contexte':'\u200b', '⚪ Application des règles':'\u200b', '⚪ Résolution mécanique':'\u200b', '⚪ Préparation du contexte':'\u200b', '⚪ Narration':'\u200b'])
+[19:39:54] <<< [1528456364060446772] embed(title='📍 Salle des offrandes', desc="Des flammes bleues lèchent le sol de la salle où un sceau ancestral s'inscrit dans du givre éternel.", fields=['👥 Personnages présents':'Aucun', '🚪 Sorties':'Autel central entouré de flammes bleues, Salle du sanctuaire principal, Crypte oubliée', '🔍 Objets visibles':'Pince en fer forgé'])
+[19:39:54]     TERMINAL atteint en 35.7s
+[19:39:54] [PASS] arrivée Salle des offrandes
+[19:39:54] >>> !test inject_scene name=Clairière~du~péage description=Un~brigand~bloque~le~passage. npcs=Brigand
+[19:39:55] <<< [1528456366778355722] content='Scene injected: Clairière du péage (items=0, descriptions=0, npcs=1)'
+[19:39:55]     TERMINAL atteint en 0.6s
+[19:39:55] >>> !test player=2 narrate text="j'attaque le Brigand avec mon épée"
+[19:39:55] <<< [1528456369433477201] embed(title='En cours — Thorin', desc="> j'attaque le Brigand avec mon épée", fields=["🔄 Interprétation de l'action":'\u200b', '⚪ Vérification du contexte':'\u200b', '⚪ Application des règles':'\u200b', '⚪ Résolution mécanique':'\u200b', '⚪ Préparation du contexte':'\u200b', '⚪ Narration':'\u200b'])
+[19:44:55]     PAS de message terminal en 300s
+[19:44:55] >>> !test game_state
+[19:44:55] <<< [1528457628143845478] content='```json\n{\n  "campaign": {\n    "name": "Dark Fantasy",\n    "id": "260558f3-e07c-43b3-ad2a-819d0b6d6ba2"\n  },\n  "characters": [\n    {\n      "user_id": 200000002,\n      "name": "Thorin",\n      "race": "Dwarf",\n      "class": "Fighter",\n      "hp": 13,\n '
+[19:44:55]     TERMINAL atteint en 0.7s
+[19:44:55] [FAIL] combat_active=true après l'attaque
+[19:44:55] ========================================================================
+[19:44:55] TIMINGS terminaux (wall-clock action → message final) :
+[19:44:55]   - MOVE vers lieu généré (arrivée scène): 35.7s
+[19:44:55]   - inject_scene: 0.6s
+[19:44:55]   - entrée en combat (action libre) (timeout): 300.0s
+[19:44:55]   - game_state: 0.7s
+[19:44:55] VERDICT: ÉCHEC (voir FAIL)
+[19:44:55] ========================================================================
+
+[19:47:15] tester connecté: test1-stories-bot#8543
+[19:47:15] ========================================================================
+[19:47:15] COMBAT FINAL — equip kit puis attaque + round (2026-07-19)
+[19:47:15] ========================================================================
+[19:47:15] >>> !test player=2 equip item=Longsword slot="Main Hand"
+[19:47:16] <<< [1528458217355477095] content="Erreur: Item 'Longsword' not found in inventory"
+[19:47:45]     pas de terminal en 30s
+[19:47:45] >>> !test player=2 equip item=Shield slot="Off Hand"
+[19:47:46] <<< [1528458342333157476] content="Erreur: Item 'Shield' not found in inventory"
+[19:48:15]     pas de terminal en 30s
+[19:48:15] >>> !test inject_scene name=Clairière~du~péage description=Un~brigand~bloque~le~passage. npcs=Brigand
+[19:48:16] <<< [1528458468812652646] content='Scene injected: Clairière du péage (items=0, descriptions=0, npcs=1)'
+[19:48:16]     TERMINAL en 0.9s
+[19:48:16] >>> !test player=2 narrate text="j'attaque le Brigand avec mon épée"
+[19:48:17] <<< [1528458471543148556] embed(title='En cours — Thorin', desc="> j'attaque le Brigand avec mon épée", fields=["🔄 Interprétation de l'action":'\u200b', '⚪ Vérification du contexte':'\u200b', '⚪ Application des règles':'\u200b', '⚪ Résolution mécanique':'\u200b', '⚪ Préparation du contexte':'\u200b', '⚪ Narration':'\u200b'])
+[19:52:16]     pas de terminal en 240s
+[19:52:16] >>> !test game_state
+[19:52:17] <<< [1528459479769809069] content='```json\n{\n  "campaign": {\n    "name": "Dark Fantasy",\n    "id": "260558f3-e07c-43b3-ad2a-819d0b6d6ba2"\n  },\n  "characters": [\n    {\n      "user_id": 200000002,\n      "name": "Thorin",\n      "race": "Dwarf",\n      "class": "Fighter",\n      "hp": 13,\n '
+[19:52:17]     TERMINAL en 0.9s
+[19:52:17] [FAIL] combat_active=true après l'attaque armée
+[19:52:17] ========================================================================
+[19:52:17] TIMINGS terminaux :
+[19:52:17]   - equip Longsword (timeout): 30.0s
+[19:52:17]   - equip Shield (timeout): 30.0s
+[19:52:17]   - inject_scene: 0.9s
+[19:52:17]   - entrée en combat (arme équipée) (timeout): 240.0s
+[19:52:17]   - game_state: 0.9s
+[19:52:17] VERDICT: ÉCHEC (voir FAIL)
+[19:52:17] ========================================================================
+
+[20:00:47] tester connecté: test1-stories-bot#8543
+[20:00:47] ========================================================================
+[20:00:47] COMBAT FINAL v2 — resume (répare l'inventaire) puis attaque + round (2026-07-19, post fix sérialisation)
+[20:00:47] ========================================================================
+[20:00:47] >>> !test resume
+[20:00:48] <<< [1528461623948476456] content='Session reprise ! Campagne **Dark Fantasy** -- 1 personnage(s), 1 PNJ(s), 0 quete(s).'
+[20:00:48]     TERMINAL en 1.3s
+[20:00:48] >>> !test inject_scene name=Clairière~du~péage description=Un~brigand~bloque~le~passage. npcs=Brigand
+[20:00:49] <<< [1528461627656114248] content='Scene injected: Clairière du péage (items=0, descriptions=0, npcs=1)'
+[20:00:49]     TERMINAL en 0.9s
+[20:00:49] >>> !test player=2 narrate text="j'attaque le Brigand avec mon épée"
+[20:00:50] <<< [1528461630508236886] embed(title='En cours — Thorin', desc="> j'attaque le Brigand avec mon épée", fields=["🔄 Interprétation de l'action":'\u200b', '⚪ Vérification du contexte':'\u200b', '⚪ Application des règles':'\u200b', '⚪ Résolution mécanique':'\u200b', '⚪ Préparation du contexte':'\u200b', '⚪ Narration':'\u200b'])
+[20:01:28] <<< [1528461792827937030] embed(title='⚔️ Combat commence', desc='Thorin attaque Brigand.', fields=["Ordre d'initiative":'➡️ 🧛 **Thorin** — init 21\n   👹 **Brigand** — init 2 *(surpris)*', 'Surprise':'Vous avez surpris **Brigand**. Ils ne peuvent pas agir à leur premier tour.', 'À votre tour':'```\n@bot je frappe <cible>\n@bot je lance <sort> sur <cible>\n@bot je tente de fuir\n```'])
+[20:01:28]     TERMINAL en 39.2s
+[20:01:28] >>> !test game_state
+[20:01:29] <<< [1528461795600105604] content='👹 Tour de **Brigand**' | embed(title='Combat — Round 1', desc='➡️ **Brigand** joue', fields=['Combattants':'🧛 **Thorin** — [██████████] 13/13\n➡️ 👹 **Brigand** — [██████░░░░] 5/8\n    *(Surpris)*'])
+[20:01:29] <<< [1528461796942549054] content='```json\n{\n  "campaign": {\n    "name": "Dark Fantasy",\n    "id": "260558f3-e07c-43b3-ad2a-819d0b6d6ba2"\n  },\n  "characters": [\n    {\n      "user_id": 200000002,\n      "name": "Thorin",\n      "race": "Dwarf",\n      "class": "Fighter",\n      "hp": 13,\n '
+[20:01:29]     TERMINAL en 1.0s
+[20:01:29] [PASS] combat_active=true après l'attaque armée
+[20:01:29] >>> !test player=2 narrate text="je frappe encore le Brigand"
+[20:01:30] <<< [1528461799962185749] embed(title='En cours — Thorin', desc='> je frappe encore le Brigand', fields=["🔄 Interprétation de l'action":'\u200b', '⚪ Vérification du contexte':'\u200b', '⚪ Application des règles':'\u200b', '⚪ Résolution mécanique':'\u200b', '⚪ Préparation du contexte':'\u200b', '⚪ Narration':'\u200b'])
+[20:01:30] <<< [1528461801170272307] content='📜 Brigand est surpris et ne peut pas agir ce tour.'
+[20:02:05] <<< [1528461947429847041] content="<@200000002> — c'est ton tour." | embed(title='Combat — Round 2', desc='➡️ **Thorin** joue', fields=['Combattants':'➡️ 🧛 **Thorin** — [██████████] 13/13\n   👹 **Brigand** — [██████░░░░] 5/8']) | button('Attaquer') | button('Sort') | button('Potion') | button('Défendre') | button('Fuir') | button('Se déplacer') | button('Équiper')
+[20:02:05]     TERMINAL en 35.8s
+[20:02:05] [PASS] round suivant résolu
+[20:02:05] >>> !test game_state
+[20:02:06] <<< [1528461950252486818] content='```json\n{\n  "campaign": {\n    "name": "Dark Fantasy",\n    "id": "260558f3-e07c-43b3-ad2a-819d0b6d6ba2"\n  },\n  "characters": [\n    {\n      "user_id": 200000002,\n      "name": "Thorin",\n      "race": "Dwarf",\n      "class": "Fighter",\n      "hp": 13,\n '
+[20:02:06]     TERMINAL en 0.8s
+[20:02:06]     état final: '```json\n{\n  "campaign": {\n    "name": "Dark Fantasy",\n    "id": "260558f3-e07c-43b3-ad2a-819d0b6d6ba2"\n  },\n  "characters": [\n    {\n      "user_id": 200000002,\n      "name": "Thorin",\n      "race": "Dwarf",\n      "class": "Fighter",\n      "hp": 13,\n      "max_hp": 13,\n      "ac": 11,\n      "xp": 0,\n      "level": 1\n    }\n  ],\n  "combat_active": true,\n  "combat_state": {\n    "round": 2,\n    "turn_i'
+[20:02:06] ========================================================================
+[20:02:06] TIMINGS terminaux :
+[20:02:06]   - resume post-restart: 1.3s
+[20:02:06]   - inject_scene: 0.9s
+[20:02:06]   - entrée en combat (arme équipée): 39.2s
+[20:02:06]   - game_state: 1.0s
+[20:02:06]   - round de combat suivant: 35.8s
+[20:02:06]   - game_state final: 0.8s
+[20:02:06] VERDICT: PASS
+[20:02:06] ========================================================================

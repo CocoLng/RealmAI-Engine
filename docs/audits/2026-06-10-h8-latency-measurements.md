@@ -68,5 +68,30 @@ un MOVE vers un lieu préfetché devient une lecture DB (~57-80 s → <2 s
 attendu). Au plus une génération de fond en vol (gate partagé avec le
 prefetch NPC) ; un job ne démarre jamais pendant une action joueur ;
 `change_location` attend un job déjà démarré pour sa destination (une
-génération au lieu de deux). Mesures réelles à faire sur une session
-Discord live (chantier discord-live-testing).
+génération au lieu de deux).
+
+## Mesures live (2026-07-19) — session Discord réelle, M3 Pro, qwen3.5
+
+Campagne « Dark Fantasy », personnage créé via le vrai lobby (smoke C8),
+bot en TEST_MODE piloté par tester bot. Sources : transcripts
+`tasks/logs/2026-04-26-lobby-live-test.txt` et
+`tasks/logs/2026-07-19-h8-live-session2.txt`, croisés avec les
+`logs/realm_*.log` du bot (lignes `OLLAMA time=`, `LOCATION changed`,
+`Location prefetch`).
+
+| Mesure | Attendu | Mesuré live | Verdict |
+|---|---|---|---|
+| Lancement : clic Démarrer → narration d'ouverture | pregen prête en fond | **33 s** (pregen finie pendant la création du perso) | ✅ vs 438-478 s bloquants en avril |
+| Prefetch post-arrivée (2 voisins) | ~56 s/lieu | **45 s les deux** (~22 s/lieu) | ✅ |
+| MOVE vers lieu préfetché — part génération | < 2 s | **0 appel** world-gen (lecture DB) | ✅ |
+| MOVE vers lieu préfetché — wall-clock total | — | **35,7 s** (interprète 4b 11 s + narration 9b 22 s) | ✅ le coût restant est le pipeline LLM, plus la génération |
+| MOVE en plein prefetch (job démarré sur la destination) | 1 génération, pas 2 | **1 seule** (le job du prefetch, 34,9 s) ; `change_location` l'attend puis lit la row (`generated=False` au log = rien régénéré) | ✅ verrouillé par le fix « relecture après `wait_for_started_job` » + test déterministe (2026-07-19) |
+| Entrée en combat (action libre → bootstrap + initiative + narration) | — | **39 s** | ✅ |
+| Round de combat suivant (prefetch actif en fond) | — | **36 s**, round 2 atteint, aucun blocage par le gate | ✅ |
+| Action TALK (fiche NPC préfetchée) | ~50 s | non mesuré (aucun PNJ dans les lieux générés de cette session) | ⏳ |
+
+Notes : le `/resume` post-redémarrage recharge la campagne en **6 s** ;
+pendant les hints, la contention Ollama (9b de prefetch en vol) a fait
+timeouter le BeatJudge 4b — dégradation propre depuis le fix
+`fix(hint)` du même jour (avant : sentinel `_judge_timeout_` affiché
+et cooldown consommé).

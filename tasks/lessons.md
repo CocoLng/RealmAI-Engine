@@ -1,5 +1,48 @@
 # Lessons Learned
 
+## 2026-07-19 — Première CI, sessions live : ce que le réel a appris
+
+- **Vérifier qu'un tag majeur flottant existe avant d'écrire `@vN`.**
+  `astral-sh/setup-uv@v8` n'existe pas — le projet ne publie que des tags
+  complets et recommande l'épinglage par SHA. Premier run CI mort en 3 s.
+  `gh api repos/<owner>/<repo>/git/matching-refs/tags/vN` répond en une
+  commande.
+
+- **Le runner CI 2 cœurs est un détecteur de courses gratuit.** La course
+  prefetch/MOVE (double génération H8) n'a JAMAIS flaké sur M3 Pro — elle a
+  sauté au premier run ubuntu-latest : un `asyncio.to_thread` lent y élargit
+  toute fenêtre. Un test de concurrence vert en local ne prouve rien ;
+  reproduire en forçant l'entrelacement (wrapper de `to_thread` qui
+  « enjambe » la fin du job) et fixer la racine, pas le test.
+
+- **Ne jamais prêter une ressource partagée à un flux qui croit l'avoir
+  créée.** Le rollback de `start_campaign` supprime « son » canal orphelin —
+  légitime en prod, catastrophique quand le seam de test lui a donné le
+  canal de test partagé (supprimé de Discord, historique perdu). Toute
+  couture déviée doit neutraliser les capacités destructrices de l'objet
+  prêté (proxy `delete()`-noop) AVANT le premier run, pas après l'incident.
+
+- **Un sentinel interne n'est pas un texte d'interface, et un échec ne se
+  facture pas.** Le BeatJudge en timeout renvoyait `reasoning="judge_timeout"`
+  que `/hint` niveau 3 affichait tel quel — en consommant le cooldown de
+  5 tours pour un indice jamais livré. Les valeurs de dégradation vivent en
+  constantes partagées, l'UI les teste, et une ressource joueur ne s'arme
+  qu'à la livraison.
+
+- **Un harnais live attend le message TERMINAL, pas le premier accusé de
+  réception.** L'embed de progression arrive en <1 s ; enchaîner dessus
+  fait rebondir toutes les commandes suivantes sur le verrou d'action
+  (« ⏳ action en cours » — qui, lui, fait exactement son travail) et
+  fabrique des FAIL en cascade sur un bot parfaitement sain. Prédicat de
+  fin explicite (embed 📍 scène, embed de combat), et re-fetch des messages
+  de vue : les transitions ÉDITENT, elles ne repostent pas.
+
+- **Le MCP discord-test ment par omission : croiser avec `read_messages`
+  et le log du bot avant de conclure.** « Timeout waiting for response »
+  alors que la réponse était postée en 313 ms ; flag `online` faux ;
+  IDs tronqués par l'arrondi float côté client. Les scripts tester
+  autonomes (pattern du skill) sont la voie fiable pour un déroulé long.
+
 ## 2026-06-10 — Combat concurrency: locks, self-cancel, and honest async tests
 
 - **`asyncio.Lock` is non-reentrant — enumerate ALL call paths before adding
