@@ -1222,6 +1222,7 @@ class TestTurnReminder:
     async def test_timeout_posts_one_reminder_and_nothing_else(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.delenv("TEST_MODE", raising=False)
         monkeypatch.setattr("bot.combat_turn_manager._REMINDER_SECONDS", 0)
         session = _fake_session([_pc()])
         tm = _turn_manager(session, _fake_channel())
@@ -1248,3 +1249,26 @@ class TestTurnReminder:
         await asyncio.sleep(0)
 
         tm._safe_send.assert_not_awaited()
+
+
+    @pytest.mark.asyncio
+    async def test_test_mode_keeps_the_auto_defend(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TEST_MODE harnesses need a combat that advances on its own —
+        the timeout dispatches the auto-DEFEND instead of a reminder."""
+        monkeypatch.setenv("TEST_MODE", "true")
+        monkeypatch.setattr("bot.combat_turn_manager._REMINDER_SECONDS", 0)
+        session = _fake_session([_pc()])
+        tm = _turn_manager(session, _fake_channel())
+        tm.dispatch_action = AsyncMock()  # type: ignore[method-assign]
+        tm._safe_send = AsyncMock()  # type: ignore[method-assign]
+
+        await tm._timeout_watcher("Aragorn")
+
+        tm.dispatch_action.assert_awaited_once()
+        (auto_action,) = tm.dispatch_action.await_args.args
+        assert auto_action.action_type == ActionType.DEFEND
+        sent = " ".join(str(c) for c in tm._safe_send.await_args_list)
+        assert "Défense automatique" in sent
+        assert "toujours ton tour" not in sent

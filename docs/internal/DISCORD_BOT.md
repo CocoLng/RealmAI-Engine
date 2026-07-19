@@ -115,7 +115,7 @@ Toutes héritent de `LoggedView(ui.View)` pour un logging uniforme des erreurs.
 | `StartOnboardingView` | Bouton « Créer Personnage » (re-cliquable pour recommencer) | — |
 | `ForceLaunchView` | Bouton « Lancer la partie » réservé au créateur (exclut joueurs non-ready) | 10 min |
 
-`CombatActionView` et les trois selects secondaires vérifient `interaction.user.id == acting_user_id` dans `interaction_check` (tout autre clic reçoit un message éphémère « Ce n'est pas ton tour. »). Les boutons sont désactivés quand leur pré-condition est vide (pas de cible vivante → Attaquer grisé, pas de sort jetable → Sort grisé, pas de zone adjacente → Se déplacer grisé). La vue elle-même a `timeout=None` — c'est le `TurnManager` qui arme une task asyncio de 5 min qui poste **un rappel unique** (« c'est toujours ton tour »). Aucune action n'est jouée à la place du joueur (décision 2026-07-19) : le tour reste ouvert indéfiniment.
+`CombatActionView` et les trois selects secondaires vérifient `interaction.user.id == acting_user_id` dans `interaction_check` (tout autre clic reçoit un message éphémère « Ce n'est pas ton tour. »). Les boutons sont désactivés quand leur pré-condition est vide (pas de cible vivante → Attaquer grisé, pas de sort jetable → Sort grisé, pas de zone adjacente → Se déplacer grisé). La vue elle-même a `timeout=None` — c'est le `TurnManager` qui arme une task asyncio de 5 min. Sur un vrai serveur elle poste **un rappel unique** (« c'est toujours ton tour ») puis attend : aucune action n'est jouée à la place du joueur (décision 2026-07-19), le tour reste ouvert indéfiniment. Sous `TEST_MODE` uniquement, l'auto-Défense historique est conservée pour que les harnais de test déroulent un combat qui avance tout seul.
 
 `ClarificationView` vérifie via `interaction_check` que seul l'acteur original peut cliquer.
 `ForceLaunchView` vérifie que seul le créateur de la campagne (`creator_id`) peut cliquer.
@@ -186,7 +186,7 @@ Responsabilités :
 
 1. **Bannière de démarrage** : `start(trigger)` poste `build_combat_start_embed(state, trigger)` une seule fois.
 2. **Hub édité en place** : un seul `discord.Message` long-lived par combat (`self.hub_message`). Chaque tour édite `content`/`embed`/`view` via `discord.abc.Messageable.edit`. Les résultats (narration, dice embed) sont postés en dessous pour garder l'historique lisible.
-3. **Tour PC** : `_prompt_pc_turn` pose un `CombatActionView` avec `<@user_id>` en ping, start un watcher `asyncio.create_task(self._timeout_watcher(…))` de 5 min. À l'expiration, le watcher poste un rappel unique puis attend — le jeu ne joue jamais à la place du joueur (décision 2026-07-19).
+3. **Tour PC** : `_prompt_pc_turn` pose un `CombatActionView` avec `<@user_id>` en ping, start un watcher `asyncio.create_task(self._timeout_watcher(…))` de 5 min. À l'expiration : rappel unique puis attente sur un vrai serveur (le jeu ne joue jamais à la place du joueur, décision 2026-07-19) ; auto-Défense conservée sous `TEST_MODE` pour les harnais.
 4. **Tour NPC** : `_prompt_npc_turn` passe la main à `_resolve_npc_turn` qui dispatch par tier :
    - `MINION` → `engine.npc_ai.scripted.decide_minion_action`
    - `ELITE` → `engine.npc_ai.elite.decide_elite_action`

@@ -6,9 +6,11 @@ Drives the turn lifecycle of a combat encounter inside a Discord channel:
 - Maintains a single "combat hub" :class:`discord.Message` edited in place
   round after round (modern discord.py 2.7 pattern — no channel spam).
 - On PC turns, pings the player, posts the ``CombatActionView``, and arms
-  a 5-minute reminder watcher. Expiry posts ONE gentle reminder and then
-  waits: the game never acts in the player's place (design decision
-  2026-07-19) — a turn may stay open for hours until a human acts.
+  a 5-minute watcher. On real servers, expiry posts ONE gentle reminder
+  and then waits: the game never acts in the player's place (design
+  decision 2026-07-19) — a turn may stay open for hours until a human
+  acts. Under TEST_MODE only, the historical auto-DEFEND is kept so test
+  harnesses drive a combat that advances on its own.
 - On NPC turns, dispatches the right brain by tier (minion → scripted,
   elite → behavior profile, boss → LLM tactician with scripted fallback),
   executes the plan, posts a dice embed + compact summary, and advances
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -81,10 +84,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Delay before the one-and-only turn reminder. NOT an action timeout:
-# nothing is ever played in the player's place (design decision
-# 2026-07-19) — after the reminder the turn simply stays open.
+# Delay before the watcher fires. On real servers this is NOT an action
+# timeout: nothing is ever played in the player's place (design decision
+# 2026-07-19) — one reminder is posted and the turn simply stays open.
+# Under TEST_MODE the historical auto-DEFEND is kept instead: harnesses
+# need a combat that advances on its own, without stalling or waiting.
 _REMINDER_SECONDS = 300
+
+
+def _test_mode_active() -> bool:
+    """Mirror of ``bot.py``'s TEST_MODE gate (the one loading TestBridge)."""
+    return os.environ.get("TEST_MODE", "").lower() == "true"
 
 # Action types that never consume the actor's combat turn. QUESTION and
 # LOOK are the informational actions the validator deliberately allows
@@ -752,22 +762,44 @@ class TurnManager:
     # ------------------------------------------------------------------
 
     async def _timeout_watcher(self, actor_name: str) -> None:
-        """Post one gentle reminder after ``_REMINDER_SECONDS``, then wait.
+        """Fire once after ``_REMINDER_SECONDS`` — reminder or test auto-play.
 
-        The game NEVER acts in the player's place (design decision
-        2026-07-19): no auto-dodge, no suspension — the turn stays open
-        for as long as it takes (5 minutes or 8 hours), and any human
-        action resumes the normal flow through the usual entry points.
+        Real servers: the game NEVER acts in the player's place (design
+        decision 2026-07-19) — post one gentle reminder, then wait for as
+        long as it takes (5 minutes or 8 hours); any human action resumes
+        the normal flow through the usual entry points.
+
+        TEST_MODE: harnesses need a combat that keeps advancing on its
+        own — neither stalls nor infinite waits — so the historical
+        auto-DEFEND dispatch is kept on this path only.
         """
         try:
             await asyncio.sleep(_REMINDER_SECONDS)
         except asyncio.CancelledError:
             return
 
-        # This task IS pending_timeout — detach so a later action's
-        # _cancel_timeout does not try to cancel a finished watcher.
+        # This task IS pending_timeout — detach it BEFORE any dispatch:
+        # dispatch_action's _cancel_timeout would cancel the running
+        # watcher itself and the CancelledError would kill the auto-play
+        # at the next suspension point inside the pipeline (June lesson).
         if self.pending_timeout is asyncio.current_task():
             self.pending_timeout = None
+
+        if _test_mode_active():
+            await self._safe_send(
+                f"⏱️ **{actor_name}** n'a pas agi à temps — Défense "
+                "automatique.",
+            )
+            auto_action = InterpretedAction(
+                action_type=ActionType.DEFEND,
+                actor_name=actor_name,
+                raw_input="(auto-dodge sur timeout — TEST_MODE)",
+            )
+            try:
+                await self.dispatch_action(auto_action)
+            except Exception as exc:
+                logger.exception("Auto-dodge dispatch failed: %s", exc)
+            return
 
         logger.info(
             "TURN reminder posted for %s campaign=%s — waiting for a "

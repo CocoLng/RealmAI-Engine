@@ -205,7 +205,10 @@ sessions pilotées par script tester autonome (pattern du skill).
   la place du joueur.** L'auto-dodge sur timeout est supprimé (et le
   disjoncteur intermédiaire avec) — au bout de 5 min le watcher poste UN
   rappel (« c'est toujours ton tour ») puis attend indéfiniment : un tour
-  peut rester ouvert 5 min ou 8 h, c'est voulu. La machinerie
+  peut rester ouvert 5 min ou 8 h, c'est voulu. **Sous TEST_MODE en
+  revanche, l'auto-Défense est conservée** — un harnais de test a besoin
+  d'un combat qui avance tout seul, ni bloqué ni en attente infinie
+  (précision du 2026-07-20). La machinerie
   pause/rearm/stale-guard du watcher est conservée (elle protège le rappel
   des faux positifs mid-pipeline). Constat déclencheur : 49 esquives
   automatiques en 1 h 45 sur un combat de test sans joueur, 15 Story
