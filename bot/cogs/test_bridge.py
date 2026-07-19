@@ -430,6 +430,10 @@ class TestBridge(commands.Cog):
             cog = self._cog("CharacterCog")
             if cog:
                 await cog.character.callback(cog, inter, public=True)
+        elif command == "hint":
+            cog = self._cog("HintCog")
+            if cog:
+                await cog.hint.callback(cog, inter, public=True)
         elif command == "game_state":
             await self._handle_game_state(channel)
         elif command == "inject_scene":

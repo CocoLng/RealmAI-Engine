@@ -312,3 +312,21 @@ async def test_lobby_command_posts_real_lobby_view(
     assert any(k.get("view") is lobby.lobby_view for _, _, k in sent)
     # The rollback path must never have deleted the shared test channel.
     channel.delete.assert_not_awaited()
+
+
+async def test_hint_command_routes_to_hint_cog(bridge: TestBridge) -> None:
+    """`!test hint` reaches HintCog.hint (public), like save/resume routes.
+
+    Session 3 of the live plan drives /hint end-to-end; without this route
+    the bridge answered « commande inconnue » and the flow was untestable.
+    """
+    guild, channel = MagicMock(), MagicMock()
+    channel.id = 42
+    hint_cog = MagicMock()
+    hint_cog.hint.callback = AsyncMock()
+    bridge.bot.get_cog = lambda name: hint_cog if name == "HintCog" else None
+
+    await bridge._dispatch("hint", {}, 1, guild, channel)
+
+    hint_cog.hint.callback.assert_awaited_once()
+    assert hint_cog.hint.callback.await_args.kwargs.get("public") is True
