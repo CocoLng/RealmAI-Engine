@@ -251,14 +251,21 @@ async def test_exploration_commands_route_to_narrate(
 
 
 async def test_lobby_command_posts_real_lobby_view(
-    bridge: TestBridge, bot: MagicMock,
+    bridge: TestBridge, bot: MagicMock, db_session: Session,
 ) -> None:
     """`!test lobby` runs the REAL /start_campaign flow on the test channel
     (only channel creation is redirected) and registers the posted LobbyView
     in ``active_views`` so click_button/submit_modal can drive the C8 smoke.
+
+    The test channel is REUSED across runs, so a stale campaign mapping must
+    not trip the unique constraint — and the rollback path of the real flow
+    must NEVER delete the test channel (it deletes the channel it believes
+    it just created).
     """
     from bot.cogs.session import SessionCog
     from bot.views.lobby_view import LobbyView
+    from db.repositories import CampaignChannelRepository, CampaignRepository
+    from world.campaign import Campaign
 
     session_cog = SessionCog(bot)
     bot.get_cog = lambda name: session_cog if name == "SessionCog" else None
@@ -269,6 +276,15 @@ async def test_lobby_command_posts_real_lobby_view(
     guild.get_member.return_value = None
     channel = MagicMock()
     channel.id = 4242
+    channel.delete = AsyncMock()
+
+    # Stale mapping from a previous test-mode campaign on the same channel.
+    CampaignRepository(db_session).save(
+        Campaign(id="stale-campaign", name="Stale"),
+    )
+    db_session.flush()
+    CampaignChannelRepository(db_session).save(4242, "stale-campaign", 777001)
+    db_session.commit()
     sent: list[tuple[MagicMock, tuple, dict]] = []
 
     async def _send(*args, **kwargs):
@@ -294,3 +310,5 @@ async def test_lobby_command_posts_real_lobby_view(
     assert bridge.active_views.get(lobby.lobby_message.id) is lobby.lobby_view
     # The lobby embed went to the TEST channel — no dedicated channel created.
     assert any(k.get("view") is lobby.lobby_view for _, _, k in sent)
+    # The rollback path must never have deleted the shared test channel.
+    channel.delete.assert_not_awaited()

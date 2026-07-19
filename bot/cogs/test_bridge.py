@@ -518,6 +518,8 @@ class TestBridge(commands.Cog):
         """
         from unittest.mock import patch
 
+        from db.repositories import CampaignChannelRepository
+
         cog = self._cog("SessionCog")
         if cog is None:
             await inter.channel.send("TestBridge: SessionCog introuvable.")
@@ -525,10 +527,37 @@ class TestBridge(commands.Cog):
         theme = args.get("theme", "Test Campaign")
         name = args.get("name")
 
+        # The test channel is REUSED across runs while the real flow assumes
+        # a fresh one: retire any stale campaign mapping first, or the unique
+        # constraint on campaign_channels aborts the whole flow.
+        db_session = self.bot.db_factory()
+        try:
+            CampaignChannelRepository(db_session).delete(inter.channel_id)
+            db_session.commit()
+        finally:
+            db_session.close()
+
+        real_channel = inter.channel
+
+        class _UndeletableChannel:
+            """The rollback path of start_campaign deletes the channel it
+            believes it just created — never let that reach the shared test
+            channel. Everything else is delegated untouched."""
+
+            def __getattr__(self, item: str) -> Any:
+                if item == "delete":
+                    async def _noop(*a: Any, **k: Any) -> None:
+                        logger.warning(
+                            "TestBridge lobby: swallowed delete() of the "
+                            "test channel (start_campaign rollback path)",
+                        )
+                    return _noop
+                return getattr(real_channel, item)
+
         async def _use_test_channel(
             guild: Any, ch_name: Any, members: Any, me: Any, category: Any,
         ) -> Any:
-            return inter.channel
+            return _UndeletableChannel()
 
         with patch("bot.cogs.session.create_session_channel", _use_test_channel):
             await cog.start_campaign.callback(cog, inter, theme, name, None)
