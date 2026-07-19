@@ -535,6 +535,7 @@ class SessionCog(commands.Cog):
         # Stash the message so callbacks can re-edit when no interaction is in scope
         lobby_view._lobby_message = lobby_msg  # type: ignore[attr-defined]
         lobby.lobby_message = lobby_msg
+        lobby.lobby_view = lobby_view
 
         self.bot.lobbies[channel.id] = lobby
 

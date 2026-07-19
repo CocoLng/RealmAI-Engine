@@ -243,3 +243,54 @@ async def test_exploration_commands_route_to_narrate(
     bridge._handle_narrate.assert_awaited_once()
     text = bridge._handle_narrate.await_args.args[1]["text"]
     assert text, "exploration command produced empty free text"
+
+
+# ---------------------------------------------------------------------------
+# lobby command — real LobbyView on the test channel
+# ---------------------------------------------------------------------------
+
+
+async def test_lobby_command_posts_real_lobby_view(
+    bridge: TestBridge, bot: MagicMock,
+) -> None:
+    """`!test lobby` runs the REAL /start_campaign flow on the test channel
+    (only channel creation is redirected) and registers the posted LobbyView
+    in ``active_views`` so click_button/submit_modal can drive the C8 smoke.
+    """
+    from bot.cogs.session import SessionCog
+    from bot.views.lobby_view import LobbyView
+
+    session_cog = SessionCog(bot)
+    bot.get_cog = lambda name: session_cog if name == "SessionCog" else None
+    bot.lobbies = {}
+
+    guild = MagicMock()
+    guild.id = 777001
+    guild.get_member.return_value = None
+    channel = MagicMock()
+    channel.id = 4242
+    sent: list[tuple[MagicMock, tuple, dict]] = []
+
+    async def _send(*args, **kwargs):
+        msg = MagicMock()
+        msg.id = 1000 + len(sent)
+        sent.append((msg, args, kwargs))
+        return msg
+
+    channel.send = _send
+
+    with (
+        patch.object(
+            SessionCog, "_pregenerate_campaign_world", new=AsyncMock(),
+        ),
+        patch.object(SessionCog, "_expire_lobby_after", new=AsyncMock()),
+    ):
+        await bridge._dispatch("lobby", {"theme": "Smoke"}, 1, guild, channel)
+
+    lobby = bot.lobbies.get(4242)
+    assert lobby is not None, "the real start_campaign flow did not run"
+    assert lobby.lobby_message is not None
+    assert isinstance(lobby.lobby_view, LobbyView)
+    assert bridge.active_views.get(lobby.lobby_message.id) is lobby.lobby_view
+    # The lobby embed went to the TEST channel — no dedicated channel created.
+    assert any(k.get("view") is lobby.lobby_view for _, _, k in sent)

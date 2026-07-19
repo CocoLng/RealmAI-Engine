@@ -380,6 +380,8 @@ class TestBridge(commands.Cog):
 
         if command == "start_campaign":
             await self._handle_start_campaign(inter, args)
+        elif command == "lobby":
+            await self._handle_lobby(inter, args)
         elif command == "create_character":
             await self._handle_create_character(inter, args)
         elif command == "save":
@@ -501,6 +503,47 @@ class TestBridge(commands.Cog):
         await inter.channel.send(embed=embed)
         await inter.channel.send(f"Campagne **{theme}** lancee dans ce canal (test mode).")
 
+    async def _handle_lobby(
+        self, inter: ChannelTestInteraction, args: dict[str, str],
+    ) -> None:
+        """Open the REAL campaign lobby on the test channel.
+
+        Runs the actual ``SessionCog.start_campaign`` callback with a single
+        seam redirected: ``create_session_channel`` returns the test channel
+        instead of creating a dedicated one (the same seam the headless
+        scenario driver patches). Everything else — lobby embed, LobbyView,
+        CharacterSetupFlow, background pregen, launch countdown — is
+        production code, driveable via ``click_button`` / ``submit_modal`` /
+        ``select_option``. This is what the C8 live smoke exercises.
+        """
+        from unittest.mock import patch
+
+        cog = self._cog("SessionCog")
+        if cog is None:
+            await inter.channel.send("TestBridge: SessionCog introuvable.")
+            return
+        theme = args.get("theme", "Test Campaign")
+        name = args.get("name")
+
+        async def _use_test_channel(
+            guild: Any, ch_name: Any, members: Any, me: Any, category: Any,
+        ) -> Any:
+            return inter.channel
+
+        with patch("bot.cogs.session.create_session_channel", _use_test_channel):
+            await cog.start_campaign.callback(cog, inter, theme, name, None)
+
+        lobby = self.bot.lobbies.get(inter.channel_id)
+        if lobby is None or lobby.lobby_message is None or lobby.lobby_view is None:
+            await inter.channel.send(
+                "TestBridge: lobby non ouvert (voir logs du bot).",
+            )
+            return
+        self.active_views[lobby.lobby_message.id] = lobby.lobby_view
+        await inter.channel.send(
+            f"TestBridge: lobby ouvert, message={lobby.lobby_message.id}",
+        )
+
     async def _handle_create_character(
         self, inter: ChannelTestInteraction, args: dict[str, str],
     ) -> None:
@@ -508,7 +551,8 @@ class TestBridge(commands.Cog):
 
         Always uses the quick path now: the lobby-driven setup flow is too
         elaborate for the bridge to drive component-by-component. Tests that
-        need character setup go through the lobby helpers (``lobby_join`` etc).
+        need full-fidelity character setup go through ``lobby`` and drive
+        the real views component by component.
         """
         session = self.bot.get_session(inter.channel_id)
         if session is None:
