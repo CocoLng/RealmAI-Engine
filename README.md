@@ -16,9 +16,11 @@ an MCP server for live-testing the bot from Claude Code.
 
 **The LLM narrates. The code arbitrates. No exceptions.**
 
-> **Status — June 2026:** Phase 3 (Discord multiplayer) is functional end-to-end.
-> Engine + AI + memory + persistence are stable; ~2 200 tests pass. Remaining
-> Phase 4 gaps: CI/CD and real multi-session play. See
+> **Status — July 2026:** Phases 1-3 shipped; Phase 4 (polish + ship) in
+> progress. CI freezes the three quality gates (ruff, mypy, pytest — ~2 890
+> tests) on every push, and the full lobby → character creation →
+> opening-narrative flow is verified against live Discord. Remaining:
+> real multi-player sessions, demo GIFs, write-up. See
 > [`docs/internal/STATE.md`](docs/internal/STATE.md) for the exact
 > implementation status.
 
@@ -61,7 +63,7 @@ No other open-source project combines a deterministic engine + LLM narration
 - **Multiplayer campaigns** — one dedicated channel per campaign, a join/leave
   lobby, per-guild language (FR/EN/ES/DE/PT), save/resume, and channel
   archival on `/end_campaign`.
-- **Built to be tested** — ~2 200 unit tests, 13 end-to-end scenarios, and an
+- **Built to be tested** — ~2 890 tests, 63 end-to-end scenarios, and an
   autonomous LLM playthrough simulator that hunts for narrative incoherence.
 
 ### Commands
@@ -80,30 +82,24 @@ No other open-source project combines a deterministic engine + LLM narration
 
 ## Architecture (one-screen view)
 
-```
-Player (Discord)
-  │ free text or slash command
-  ▼
-ACTION INTERPRETER  (Qwen 3.5 4B, JSON mode)
-  │ text → structured JSON
-  ▼
-ACTION VALIDATOR  (pure Python)
-  │ weapon owned? correct turn? target in range? alive?
-  ▼
-GAME ENGINE  (pure Python)
-  │ dice, damage, effects, XP, loot
-  │ writes WorldState to SQLite
-  ▼
-CONTEXT ASSEMBLER
-  │ 4 memory layers, ~2 500 tokens budget
-  ▼
-NARRATOR  (Qwen 3.5 9B, JSON mode)
-  │ ActionResult → narrative text
-  ▼
-Discord (embed: narrative + raw mechanics side by side)
+```mermaid
+flowchart TD
+    P["🎮 Player on Discord<br/>free text or slash command"]
+    INT["ACTION INTERPRETER<br/>Qwen 3.5 4B · JSON mode<br/>text → structured action"]
+    VAL["ACTION VALIDATOR<br/>pure Python<br/>weapon owned? right turn? target in range?"]
+    ENG["GAME ENGINE<br/>pure Python<br/>dice · damage · effects · XP · loot"]
+    CTX["CONTEXT ASSEMBLER<br/>4 memory layers · ~2 500-token budget"]
+    NAR["NARRATOR<br/>Qwen 3.5 9B · JSON mode<br/>ActionResult → narrative"]
+    OUT["Discord embed<br/>narrative + raw mechanics side by side"]
+    SQL[("SQLite<br/>WorldState")]
+    RAG[("ChromaDB<br/>semantic RAG")]
+    BG["Background<br/>STORY DIRECTOR every ~20 interactions<br/>BEAT PROGRESSION after every player turn"]
 
-Background: STORY DIRECTOR every ~20 interactions
-            BeatProgressionEngine after every player turn
+    P --> INT --> VAL --> ENG --> CTX --> NAR --> OUT
+    ENG <--> SQL
+    SQL --> CTX
+    RAG --> CTX
+    BG -.-> CTX
 ```
 
 The technical reference is in **[`ARCHITECTURE.md`](ARCHITECTURE.md)** —
@@ -228,7 +224,7 @@ uv run python main.py
 ### Run the test suite
 
 ```bash
-uv run pytest                  # full suite (~2 200 tests)
+uv run pytest                  # full suite (~2 890 tests)
 uv run pytest tests/engine -q  # engine only
 uv run pytest tests/scenarios  # end-to-end scenarios via ScenarioRunner
 ```
@@ -250,7 +246,8 @@ diffs, coherence alerts, exit code).
 
 ```bash
 uv run ruff check .            # linting
-uv run mypy .                  # type checking
+uv run mypy                    # type checking — no argument: pyproject's
+                               # `files` key defines the scan surface
 ```
 
 ### Reset local game data
