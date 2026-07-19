@@ -242,7 +242,7 @@ Tout est `CASCADE` delete : supprimer une `campaigns` row nettoie tout l'état S
 
 Voir [ISSUES.md](ISSUES.md). Extraits :
 
-- 🟠 `NPCRepository.update()` perd `aliases/secrets/knowledge/dialogue_history`.
+- ~~🟠 `NPCRepository.update()` perd `aliases/secrets/knowledge/dialogue_history`.~~ ✅ Corrigé — tous les champs sont persistés (`db/repositories/npc_repo.py:83-88`).
 - ~~🟡 Pas d'index sur `(campaign_id, interaction_number)` dans `exchanges`.~~ ✅ Corrigé — index composite `ix_exchanges_campaign_interaction`.
 - ~~🟡 Migrations manuelles via `ALTER TABLE` sans rollback.~~ ✅ Traité — réconciliation additive `ensure_schema` + stamp `schema_version` (voir « Moteur »).
 - ~~🟡 `StoryArc` en JSON blob unique → pas d'update partiel possible.~~ ✅ Corrigé — `current_beat_index` extrait en colonne dédiée.

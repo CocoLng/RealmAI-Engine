@@ -214,13 +214,17 @@ Vérifier avant : `git branch --merged main`.
       renommé `combat_action_view.py`, `world/facts.py`/`npcs.py`/`locations.py`
       jamais créés sous ces noms, `bot/cogs/character.py` documenté avec
       `/create_character` supprimé)
-- [ ] Passe de cohérence sur `docs/internal/*.md` — le dernier audit doc date
-      du 2026-06-02 et trois chantiers ont été mergés depuis (C, D, G). Vérifier
-      en particulier `MEMORY_SYSTEM.md` : la mémoire 4 couches est **enfin
-      branchée**, le doc décrivait peut-être l'état débranché.
-- [ ] `docs/audits/2026-06-10-system-audit.md` — ajouter un bandeau de tête
-      « tous les findings traités au 2026-07-18 » pour qu'il ne soit pas relu
-      comme une liste ouverte.
+- [x] **Passe de cohérence `docs/internal/*.md` faite (2026-07-19)** — audit
+      par agent (60+ écarts vérifiés contre le code) puis corrections : 12
+      fichiers, +118/−119. Les plus graves : STATE.md annonçait « non fait »
+      trois choses livrées (auto-trigger du Story Director, CI, cleanup
+      ChromaDB) ; MEMORY_SYSTEM.md inversait la purge des exchanges résumés ;
+      `advance_beat_if_ready()` (supprimé) était cité vivant dans 5 docs ;
+      DATABASE.md décrivait un système de migrations inexistant. Contradiction
+      résiduelle `NPCRepository.update()` tranchée par le code (corrigé
+      depuis longtemps — mentions purgées).
+- [x] `docs/audits/2026-06-10-system-audit.md` — bandeau « ✅ CLOS le
+      2026-07-19 » posé en tête (document d'archive).
 
 ### 3.3 — Code dormant : décisions déjà prises, à ne pas rouvrir
 

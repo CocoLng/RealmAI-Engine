@@ -199,7 +199,6 @@ Tout ce qui est hors de ce happy path est possible mais **susceptible** de casse
 ## Où regarder en priorité pour continuer
 
 - Travail Phase 3 restant : persistance robuste des sessions, tests d'intégration plus complets, gestion de crash.
-- Fix du bug `NPCRepository.update()` qui perd `dialogue_history/secrets/knowledge/aliases`.
 - Logger les filtrages silencieux de `WorldGenerator`.
 - Uniformisation des patterns de mutation dans `engine/`.
 - Phase 4 : sessions de jeu réelles, GIFs, blog post.
