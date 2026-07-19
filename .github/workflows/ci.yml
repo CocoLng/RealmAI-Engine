@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.11.3"
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check .
+
+  typecheck:
+    name: mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.11.3"
+          enable-cache: true
+      - run: uv sync --locked
+      # No argument on purpose: pyproject.toml's `files` key defines the scan
+      # surface; `mypy .` would rescan excluded paths.
+      - run: uv run mypy
+
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.11.3"
+          enable-cache: true
+      # The memory tests let ChromaDB compute real embeddings; on first use it
+      # downloads its default ONNX model (~79 MB). Cache it so only the very
+      # first run pays the download.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-all-MiniLM-L6-v2
+      - run: uv sync --locked
+      - run: uv run pytest
