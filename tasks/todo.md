@@ -33,16 +33,27 @@ vertes simultanément pour la première fois de l'histoire du projet. C'est la
 fenêtre pour les figer avant qu'elles ne redérivent. C'est aussi le seul item
 de Phase 4 qui ne demande ni bot en ligne ni décision de game design.
 
-- [ ] Workflow `.github/workflows/ci.yml` : `uv sync` → `ruff check .` →
-      `mypy` → `pytest`
-- [ ] Épingler la version de Python (`requires-python = ">=3.12"`, dev sur
-      3.14 — vérifier lequel on cible en CI)
-- [ ] Badge CI dans le README (la place est déjà réservée, les autres badges
-      sont statiques)
-- [ ] Décider si la CI bloque la PR ou informe seulement
+- [x] Workflow `.github/workflows/ci.yml` : 3 jobs parallèles ruff / mypy
+      (sans argument) / pytest, `uv sync --locked`, cache du modèle ONNX
+      ChromaDB, actions épinglées (setup-uv par SHA — pas de tag flottant v8)
+- [x] Version de Python en CI → **3.12 seul** (venv réel 3.12.8, seule
+      version où les portes sont prouvées vertes ; le « dev sur 3.14 » était
+      le Python système, pas le venv)
+- [x] Badge CI dans le README (+ badge tests 2200+ → 2890+ au passage)
+- [x] CI **informative** d'abord — protection de `main` différée au 3.4
+- [x] **Prouvé vert sur GitHub** — 3 runs verts consécutifs (2f9755d,
+      d90f062, de120f5). Historique du figement : run 1 rouge (`setup-uv@v8`
+      n'existe pas — pas de tag majeur flottant, épinglé par SHA) ; run 2
+      rouge sur **une vraie course de prod** débusquée par le runner 2 cœurs
+      (MOVE payait une 2e génération quand le job prefetch finissait pendant
+      sa lecture DB — fix : relecture inconditionnelle après
+      `wait_for_started_job`, test déterministe ajouté, 2891e test). Scan de
+      secrets du delta avant premier push : propre.
 
 Détail utile : `mypy` se lance **sans argument** (la config `pyproject.toml`
 porte déjà la clé `files`). Un `mypy .` re-scannerait des chemins exclus.
+Baseline locale du 2026-07-19 : ruff 0.1 s · mypy 0.6 s (334 fichiers) ·
+pytest 7.1 s (2890 passed, 1 skipped).
 
 ### 1.2 — Vraies sessions de jeu (3+)
 
@@ -66,6 +77,17 @@ les traiter comme des tâches séparées — une vraie partie les couvre toutes.
 Outillage disponible : skill `discord-live-testing`, MCP `discord-test`
 (`discord_status` d'abord pour vérifier que le bot répond), et
 `bot/cogs/test_bridge.py` en `TEST_MODE`.
+
+État 2026-07-19 : le smoke C8 n'était **pas exécutable** — le bridge n'avait
+aucun accès au vrai lobby (les « lobby helpers » de ses commentaires
+n'existaient pas). Ajouté : commande `!test lobby` qui rejoue le vrai
+callback `/start_campaign` sur le canal de test (seam `create_session_channel`,
+même couture que le driver headless), avec purge du mapping réutilisé et
+canal non-supprimable (le 1er essai a déclenché le rollback prod qui a
+**supprimé le canal de test Discord** — recréé : `#test-realmai`,
+`TEST_CHANNEL_ID` mis à jour dans `.env`, backup `.env.bak-20260719`).
+Le MCP discord-test s'est montré peu fiable (wait_for ratés, cache) →
+sessions pilotées par script tester autonome (pattern du skill).
 
 ### 1.3 — README : GIFs + diagramme
 
