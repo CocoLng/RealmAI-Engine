@@ -37,6 +37,16 @@
   fin explicite (embed 📍 scène, embed de combat), et re-fetch des messages
   de vue : les transitions ÉDITENT, elles ne repostent pas.
 
+- **Sur un choix de GAMEPLAY, proposer le comportement avant d'implémenter
+  le mécanisme.** Face à la boucle d'auto-dodge, j'ai construit un
+  disjoncteur (compteur + suspension + flag anti-course) — techniquement
+  correct, mais la bonne réponse produit était plus simple et plus
+  radicale : supprimer l'action automatique et attendre le joueur,
+  point. Un trou de design de jeu se tranche par une décision de design
+  (que doit VIVRE le joueur ?), pas par la première mécanique défensive
+  venue ; demander d'abord aurait économisé l'aller-retour (−320 lignes
+  au commit suivant).
+
 - **Le MCP discord-test ment par omission : croiser avec `read_messages`
   et le log du bot avant de conclure.** « Timeout waiting for response »
   alors que la réponse était postée en 313 ms ; flag `online` faux ;
