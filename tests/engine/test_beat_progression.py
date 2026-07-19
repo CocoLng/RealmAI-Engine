@@ -27,9 +27,18 @@ from world.story_arc import (
 def test_objective_state_defaults():
     state = ObjectiveState(status="pending")
     assert state.status == "pending"
-    assert state.last_attempt_action_id is None
     assert state.last_attempt_score == 0.0
     assert state.completed_at_turn is None
+
+
+def test_objective_state_ignores_legacy_action_id_key():
+    """Arcs persisted before 2026-07-19 may carry the removed
+    ``last_attempt_action_id`` key — loading them must not raise."""
+    state = ObjectiveState.model_validate(
+        {"status": "pending", "last_attempt_action_id": "act-42"},
+    )
+    assert state.status == "pending"
+    assert not hasattr(state, "last_attempt_action_id")
 
 
 def test_beat_history_construction():

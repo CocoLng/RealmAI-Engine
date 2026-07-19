@@ -45,10 +45,16 @@ __all__ = [
 
 
 class ObjectiveState(BaseModel):
-    """Runtime state of one BeatObjective for the current beat."""
+    """Runtime state of one BeatObjective for the current beat.
+
+    No per-action identifier lives here on purpose: the engine is
+    stateless per turn, so nothing could ever populate one (a
+    ``last_attempt_action_id`` field sat unwritten from 2026-04-26 to
+    2026-07-19 — old persisted arcs may still carry the key, pydantic
+    ignores it on load).
+    """
 
     status: Literal["pending", "partial", "completed"]
-    last_attempt_action_id: str | None = None
     last_attempt_score: float = 0.0
     completed_at_turn: int | None = None
 
