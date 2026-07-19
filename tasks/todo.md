@@ -182,6 +182,25 @@ sessions pilotées par script tester autonome (pattern du skill).
       think=True sature ses 2048 tokens (~112 s perdues puis fallback propre
       single-call — envisager think=False ou un budget dédié).
 
+**Signaux du check du 2026-07-19 soir** (bot live 20h-21h48 : 0 ERROR) :
+- Le fallback du Director brainstorm est **systématique, pas épisodique** :
+  15 occurrences en ~2 h de bot live (une par cadence). ~112 s perdues à
+  chaque fois → candidat n° 1 du prochain micro-fix perf (think=False sur
+  le brainstorm ou num_predict dédié).
+- La collection ChromaDB de la campagne live n'existe pas (5× « Collection
+  campaign_260558f3… not found », RAG lu à vide en dégradation propre) —
+  vérifier que l'indexation sème bien la collection à la création de
+  campagne via le vrai flux lobby.
+- La garde anti-monotonie **détecte et re-tente en prod** (5× « NARRATION
+  guard: repetition … retrying once » pendant les rounds de combat) —
+  confirmation live du verdict simulateur.
+- Dépréciation amont `discord.py` : `label` → composant `discord.ui.Label`
+  (3 warnings pytest, prod utilise aussi `.label` dans le bridge et les
+  vues). Rien de cassé, migration à planifier avant discord.py 3.x.
+- Hygiène : la suite pytest écrit des `logs/realm_*.log` réels (fixtures
+  d'échec incluses) — ça a piégé deux diagnostics aujourd'hui. Rediriger le
+  FileHandler vers tmp_path sous pytest.
+
 -----
 
 # TEMPS 3 — Grand nettoyage
