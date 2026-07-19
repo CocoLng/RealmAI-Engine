@@ -1,12 +1,13 @@
 # RealmAI Engine
 
+[![CI](https://github.com/CocoLng/RealmAI-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/CocoLng/RealmAI-Engine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![discord.py 2.7+](https://img.shields.io/badge/discord.py-2.7+-5865F2.svg)](https://github.com/Rapptz/discord.py)
 [![Pydantic v2](https://img.shields.io/badge/pydantic-v2-e92063.svg)](https://docs.pydantic.dev/latest/)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![Types: mypy](https://img.shields.io/badge/types-mypy-2a6db2.svg)](https://mypy-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-2200+-brightgreen.svg)](#run-the-test-suite)
+[![Tests](https://img.shields.io/badge/tests-2890+-brightgreen.svg)](#run-the-test-suite)
 
 An AI-powered RPG Game Master that runs as a Discord bot. A deterministic
 Python engine handles all game mechanics (dice, combat, inventory, rules).
