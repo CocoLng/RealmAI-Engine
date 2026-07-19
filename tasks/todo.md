@@ -130,34 +130,34 @@ sessions pilotées par script tester autonome (pattern du skill).
 
 ### 2.1 — Dette résiduelle réelle
 
-- [ ] **Jet de recharge 5-6 en début de tour.** Seul reliquat technique de
-      l'audit. `engine/npc_stat_block.py` budgète désormais `recharge_5_6`
-      comme `per_combat`, faute de mieux : sans jet de recharge, une capacité
-      « recharge » vaut **1×/combat**. C'est strictement plus sûr que le bug
-      d'origine (`uses_remaining=None` = nuke à chaque round), mais ce n'est
-      pas la règle. Implémenter demande un hook tour-par-tour dans
-      `bot/combat_turn_manager.py`.
+- [x] **Jet de recharge 5-6 : implémenté (2026-07-19).** Dans le moteur, pas
+      dans le bot : `engine.combat.advance_turn` roule le d6 SRD au début du
+      tour du porteur, là où les points légendaires se rechargent (5+ →
+      l'usage revient, jamais re-roulé chargé, jamais cumulé ; cue ⚡ via
+      `pending_legendary_summaries`). 5 tests
+      (`tests/engine/combat/test_recharge.py`).
 
 ### 2.2 — Suivis Beat Progression (non bloquants)
 
-- [ ] Calibrer le seuil de confiance du BeatJudge par beat après une première
-      semaine de prod (fixe à 0.7 aujourd'hui)
-- [ ] Auditer les arcs déjà en base générés sous l'ancien schéma — backfill
-      ponctuel ou régénération
-- [ ] Matcher POSSESS — match flou sur les variantes de nom d'objet
-      (« old silver key » devrait matcher « silver key »)
-- [ ] `last_attempt_action_id` sur `ObjectiveState` n'est jamais peuplé
-      (le moteur est sans état par tour) — câbler ou retirer
-- [ ] Envisager d'extraire le shadow logger de `engine/beat_progression.py`
-      vers `bot/pipeline/` (c'est une préoccupation d'orchestration)
+- [ ] Calibrer le seuil de confiance du BeatJudge par beat — **différé tel
+      quel** : exige une semaine de données de prod qui n'existent pas encore
+- [x] Audit des arcs en base : **rien à migrer** — les 2 arcs stockés sont au
+      schéma natif (11/11 beats avec `objectives[]`, 0 trigger legacy)
+- [x] Matcher POSSESS flou — max des scores `_fuzzy` sur l'inventaire
+      (« old silver key » ⊃ « silver key » → 1.0 par containment)
+- [x] `last_attempt_action_id` **retiré** (jamais peuplé par design — moteur
+      sans état par tour ; les arcs persistés portant la clé chargent sans
+      erreur, test à l'appui)
+- [ ] Extraire le shadow logger de `engine/beat_progression.py` vers
+      `bot/pipeline/` — **différé** : refactor optionnel sans impact
+      fonctionnel, à faire à l'occasion d'un chantier pipeline
 
 ### 2.3 — Qualité narrative
 
-- [ ] Monotonie du narrateur à T=0 — R2.repetition remonte encore sur
-      `talk`/`look` dans les runs du simulateur (4 alertes souples sur le run
-      du 2026-06-10). La garde anti-monotonie du chantier G devrait aider :
-      **relancer un run du simulateur pour vérifier** avant d'investiguer plus
-      loin. `uv run python -m tests.simulation --mock-llm --max-turns 20`
+- [~] Monotonie du narrateur : le run **mock-llm** ne peut pas juger la
+      garde (narrations canned identiques par construction → R2 à chaque
+      tour, artefact du mode). Run **réel Ollama** lancé le 2026-07-19 —
+      verdict à consigner ici à la fin du run.
 
 -----
 

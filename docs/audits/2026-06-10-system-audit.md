@@ -1,5 +1,13 @@
 # Audit système — 2026-06-10
 
+> **✅ CLOS le 2026-07-19 — tous les findings sont traités.** Les 9 chantiers
+> (A-I, les 5 critiques compris) sont mergés sur `main` ; le dernier reliquat
+> technique (jet de recharge 5-6, H19-adjacent) est implémenté, et les
+> mesures live H8 sont consignées dans
+> [`2026-06-10-h8-latency-measurements.md`](2026-06-10-h8-latency-measurements.md).
+> Ce rapport est un document d'ARCHIVE : ne pas le relire comme une liste
+> ouverte. Détail des chantiers : `tasks/todo.md` (annexe) et `tasks/archive/`.
+
 Audit multi-agents (8 dimensions, chaque finding vérifié adversarialement par un agent
 indépendant qui devait le réfuter en lisant le code). Périmètre : runtime Discord,
 persistence/DB, mémoire/contexte, pipeline de génération LLM, cohérence narrative,
