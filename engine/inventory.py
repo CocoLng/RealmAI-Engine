@@ -4,8 +4,15 @@ Simplified SRD 5e rules. Pure deterministic Python (no LLM).
 """
 
 from enum import StrEnum
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    Field,
+    SerializeAsAny,
+    ValidationError,
+)
 
 from engine.character import CharacterClass, Size
 
@@ -143,12 +150,50 @@ class Armor(Item):
     stealth_disadvantage: bool = False
 
 
+def _revive_item(value: Any) -> Any:
+    """Re-type a deserialized item dict into its concrete subclass.
+
+    ``Inventory`` fields are annotated with the ``Item`` base, so pydantic
+    v2 serialized by the DECLARED type and validated JSON back into the
+    base class: a DB round-trip silently flattened Weapon/Armor — after
+    any save/resume every attack was refused (« Attack requires a
+    weapon ») and armor AC was dropped (live finding, 2026-07-19).
+    ``item_type`` is the discriminant. Rows written before the fix lack
+    the subtype fields: when the name is in the catalog, revive the full
+    catalog entry (quantity preserved); otherwise degrade to the base
+    Item — never crash a /resume over legacy data.
+    """
+    if not isinstance(value, dict):
+        return value
+    raw_type = value.get("item_type")
+    target: type[Item] | None = None
+    if raw_type in (ItemType.WEAPON, ItemType.WEAPON.value):
+        target = Weapon
+    elif raw_type in (ItemType.ARMOR, ItemType.ARMOR.value):
+        target = Armor
+    if target is None:
+        return value
+    try:
+        return target.model_validate(value)
+    except ValidationError:
+        catalog_item = ITEM_CATALOG.get(str(value.get("name", "")))
+        if isinstance(catalog_item, target):
+            return catalog_item.model_copy(
+                update={"quantity": value.get("quantity", 1)},
+            )
+        return value
+
+
+AnyItem = Annotated[SerializeAsAny[Item], BeforeValidator(_revive_item)]
+"""Item field type that serializes the RUNTIME subtype and re-types on load."""
+
+
 class Inventory(BaseModel):
     """A character's item container."""
 
-    items: list[Item] = Field(default_factory=list)
-    equipped: dict[EquipmentSlot, Item] = Field(default_factory=dict)
-    attuned: list[Item] = Field(default_factory=list)
+    items: list[AnyItem] = Field(default_factory=list)
+    equipped: dict[EquipmentSlot, AnyItem] = Field(default_factory=dict)
+    attuned: list[AnyItem] = Field(default_factory=list)
     gold: int = Field(default=0, ge=0)
 
 

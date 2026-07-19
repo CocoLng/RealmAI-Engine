@@ -955,3 +955,66 @@ class TestHealDice:
         assert count == 2
         assert sides == 4
         assert modifier == 2
+
+
+class TestInventorySerializationRoundTrip:
+    """The DB round-trip must preserve item SUBTYPES (found live 2026-07-19).
+
+    ``Inventory`` fields are annotated ``Item``, so pydantic v2 serialized by
+    the declared type: a Weapon dumped through ``model_dump_json`` lost
+    ``damage_dice`` and reloaded as a plain Item — after any save/resume,
+    every attack was refused (« Attack requires a weapon ») and armor AC
+    was silently dropped.
+    """
+
+    def test_equipped_weapon_survives_json_round_trip(self) -> None:
+        inv = create_inventory()
+        inv = add_item(inv, ITEM_CATALOG["Longsword"])
+        inv = equip_item(inv, "Longsword", EquipmentSlot.MAIN_HAND)
+
+        reloaded = Inventory.model_validate_json(inv.model_dump_json())
+
+        mh = reloaded.equipped[EquipmentSlot.MAIN_HAND]
+        assert isinstance(mh, Weapon), f"got {type(mh).__name__}"
+        assert mh.damage_dice == ITEM_CATALOG["Longsword"].damage_dice  # type: ignore[attr-defined]
+
+    def test_armor_in_bag_survives_json_round_trip(self) -> None:
+        inv = create_inventory()
+        inv = add_item(inv, ITEM_CATALOG["Chain Mail"])
+
+        reloaded = Inventory.model_validate_json(inv.model_dump_json())
+
+        armor = next(i for i in reloaded.items if i.name == "Chain Mail")
+        assert isinstance(armor, Armor), f"got {type(armor).__name__}"
+        assert armor.base_ac == ITEM_CATALOG["Chain Mail"].base_ac  # type: ignore[attr-defined]
+
+    def test_truncated_legacy_row_is_repaired_from_catalog(self) -> None:
+        """Rows written before the fix lack the subtype fields. When the name
+        is in the catalog, revive the full catalog object (quantity kept)."""
+        legacy = (
+            '{"items": [], "attuned": [], "gold": 10, "equipped": {"Main Hand":'
+            ' {"name": "Longsword", "item_type": "Weapon", "weight": 3.0,'
+            ' "value_gp": 15, "rarity": "Common", "description": "",'
+            ' "requires_attunement": false, "magical": false,'
+            ' "stackable": false, "quantity": 1, "heal_dice": null}}}'
+        )
+        reloaded = Inventory.model_validate_json(legacy)
+
+        mh = reloaded.equipped[EquipmentSlot.MAIN_HAND]
+        assert isinstance(mh, Weapon)
+        assert mh.damage_dice == ITEM_CATALOG["Longsword"].damage_dice  # type: ignore[attr-defined]
+
+    def test_truncated_unknown_item_falls_back_to_base_item(self) -> None:
+        """Unknown truncated data must never crash a /resume — degrade to Item."""
+        legacy = (
+            '{"items": [{"name": "Lame du Vide", "item_type": "Weapon",'
+            ' "weight": 2.0, "value_gp": 100, "rarity": "Rare",'
+            ' "description": "", "requires_attunement": false,'
+            ' "magical": true, "stackable": false, "quantity": 1,'
+            ' "heal_dice": null}], "attuned": [], "gold": 0, "equipped": {}}'
+        )
+        reloaded = Inventory.model_validate_json(legacy)
+
+        blade = reloaded.items[0]
+        assert blade.name == "Lame du Vide"
+        assert blade.item_type == ItemType.WEAPON
