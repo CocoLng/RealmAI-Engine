@@ -125,12 +125,13 @@ def compute_match_score(
         return _fuzzy(interpreted.target_name, obj.target)
 
     if obj.kind == ObjectiveKind.POSSESS:
-        # POSSESS is binary: the item is in inventory or it isn't.
-        normalized_target = normalize(obj.target)
-        for item in inventory:
-            if normalize(item) == normalized_target:
-                return 1.0
-        return 0.0
+        # The LLM-generated beat target and the actual loot name rarely
+        # match verbatim (« old silver key » vs « silver key ») — fuzzy
+        # like every other matcher; word-boundary containment still
+        # scores 1.0, so exact possession stays binary in practice.
+        if not inventory:
+            return 0.0
+        return max(_fuzzy(item, obj.target) for item in inventory)
 
     if obj.kind == ObjectiveKind.FLAG:
         # FLAG is binary: world_flags[target] is truthy.

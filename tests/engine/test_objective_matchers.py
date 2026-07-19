@@ -353,3 +353,62 @@ def test_pickup_wrong_action_returns_zero():
         obj, interp, _outcome(), location=None, world_flags={}, inventory=set(),
     )
     assert score == 0.0
+
+
+def test_possess_fuzzy_matches_name_variants():
+    """« old silver key » in inventory must satisfy target « silver key »
+    (word-boundary containment → 1.0) — Beat Progression follow-up, the
+    LLM-generated beat target and the loot name rarely match verbatim."""
+    obj = BeatObjective(
+        id="possess_key",
+        kind=ObjectiveKind.POSSESS,
+        target="silver key",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.PICKUP), _outcome(),
+        location=None, world_flags={}, inventory={"old silver key"},
+    )
+    assert score == 1.0
+
+
+def test_possess_fuzzy_matches_reverse_containment():
+    obj = BeatObjective(
+        id="possess_key",
+        kind=ObjectiveKind.POSSESS,
+        target="old silver key",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.PICKUP), _outcome(),
+        location=None, world_flags={}, inventory={"silver key"},
+    )
+    assert score == 1.0
+
+
+def test_possess_unrelated_item_scores_low():
+    obj = BeatObjective(
+        id="possess_key",
+        kind=ObjectiveKind.POSSESS,
+        target="silver key",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.PICKUP), _outcome(),
+        location=None, world_flags={}, inventory={"torch"},
+    )
+    assert score < 0.5
+
+
+def test_possess_empty_inventory_scores_zero():
+    obj = BeatObjective(
+        id="possess_key",
+        kind=ObjectiveKind.POSSESS,
+        target="silver key",
+        description="...",
+    )
+    score = compute_match_score(
+        obj, _interp(ActionType.PICKUP), _outcome(),
+        location=None, world_flags={}, inventory=set(),
+    )
+    assert score == 0.0
