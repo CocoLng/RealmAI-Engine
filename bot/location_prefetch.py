@@ -196,9 +196,11 @@ async def wait_for_started_job(
 
     Returns ``True`` when a STARTED job existed and was awaited — even if
     it failed: the caller re-reads the DB and falls back to its own sync
-    generation. Returns ``False`` when no job has started for this
-    destination. Never raises; a timeout abandons the wait without
-    cancelling the job (``asyncio.shield``).
+    generation. Returns ``False`` when no job is registered — which covers
+    both "never started" and "already finished and unregistered", so
+    callers must re-read the DB in every case (a finished job commits
+    before it is removed from the registry). Never raises; a timeout
+    abandons the wait without cancelling the job (``asyncio.shield``).
     """
     inner = _STARTED.get((str(campaign_id), location_name))
     if inner is None:

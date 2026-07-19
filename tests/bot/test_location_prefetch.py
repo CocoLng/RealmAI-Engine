@@ -475,6 +475,62 @@ async def test_move_awaits_started_job_and_pays_one_generation(db_factory) -> No
     assert session.current_location.name == "Ruelle"
 
 
+async def test_move_rereads_db_when_started_job_finishes_mid_load(
+    db_factory,
+) -> None:
+    """``wait_for_started_job`` → False can mean "the job just finished and
+    was unregistered", not only "never started". The MOVE's initial DB read
+    may predate that job's commit (slow worker-thread scheduling — seen on
+    the 2-core CI runner), so it must re-read before deciding to regenerate:
+    ONE generation total, never two (H8)."""
+    from bot.world_navigation import change_location
+
+    hold = asyncio.Event()
+    fake = FakeDestinationFactory(hold=hold)
+    session = _make_session(["Ruelle"])
+    _persist_world(db_factory, session, stubs=["Ruelle"])
+
+    real_to_thread = asyncio.to_thread
+    straddled = False
+
+    async def first_load_straddles_job_end(fn, *args, **kwargs):
+        # First call = the MOVE's initial destination load. Return its
+        # (stub) snapshot only after the started job has fully finished
+        # AND been popped from the registry — the exact CI interleaving.
+        nonlocal straddled
+        result = await real_to_thread(fn, *args, **kwargs)
+        if not straddled:
+            straddled = True
+            hold.set()
+            await asyncio.wait_for(prefetch, timeout=5)
+        return result
+
+    with (
+        patch("bot.world_navigation.generate_destination", fake),
+        _patched_move_env(),
+        # Global for the duration of the test: only change_location reaches
+        # to_thread here (the prefetch job persists on the loop, the fake
+        # never threads).
+        patch("asyncio.to_thread", first_load_straddles_job_end),
+    ):
+        prefetch = asyncio.create_task(
+            prefetch_neighbor_locations(session, db_factory=db_factory),
+        )
+        while not fake.calls:
+            await asyncio.sleep(0)
+        dest = await asyncio.wait_for(
+            change_location(session, "Ruelle", db_factory=db_factory),
+            timeout=5,
+        )
+
+    assert dest.generated
+    assert fake.calls == ["Ruelle"]  # ONE generation total — never re-paid
+    assert session.current_location.name == "Ruelle"
+
+    row = _load(db_factory, "Ruelle", session.campaign.id)
+    assert row is not None and row.generated
+
+
 async def test_move_ignores_queued_job_and_generates_sync(db_factory) -> None:
     """A queued-but-not-started job is never awaited (anti-deadlock): the
     MOVE generates synchronously and the prefetch then skips the row."""
