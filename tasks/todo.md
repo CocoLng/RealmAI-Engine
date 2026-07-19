@@ -200,6 +200,16 @@ sessions pilotées par script tester autonome (pattern du skill).
 - Hygiène : la suite pytest écrit des `logs/realm_*.log` réels (fixtures
   d'échec incluses) — ça a piégé deux diagnostics aujourd'hui. Rediriger le
   FileHandler vers tmp_path sous pytest.
+- **Combat sans joueur = boucle infinie d'auto-dodge** (constaté le soir
+  même : le combat de test laissé actif a produit **49 esquives
+  automatiques en 1 h 45**, déclenchant 15 passages du Story Director —
+  ~26 min de GPU 9b brûlées en brainstorms saturés, channel spammé,
+  `interaction_count` qui dérive). Le filet anti-AFK (`_TIMEOUT_SECONDS=300`
+  → auto-dodge) n'a **aucun disjoncteur** : après N auto-actions
+  consécutives sans action humaine, le combat devrait se suspendre
+  (désarmer le timeout, message « combat en pause », reprise à la première
+  action humaine). Bot arrêté pour couper la boucle ; état persisté,
+  reprend au `/resume`.
 
 -----
 
