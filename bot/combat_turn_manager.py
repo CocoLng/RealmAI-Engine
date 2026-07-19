@@ -82,6 +82,13 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 300
 
+# Circuit breaker for the AFK safety net: after this many CONSECUTIVE
+# auto-dodges with no human action in between, the next timeout suspends
+# the combat instead of dodging again. Without it, a combat left running
+# with no players loops forever (49 auto-dodges in 1h45 observed live on
+# 2026-07-19, dragging a Story Director pass behind each one).
+_MAX_CONSECUTIVE_AUTO_ACTIONS = 3
+
 # Action types that never consume the actor's combat turn. QUESTION and
 # LOOK are the informational actions the validator deliberately allows
 # off-turn (engine/validators.py — _EXPLORATION_ALLOWED_IN_COMBAT); they
@@ -153,6 +160,15 @@ class TurnManager:
         next successful checkpoint clears it — ``persist_session`` always
         writes the full session snapshot, so the retry is implicit."""
         self._checkpoint_warned = False
+        self._consecutive_auto_actions = 0
+        """AFK streak: auto-dodges dispatched since the last human action.
+        Past ``_MAX_CONSECUTIVE_AUTO_ACTIONS`` the watcher suspends combat
+        instead of dodging (see :meth:`_timeout_watcher`)."""
+        self._auto_dispatch_in_flight = False
+        """True only while the watcher's own dispatch runs, so it is not
+        mistaken for a human action by the streak reset. A human action
+        landing inside that window keeps the streak — benign: the worst
+        case is one early suspension, healed by any next action."""
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -273,6 +289,10 @@ class TurnManager:
         after the guard: a stale dispatch must not disarm the watcher
         protecting the new current turn.
         """
+        if not self._auto_dispatch_in_flight:
+            # A human acted — the AFK streak is broken.
+            self._consecutive_auto_actions = 0
+
         if self.session.combat_state is None:
             return
 
@@ -761,6 +781,23 @@ class TurnManager:
         if self.pending_timeout is asyncio.current_task():
             self.pending_timeout = None
 
+        if self._consecutive_auto_actions >= _MAX_CONSECUTIVE_AUTO_ACTIONS:
+            # Circuit breaker: nobody is playing. Freeze the rotation (no
+            # dodge, no re-arm) — combat state stays intact and any human
+            # action (button or free text) resumes the normal flow.
+            logger.info(
+                "AUTO-DODGE circuit breaker: %d consecutive auto-actions, "
+                "combat suspended campaign=%s",
+                self._consecutive_auto_actions,
+                getattr(self.session.campaign, "id", "?"),
+            )
+            await self._safe_send(
+                "⏸️ **Combat en pause** — personne n'agit depuis un moment. "
+                "La partie reprend à votre prochaine action.",
+            )
+            return
+
+        self._consecutive_auto_actions += 1
         await self._safe_send(
             f"⏱️ **{actor_name}** n'a pas agi à temps — Défense automatique.",
         )
@@ -769,10 +806,13 @@ class TurnManager:
             actor_name=actor_name,
             raw_input="(auto-dodge sur timeout)",
         )
+        self._auto_dispatch_in_flight = True
         try:
             await self.dispatch_action(auto_action)
         except Exception as exc:
             logger.exception("Auto-dodge dispatch failed: %s", exc)
+        finally:
+            self._auto_dispatch_in_flight = False
 
     def _cancel_timeout(self) -> None:
         if self.pending_timeout is not None and not self.pending_timeout.done():
@@ -794,6 +834,11 @@ class TurnManager:
         where the action does not resolve the turn, otherwise combat
         soft-stalls with no auto-dodge.
         """
+        # Any free-text attempt is a human at the table — break the AFK
+        # streak even when the message is off-turn or the watcher is gone
+        # (that is precisely how a suspended combat wakes up).
+        self._consecutive_auto_actions = 0
+
         state = self.session.combat_state
         if state is None or not state.is_active:
             return False

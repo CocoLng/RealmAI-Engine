@@ -1205,3 +1205,96 @@ class TestTurnAdvanceGuard:
         (prompted,) = tm._prompt_turn.await_args.args
         assert prompted.name == pc.name
         tm._cancel_timeout()
+
+
+# ---------------------------------------------------------------------------
+# Auto-dodge circuit breaker — combat without players must not loop forever
+# ---------------------------------------------------------------------------
+
+
+class TestAutoDodgeCircuitBreaker:
+    """Live finding 2026-07-19: a test combat left running produced 49
+    consecutive auto-dodges in 1h45 (15 Story Director passes, GPU burned).
+    After _MAX_CONSECUTIVE_AUTO_ACTIONS auto-dodges with no human action,
+    the next timeout SUSPENDS combat instead of dodging; any human action
+    resets the streak and normal flow resumes."""
+
+    @pytest.mark.asyncio
+    async def test_watcher_still_dodges_under_threshold(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0)
+        session = _fake_session([_pc()])
+        tm = _turn_manager(session, _fake_channel())
+        tm.dispatch_action = AsyncMock()  # type: ignore[method-assign]
+        tm._safe_send = AsyncMock()  # type: ignore[method-assign]
+        tm._consecutive_auto_actions = 2
+
+        await tm._timeout_watcher("Aragorn")
+
+        tm.dispatch_action.assert_awaited_once()
+        assert tm._consecutive_auto_actions == 3
+
+    @pytest.mark.asyncio
+    async def test_timeout_past_threshold_suspends_combat(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0)
+        session = _fake_session([_pc()])
+        tm = _turn_manager(session, _fake_channel())
+        tm.dispatch_action = AsyncMock()  # type: ignore[method-assign]
+        tm._safe_send = AsyncMock()  # type: ignore[method-assign]
+        tm._consecutive_auto_actions = 3
+
+        await tm._timeout_watcher("Aragorn")
+
+        tm.dispatch_action.assert_not_awaited()  # no 4th dodge
+        assert tm.pending_timeout is None  # watcher NOT re-armed
+        sent = " ".join(
+            str(call) for call in tm._safe_send.await_args_list
+        )
+        assert "pause" in sent.lower()
+        # Combat state untouched — resumes on the next human action.
+        assert session.combat_state.is_active
+
+    @pytest.mark.asyncio
+    async def test_human_button_action_resets_streak(self) -> None:
+        session = _fake_session([_pc()])
+        session.combat_state = None  # early-return path — reset still fires
+        tm = _turn_manager(session, _fake_channel())
+        tm._consecutive_auto_actions = 3
+
+        action = InterpretedAction(
+            action_type=ActionType.DEFEND,
+            actor_name="Aragorn",
+            raw_input="je pare",
+        )
+        await tm.dispatch_action(action)
+
+        assert tm._consecutive_auto_actions == 0
+
+    @pytest.mark.asyncio
+    async def test_watcher_dispatch_does_not_reset_its_own_streak(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("bot.combat_turn_manager._TIMEOUT_SECONDS", 0)
+        session = _fake_session([_pc()])
+        tm = _turn_manager(session, _fake_channel())
+        tm._safe_send = AsyncMock()  # type: ignore[method-assign]
+        # Real dispatch_action runs, hits the combat_state guard and
+        # returns — but it must NOT zero the streak the watcher just grew.
+        session.combat_state = None
+        tm._consecutive_auto_actions = 1
+
+        await tm._timeout_watcher("Aragorn")
+
+        assert tm._consecutive_auto_actions == 2
+
+    def test_free_text_entry_resets_streak(self) -> None:
+        session = _fake_session([_pc()])
+        tm = _turn_manager(session, _fake_channel())
+        tm._consecutive_auto_actions = 3
+
+        tm.pause_timeout_for("Aragorn")
+
+        assert tm._consecutive_auto_actions == 0
