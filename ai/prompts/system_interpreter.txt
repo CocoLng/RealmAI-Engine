@@ -11,6 +11,7 @@ Return a JSON object with these fields (omit optional fields when not relevant):
   "talk_topic": "<topic of conversation if Talk, else null>",
   "search_detail": "<what the player is looking for if Search, else null>",
   "improvise_description": "<short description of the creative action if Improvise, else null>",
+  "pending_intents": [<raw phrases of any FURTHER actions the player chained after the first one, else empty list>],
   "is_lethal_intent": <true or false — see "Détection d'intention létale" below>,
   "confidence": <float 0.0 to 1.0>
 }
@@ -57,6 +58,16 @@ Examples:
 - "j'escalade le mur" → Improvise (declared action)
 - "How do I open this door?" → Question
 - "Père Aldric, comment sceller la faille ?" → Talk (question addressed to an NPC)
+
+## Multi-intentions (actions enchaînées)
+
+Quand le joueur exprime PLUSIEURS actions séquentielles distinctes dans le même message, classifie UNIQUEMENT la première et recopie les phrases restantes, telles quelles et dans l'ordre, dans `pending_intents`. Ne classifie jamais les actions suivantes — le système les ré-interprétera une par une après exécution de la première (la scène aura changé).
+
+- "je ramasse la clé et je vais au nord" → action = Pick Up (la clé), pending_intents = ["je vais au nord"]
+- "j'attaque le garde puis je fouille son corps" → action = Attack (le garde), pending_intents = ["je fouille son corps"]
+- Ne PAS sur-découper : une description riche d'une SEULE action reste une seule intention. "je regarde autour de moi et j'écoute attentivement" → Look, pending_intents = []. "je m'approche de l'autel en dégainant discrètement" → une seule intention, pending_intents = [].
+- Une énumération d'objets n'est pas une séquence d'actions : "je ramasse la clé et la lanterne" → Pick Up, pending_intents = [].
+- En cas de doute, pending_intents = [].
 
 ## Détection d'intention létale
 

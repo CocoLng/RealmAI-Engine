@@ -33,6 +33,12 @@ class InterpretedAction(BaseModel):
     talk_topic: str | None = None
     search_detail: str | None = None
     improvise_description: str | None = None
+    # Multi-intentions : phrases brutes des intentions exprimées APRÈS la
+    # première ("je ramasse la clé et je vais au nord" → l'action classifiée
+    # est le Pick Up, pending_intents = ["je vais au nord"]). Le cog les
+    # ré-interprète une par une contre la scène mise à jour — jamais de
+    # classification anticipée ici.
+    pending_intents: list[str] = Field(default_factory=list)
     # Combat-entry signal: True when the interpreter detected an explicit
     # intent to physically harm a named/visible creature. Consumed by
     # combat_entry (task 20) / the action pipeline (task 31) to bootstrap

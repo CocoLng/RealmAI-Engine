@@ -685,3 +685,75 @@ def test_question_vs_action_section_present_in_prompt() -> None:
     assert "NOT Improvise" in _SYSTEM_PROMPT or "jamais Improvise" in _SYSTEM_PROMPT
     # In-character questions to NPCs remain Talk.
     assert "Talk (question addressed to an NPC)" in _SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Multi-intentions — pending_intents
+# ---------------------------------------------------------------------------
+
+
+def test_interpret_parses_pending_intents(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    response_data = {
+        "action_type": "Pick Up",
+        "actor_name": "Aldric",
+        "target_name": "Autel de pierre",
+        "pending_intents": ["je vais dans la ruelle nord"],
+        "confidence": 0.9,
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = interpreter.interpret(
+        player_text="je fouille l'autel et je vais dans la ruelle nord",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+
+    assert result.pending_intents == ["je vais dans la ruelle nord"]
+
+
+def test_interpret_pending_intents_defaults_to_empty(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    response_data = {
+        "action_type": "Look",
+        "actor_name": "Aldric",
+        "confidence": 0.95,
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = interpreter.interpret(
+        player_text="je regarde autour de moi",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+
+    assert result.pending_intents == []
+
+
+def test_interpret_pending_intents_clamps_garbage_and_overflow(
+    httpx_mock: HTTPXMock,
+    interpreter: Interpreter,
+    cathedral_scene: SceneContext,
+) -> None:
+    """Entrées non-string ignorées, liste tronquée à 3, non-liste → []."""
+    response_data = {
+        "action_type": "Look",
+        "actor_name": "Aldric",
+        "pending_intents": ["a", 42, "b", None, "c", "d", "e"],
+        "confidence": 0.9,
+    }
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(response_data))
+
+    result = interpreter.interpret(
+        player_text="je regarde",
+        actor_name="Aldric",
+        scene_context=cathedral_scene,
+    )
+
+    assert result.pending_intents == ["a", "b", "c"]

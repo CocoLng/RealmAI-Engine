@@ -19,6 +19,17 @@ _ACTION_TYPES_BY_KEY: dict[str, ActionType] = {
     at.value.lower(): at for at in ActionType
 }
 
+_MAX_PENDING_INTENTS = 3
+"""Clamp défensif — le 4b ne doit jamais imposer plus de 3 intentions."""
+
+
+def _parse_pending_intents(raw: object) -> list[str]:
+    """Ne garde que les entrées string non vides, tronque à _MAX_PENDING_INTENTS."""
+    if not isinstance(raw, list):
+        return []
+    cleaned = [item for item in raw if isinstance(item, str) and item.strip()]
+    return cleaned[:_MAX_PENDING_INTENTS]
+
 
 def _lookup_action_type(raw: object) -> ActionType | None:
     """Case-insensitive ActionType lookup tolerating underscores.
@@ -40,8 +51,8 @@ class Interpreter:
 
     MODEL = "qwen3.5:4b"
 
-    NUM_PREDICT = 384
-    """Generation cap — one flat JSON action object (M7)."""
+    NUM_PREDICT = 448
+    """Generation cap — one flat JSON action object + pending_intents (M7)."""
 
     def __init__(self, client: OllamaClient) -> None:
         self._client = client
@@ -124,6 +135,7 @@ class Interpreter:
                 talk_topic=data.get("talk_topic"),
                 search_detail=data.get("search_detail"),
                 improvise_description=data.get("improvise_description"),
+                pending_intents=_parse_pending_intents(data.get("pending_intents")),
                 raw_input=player_text,
                 confidence=float(data.get("confidence", 1.0)),
                 is_lethal_intent=bool(data.get("is_lethal_intent", False)),
