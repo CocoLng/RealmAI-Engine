@@ -383,6 +383,23 @@ class SessionCog(commands.Cog):
                 # Refresh the public lobby embed
                 await refresh_lobby_message(lobby_view)
 
+            async def on_setup_cancelled() -> None:
+                """Called by CharacterSetupFlow on Annuler / timeout.
+
+                Without this the player stays CREATING forever and the host
+                sees a roster line stuck on « Création en cours ».
+                """
+                player = lobby.players.get(user_id)
+                if player is None or player.status == LobbyPlayerStatus.READY:
+                    # Left the lobby, or bailed out of a stale flow after
+                    # finishing a later one — don't undo a real character.
+                    return
+                player.status = LobbyPlayerStatus.CANCELLED
+                logger.info(
+                    "LOBBY cancelled user=%s campaign=%s", user_id, campaign.id,
+                )
+                await refresh_lobby_message(lobby_view)
+
             # Mark CREATING and refresh roster
             lobby.set_status(user_id, LobbyPlayerStatus.CREATING)
             await refresh_lobby_message(lobby_view)
@@ -391,6 +408,7 @@ class SessionCog(commands.Cog):
                 user_id=user_id,
                 language=language,
                 on_complete=on_setup_complete,
+                on_cancel=on_setup_cancelled,
             )
             modal = IdentityModal(parent_view=flow)
             await inter.response.send_modal(modal)

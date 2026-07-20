@@ -8,8 +8,11 @@ are patched so the test never touches Discord or Ollama.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from bot.lobby_state import LobbyPlayerStatus
 from engine.character import (
     CharacterClass,
     Race,
@@ -201,3 +204,72 @@ async def test_lobby_transitions_from_bot_lobbies_to_bot_sessions(
 
     assert scenario.channel.id not in scenario.bot.lobbies
     assert scenario.channel.id in scenario.bot.sessions
+
+
+@pytest.mark.asyncio
+async def test_cancelled_setup_marks_the_player_cancelled_in_the_roster(
+    scenario: ScenarioRunner,
+) -> None:
+    """Annuler must not leave the player stuck at « Création en cours »."""
+    driver = HeadlessSessionFlow(scenario_runner=scenario)
+
+    async with driver:
+        await driver.start(host_idx=0, theme="Abandon")
+        await driver.cancel_player(player_idx=0)
+
+        lobby = scenario.bot.lobbies[scenario.channel.id]
+        host = scenario._make_player(0)
+        assert lobby.players[host.id].status is LobbyPlayerStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_cancelled_player_can_join_again(
+    scenario: ScenarioRunner,
+) -> None:
+    """A cancelled player re-clicking Rejoindre goes back to CREATING."""
+    driver = HeadlessSessionFlow(scenario_runner=scenario)
+
+    async with driver:
+        await driver.start(host_idx=0, theme="Second essai")
+        await driver.cancel_player(player_idx=0)
+        await driver.click_join(player_idx=0)
+
+        lobby = scenario.bot.lobbies[scenario.channel.id]
+        host = scenario._make_player(0)
+        assert lobby.players[host.id].status is LobbyPlayerStatus.CREATING
+
+
+@pytest.mark.asyncio
+async def test_stale_cancel_does_not_downgrade_a_ready_player(
+    scenario: ScenarioRunner,
+) -> None:
+    """Cancelling an abandoned first flow must not unmake a finished character."""
+    driver = HeadlessSessionFlow(scenario_runner=scenario)
+
+    async with driver:
+        await driver.start(
+            host_idx=0,
+            theme="Double flow",
+            pregen_arc=_make_arc(),
+            pregen_location=_make_location(),
+        )
+        # First flow, left open (the player will bail out of it later).
+        stale_flow = await driver.click_join(player_idx=0)
+        # Second flow, driven to completion → the player is READY.
+        await driver.add_player(
+            player_idx=0,
+            name="Thorin",
+            race=Race.DWARF,
+            char_class=CharacterClass.FIGHTER,
+            skills=[Skill.ATHLETICS, Skill.PERCEPTION],
+            kit_name=get_starter_kits(CharacterClass.FIGHTER)[0].name,
+            motivation_key="Contract",
+        )
+
+        inter = scenario._make_interaction(0)
+        inter.response.edit_message = AsyncMock()
+        await stale_flow._on_cancel(inter)
+
+        lobby = scenario.bot.lobbies[scenario.channel.id]
+        host = scenario._make_player(0)
+        assert lobby.players[host.id].status is LobbyPlayerStatus.READY

@@ -310,6 +310,25 @@ mémoire (fenêtre glissante + résumés), la cadence de résumé tourne en tâc
 fond, et `memory/context_assembler.py:87` lit le RAG — **ChromaDB n'est plus
 write-only**.
 
+## Session 2026-07-20 — abandon de création câblé au lobby
+
+Suite de l'audit doc↔code : `LobbyPlayerStatus.CANCELLED` était rendu par
+`bot/embeds/lobby_embed.py` mais aucun chemin ne l'assignait — **Annuler**
+dans `CharacterSetupFlow` arrêtait la vue sans prévenir le lobby, laissant le
+joueur en `CREATING` (« Création en cours… ») indéfiniment. La porte de
+lancement n'était pas touchée (`has_any_ready()` ne compte que `READY`) :
+bug d'affichage, pas de blocage.
+
+- `CharacterSetupFlow` prend un callback `on_cancel` optionnel, appelé par
+  `_on_cancel` **et** par `on_timeout` (les 10 min d'expiration sont un
+  abandon comme un autre).
+- `SessionCog.on_join` le câble : statut `CANCELLED` + re-render de l'embed,
+  avec garde anti-régression — un flow périmé ne dégrade pas un `READY`.
+- Driver de scénario : `HeadlessSessionFlow.click_join` extrait de
+  `add_player`, plus `cancel_player`. 6 tests ajoutés (vue + bout en bout).
+- `docs/internal/CAMPAIGN_LIFECYCLE.md` mis à jour (le comportement cassé y
+  était documenté depuis la veille).
+
 ## Session 2026-07-18 — merge du retard + porte mypy
 
 C, D et G étaient **terminés mais coincés sur des branches non mergées depuis

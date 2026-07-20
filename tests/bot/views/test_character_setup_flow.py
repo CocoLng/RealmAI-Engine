@@ -271,6 +271,49 @@ async def test_confirm_without_preview_does_not_persist():
     assert "n'a pas pu être finalisée" in content
 
 
+async def test_cancel_notifies_the_lobby():
+    """Annuler must tell the cog so the roster leaves the CREATING state."""
+    on_cancel = AsyncMock()
+    on_complete = AsyncMock()
+    view = CharacterSetupFlow(
+        user_id=1, language="fr", on_complete=on_complete, on_cancel=on_cancel,
+    )
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view._on_cancel(interaction)
+
+    on_cancel.assert_awaited_once()
+    on_complete.assert_not_called()
+    content = interaction.response.edit_message.call_args.kwargs["content"]
+    assert "annulée" in content
+
+
+async def test_cancel_without_callback_still_closes_the_flow():
+    """The callback stays optional — unit tests build flows without a lobby."""
+    view = CharacterSetupFlow(user_id=1, language="fr", on_complete=AsyncMock())
+
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await view._on_cancel(interaction)
+
+    interaction.response.edit_message.assert_awaited_once()
+
+
+async def test_timeout_notifies_the_lobby():
+    """A flow left idle for 10 min is an abandon too — same lobby notice."""
+    on_cancel = AsyncMock()
+    view = CharacterSetupFlow(
+        user_id=1, language="fr", on_complete=AsyncMock(), on_cancel=on_cancel,
+    )
+
+    await view.on_timeout()
+
+    on_cancel.assert_awaited_once()
+
+
 async def test_review_recap_translates_kit_and_motivation():
     """Step 6/6 must not fall back to the canonical English keys.
 

@@ -87,11 +87,16 @@ class CharacterSetupFlow(LoggedView):
         user_id: int,
         language: str,
         on_complete: Callable[[Character, str, str], Awaitable[None]],
+        on_cancel: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(timeout=self.timeout)
         self.user_id = user_id
         self.language = language
         self._on_complete = on_complete
+        # Fired when the player bails out (Annuler) or lets the flow expire,
+        # so the lobby can move them out of CREATING. Optional: unit tests
+        # build flows with no lobby behind them.
+        self._on_cancel_callback = on_cancel
         self.state: SetupStep = SetupStep.IDENTITY
         # Accumulators (filled across steps)
         self.name: str | None = None
@@ -556,9 +561,18 @@ class CharacterSetupFlow(LoggedView):
         await self.transition_to(interaction, SetupStep.RACE_CLASS)
 
     async def _on_cancel(self, interaction: discord.Interaction) -> None:
-        """Abort the flow. on_complete is NOT called."""
+        """Abort the flow. on_complete is NOT called, on_cancel is."""
         self.stop()
+        # Answer the player first (3 s interaction deadline), then tell the
+        # lobby — that second call edits the public message, not this one.
         await interaction.response.edit_message(
             content="❌ Création annulée. Tu peux relancer via le bouton _Rejoindre_ du lobby.",
             embed=None, view=None,
         )
+        if self._on_cancel_callback is not None:
+            await self._on_cancel_callback()
+
+    async def on_timeout(self) -> None:
+        """An expired flow is an abandon too — release the lobby slot."""
+        if self._on_cancel_callback is not None:
+            await self._on_cancel_callback()

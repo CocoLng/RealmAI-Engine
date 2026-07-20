@@ -41,10 +41,13 @@ est assurée par `SessionCog` dans [bot/cogs/session.py](../../bot/cogs/session.
 lobby pour re-render, plus le résultat de la pré-génération
 (`pregen_phase`, `pregen_task`, `story_arc`, `current_location`, `pregen_error`).
 
-Statuts joueur : `JOINED → CREATING → READY`. `LobbyPlayerStatus.CANCELLED`
-existe et est rendu par `lobby_embed`, mais aucun chemin de code ne l'assigne
-aujourd'hui — un abandon de création laisse le joueur en `CREATING` jusqu'à
-ce qu'il re-clique **Rejoindre** (ou **Quitter**, qui le retire du roster).
+Statuts joueur : `JOINED → CREATING → READY`, avec `CANCELLED` en sortie
+d'abandon. Un abandon de création (**Annuler** dans le flow, ou expiration
+des 10 min de la vue) rappelle le cog via le callback `on_cancel` de
+`CharacterSetupFlow` : le joueur passe `CANCELLED` et l'embed est
+re-render. Il peut re-cliquer **Rejoindre** (retour en `CREATING`) ou
+**Quitter** (retrait du roster). Un `on_cancel` venant d'un flow périmé ne
+peut pas dégrader un joueur déjà `READY`.
 
 ### 2.a Génération IA (background task)
 
@@ -76,7 +79,7 @@ Chaque joueur clique sur **Rejoindre** (`LobbyView.join`) → `lobby.add_player(
    - `STATS` : bouton « Optimisé pour \<Classe\> » (`CLASS_STAT_PRESETS`) ou « Aléatoire » (`roll_4d6_drop_lowest` + `auto_assign_random`).
    - `SKILLS` : choix parmi `CLASS_SKILL_CHOICES`.
    - `KIT_MOTIV` : kit de départ ([engine/starter_gear.py](../../engine/starter_gear.py)) + motivation narrative.
-   - `REVIEW` : **Confirmer** / **Recommencer** (retour à `RACE_CLASS`, nom et concept conservés) / **Annuler** (abandonne le flow sans appeler `on_complete` — le joueur peut re-cliquer **Rejoindre**).
+   - `REVIEW` : **Confirmer** / **Recommencer** (retour à `RACE_CLASS`, nom et concept conservés) / **Annuler** (abandonne le flow sans appeler `on_complete` ; appelle `on_cancel` → statut `CANCELLED` — le joueur peut re-cliquer **Rejoindre**).
 2. À la confirmation, le callback `on_setup_complete` du cog :
    - `create_inventory()` puis `apply_starter_kit(kit, inventory)` pour le kit choisi.
    - `create_spellcaster_state(char_class, level=1)` (None si non-caster).

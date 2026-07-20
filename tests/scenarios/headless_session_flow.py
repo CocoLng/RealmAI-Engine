@@ -253,6 +253,42 @@ class HeadlessSessionFlow:
         if lobby.pregen_task is not None:
             await lobby.pregen_task
 
+    async def click_join(self, *, player_idx: int) -> CharacterSetupFlow:
+        """Click Rejoindre for one player and return the opened setup flow.
+
+        The on_join closure awaits ``interaction.response.send_modal(modal)``;
+        we intercept the modal to reach the ``CharacterSetupFlow`` the cog
+        built (with its real ``on_complete`` / ``on_cancel`` callbacks).
+        """
+        if self.lobby_view is None:
+            msg = "start() must be awaited first"
+            raise RuntimeError(msg)
+
+        self.scenario._make_player(player_idx)
+        inter = self.scenario._make_interaction(player_idx)
+        inter.response.is_done = lambda: False  # type: ignore[method-assign]
+
+        captured: list[IdentityModal] = []
+
+        async def fake_send_modal(modal: IdentityModal) -> None:
+            captured.append(modal)
+
+        inter.response.send_modal = fake_send_modal  # type: ignore[attr-defined]
+
+        await self.lobby_view._on_join(inter, self.lobby_view)  # type: ignore[arg-type]
+
+        if not captured:
+            msg = "on_join did not send a modal"
+            raise RuntimeError(msg)
+        return captured[0].parent_view
+
+    async def cancel_player(self, *, player_idx: int) -> None:
+        """Drive Rejoindre → Annuler for one player (abandoned creation)."""
+        flow = await self.click_join(player_idx=player_idx)
+        inter = self.scenario._make_interaction(player_idx)
+        inter.response.edit_message = AsyncMock()  # type: ignore[method-assign]
+        await flow._on_cancel(inter)
+
     async def add_player(
         self,
         *,
@@ -272,30 +308,7 @@ class HeadlessSessionFlow:
         modal the cog sends, then drives the same modal + flow through
         :class:`HeadlessCharacterSetupFlow`.
         """
-        if self.lobby_view is None:
-            msg = "start() must be awaited first"
-            raise RuntimeError(msg)
-
-        self.scenario._make_player(player_idx)
-        inter = self.scenario._make_interaction(player_idx)
-        inter.response.is_done = lambda: False  # type: ignore[method-assign]
-
-        # The on_join closure awaits ``interaction.response.send_modal(modal)``.
-        # Capture the modal so we can drive its parent flow.
-        captured: list[IdentityModal] = []
-
-        async def fake_send_modal(modal: IdentityModal) -> None:
-            captured.append(modal)
-
-        inter.response.send_modal = fake_send_modal  # type: ignore[attr-defined]
-
-        await self.lobby_view._on_join(inter, self.lobby_view)  # type: ignore[arg-type]
-
-        if not captured:
-            msg = "on_join did not send a modal"
-            raise RuntimeError(msg)
-        modal = captured[0]
-        flow: CharacterSetupFlow = modal.parent_view
+        flow = await self.click_join(player_idx=player_idx)
 
         # Wrap the existing flow so on_setup_complete (DB persistence +
         # lobby roster update) keeps firing through the cog's closure.
