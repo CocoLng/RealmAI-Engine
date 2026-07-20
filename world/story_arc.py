@@ -153,6 +153,14 @@ class StoryArc(BaseModel):
     """World facts the narrator must never contradict (audit H17).
     Populated at runtime (e.g. NPC deaths) by the memory hook; empty on
     legacy arcs. Serialized inside the existing arc_json blob."""
+    archetype: str | None = None
+    """Narrative archetype this arc was scaffolded from
+    (``engine.arc_recipes.Archetype``, e.g. ``"heist"``).
+
+    Recorded so the *next* campaign of the same Discord guild can exclude
+    it from the draw (``generate_recipe(previous_archetype=...)``) — the
+    anti-repetition mechanism only works if the choice survives the
+    campaign. ``None`` on legacy arcs and on arcs built without a recipe."""
 
     @model_validator(mode="after")
     def _migrate_legacy_completion_triggers(self) -> "StoryArc":

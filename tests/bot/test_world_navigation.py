@@ -384,3 +384,49 @@ async def test_change_location_hydrates_stub_preserving_back_link() -> None:
     # The result is the hydrated location.
     assert result is hydrated
     assert session.current_location is hydrated
+
+
+# ---------------------------------------------------------------------------
+# Atmosphere variety (spec §2.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_destination_passes_an_atmosphere() -> None:
+    """Every generated location gets an atmosphere drawn from the pool."""
+    from engine.atmospheres import ATMOSPHERES
+
+    from bot.world_navigation import generate_destination
+
+    session = _make_session(ollama_client=MagicMock())
+    fake_gen = MagicMock()
+    fake_gen.generate.return_value = Location(name="Crypte", description="d")
+
+    with patch("ai.world_generator.WorldGenerator", return_value=fake_gen):
+        await generate_destination(
+            session, "Crypte", origin_name="Origin", required_connections=[],
+        )
+
+    atmosphere = fake_gen.generate.call_args.kwargs["atmosphere"]
+    assert atmosphere in {a.value for a in ATMOSPHERES}
+
+
+@pytest.mark.asyncio
+async def test_generate_destination_never_repeats_the_previous_atmosphere() -> None:
+    """Two consecutive locations in the same campaign get distinct moods."""
+    from bot.world_navigation import generate_destination
+
+    session = _make_session(ollama_client=MagicMock())
+    fake_gen = MagicMock()
+    fake_gen.generate.return_value = Location(name="Crypte", description="d")
+
+    with patch("ai.world_generator.WorldGenerator", return_value=fake_gen):
+        for _ in range(15):
+            previous = getattr(session, "last_atmosphere", None)
+            await generate_destination(
+                session, "Crypte", origin_name="Origin", required_connections=[],
+            )
+            current = fake_gen.generate.call_args.kwargs["atmosphere"]
+            assert current != previous
+            # The pick is remembered on the session for the next move.
+            assert session.last_atmosphere == current

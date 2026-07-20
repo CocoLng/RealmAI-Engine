@@ -583,6 +583,7 @@ def story_arc_to_db(arc: StoryArc) -> StoryArcRow:
         campaign_id=arc.campaign_id,
         arc_json=arc.model_dump_json(),
         current_beat_index=arc.current_beat_index,
+        archetype=arc.archetype,
     )
 
 

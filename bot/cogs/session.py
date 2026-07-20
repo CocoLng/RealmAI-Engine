@@ -563,7 +563,9 @@ class SessionCog(commands.Cog):
         # the arc generator only uses it as a difficulty hint in the prompt
         # so a 1→6 mismatch costs nothing structural.
         lobby.pregen_task = asyncio.create_task(
-            self._pregenerate_campaign_world(lobby, campaign, language),
+            self._pregenerate_campaign_world(
+                lobby, campaign, language, guild_id=guild.id,
+            ),
             name=f"pregen-{campaign.id}",
         )
 
@@ -754,8 +756,44 @@ class SessionCog(commands.Cog):
     # Background pre-generation (arc + starting location)
     # ------------------------------------------------------------------
 
+    async def _previous_arc_archetype(
+        self, guild_id: int | None, campaign_id: str,
+    ) -> str | None:
+        """Archetype of this guild's previous campaign, or ``None``.
+
+        Best-effort: any DB failure degrades to ``None`` (no exclusion)
+        rather than aborting world generation. Synchronous SQLAlchemy runs
+        off the event loop.
+        """
+        if guild_id is None:
+            return None
+
+        from db.repositories.story_arc_repo import StoryArcRepository
+
+        def _lookup() -> str | None:
+            db_session = self.bot.db_factory()
+            try:
+                return StoryArcRepository(db_session).get_latest_archetype_for_guild(
+                    guild_id, exclude_campaign_id=campaign_id,
+                )
+            finally:
+                db_session.close()
+
+        try:
+            return await asyncio.to_thread(_lookup)
+        except Exception:
+            logger.warning(
+                "PREGEN previous_archetype lookup failed guild=%s", guild_id,
+                exc_info=True,
+            )
+            return None
+
     async def _pregenerate_campaign_world(
-        self, lobby: LobbyState, campaign: Campaign, language: str,
+        self,
+        lobby: LobbyState,
+        campaign: Campaign,
+        language: str,
+        guild_id: int | None = None,
     ) -> None:
         """Generate StoryArc + starting Location while players are creating chars.
 
@@ -768,12 +806,17 @@ class SessionCog(commands.Cog):
         (3 attempts, 0s / 5s / 15s). A campaign launch is the worst place to
         die on a single Ollama hiccup: the host has already gathered players
         and the lobby is unrecoverable once FAILED.
+
+        When ``guild_id`` is provided, the archetype of the guild's previous
+        campaign is excluded from the recipe draw so two consecutive
+        campaigns on the same server don't share a narrative shape.
         """
         from ai.arc_generator import ArcGenerator
         from ai.client import OllamaClient, OllamaUnavailableError
         from ai.world_generator import WorldGenerator
         from bot.lobby_state import GenerationPhase
         from engine.arc_recipes import generate_recipe
+        from engine.atmospheres import pick_atmosphere
 
         try:
             client = OllamaClient()
@@ -787,7 +830,16 @@ class SessionCog(commands.Cog):
             return
 
         try:
-            recipe = generate_recipe(theme=campaign.name)
+            previous_archetype = await self._previous_arc_archetype(
+                guild_id, campaign.id,
+            )
+            recipe = generate_recipe(
+                theme=campaign.name, previous_archetype=previous_archetype,
+            )
+            logger.info(
+                "PREGEN recipe campaign=%s archetype=%s previous=%s",
+                campaign.id, recipe.archetype.value, previous_archetype,
+            )
             arc_gen = ArcGenerator(client)
             world_gen = WorldGenerator(client)
 
@@ -799,7 +851,14 @@ class SessionCog(commands.Cog):
                 lambda: arc_gen.generate(campaign.name, 1, language, recipe),
                 log_label=f"PREGEN campaign={campaign.id} arc",
             )
-            lobby.story_arc = arc.model_copy(update={"campaign_id": campaign.id})
+            lobby.story_arc = arc.model_copy(
+                update={
+                    "campaign_id": campaign.id,
+                    # Recorded so the *next* campaign of this guild can
+                    # exclude it — see _previous_arc_archetype().
+                    "archetype": recipe.archetype.value,
+                },
+            )
             logger.info(
                 "PREGEN arc_done campaign=%s elapsed=%.1fs beats=%d",
                 campaign.id, time.monotonic() - arc_start, len(lobby.story_arc.beats),
@@ -818,12 +877,15 @@ class SessionCog(commands.Cog):
                 beat.location_hint for beat in lobby.story_arc.beats if beat.location_hint
             ]
             loc_start = time.monotonic()
+            atmosphere = pick_atmosphere()
+            lobby.last_atmosphere = atmosphere.value
             lobby.current_location = await retry_llm_call(
                 lambda: world_gen.generate(
                     campaign_context=arc_context,
                     location_type="starting_area",
                     language=language,
                     location_hints=arc_location_hints,
+                    atmosphere=atmosphere.value,
                 ),
                 log_label=f"PREGEN campaign={campaign.id} location",
             )
@@ -930,6 +992,9 @@ class SessionCog(commands.Cog):
             character_kits=dict(kits),
             character_motivations=dict(motivations),
             language=language,
+            # The starting location already consumed one atmosphere — carry
+            # it over so the first move offers a different ambiance.
+            last_atmosphere=lobby.last_atmosphere,
         )
         create_ai_services(session)
 

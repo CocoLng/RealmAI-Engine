@@ -188,6 +188,13 @@ class StoryArcRow(Base):
     )
     arc_json: Mapped[str] = mapped_column(Text, nullable=False)
     current_beat_index: Mapped[int] = mapped_column(Integer, default=0)
+    archetype: Mapped[str | None] = mapped_column(String(32), nullable=True, default=None)
+    """Denormalized copy of ``StoryArc.archetype`` (also inside ``arc_json``).
+
+    Kept as a real column so the next campaign of a guild can look up the
+    previous archetype with a join instead of deserializing every arc.
+    Nullable, so ``db.migrations.ensure_schema`` adds it to existing
+    databases automatically."""
 
 
 class HintUsageRow(Base):
