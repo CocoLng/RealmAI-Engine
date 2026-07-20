@@ -32,9 +32,9 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 | **Phase 3 — Discord Bot** | 🟢 Fonctionnelle | Cogs, pipeline, views, embeds, lobby d'onboarding, combat 5e, beat progression — bout en bout |
 | **Phase 4 — Polish + ship** | 🟡 En cours | README/ARCHITECTURE à jour + LICENSE/CONTRIBUTING + CI GitHub Actions ; reste sessions de jeu réelles, GIFs, blog post |
 
-## Chantier combat D&D 5e (tasks/combat/)
+## Chantier combat D&D 5e ✅ clos, archivé
 
-Refonte du combat pour atteindre une fidélité "core 5e" : orthogonal aux beats, NPCs richement statués, IA hybride scripted/LLM, initiative à 3 cas, boss avec signatures/phases/legendary actions. Plan coordinateur : [tasks/combat/README.md](../../tasks/combat/README.md).
+Refonte du combat pour atteindre une fidélité "core 5e" : orthogonal aux beats, NPCs richement statués, IA hybride scripted/LLM, initiative à 3 cas, boss avec signatures/phases/legendary actions. Les 10 phases sont livrées ; les 36 fiches sont archivées dans [tasks/archive/2026-04-12-combat-5e/](../../tasks/archive/2026-04-12-combat-5e/) (leur README garde des statuts ⬜ périmés — **cette table-ci fait foi**). Référence développeur vivante : [COMBAT_SYSTEM.md](COMBAT_SYSTEM.md).
 
 | Phase | État | Contenu |
 |---|---|---|

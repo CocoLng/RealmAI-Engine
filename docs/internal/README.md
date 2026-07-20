@@ -41,4 +41,9 @@ Ces docs sont la **synthèse de ce qui est implémenté**. Toute tâche d'un cha
 - Mettre à jour `STATE.md` quand un item bascule d'état.
 - Retirer les bugs résolus de `ISSUES.md`.
 
-Les chantiers en cours listent leurs obligations d'update dans leur propre README (ex : [tasks/combat/README.md](../../tasks/combat/README.md) section "Documentation").
+- `ARCHITECTURE.md` **à la racine du dépôt** entre aussi dans cette boucle :
+  c'est le point d'entrée technique en anglais, et il dérive vite si on ne le
+  met à jour qu'au coup par coup (6 semaines de retard constatées au
+  2026-07-20).
+
+Les chantiers en cours listent leurs obligations d'update dans leur propre README. Aucun n'est ouvert aujourd'hui — le dernier, le chantier combat 5e, est archivé dans [tasks/archive/2026-04-12-combat-5e/](../../tasks/archive/2026-04-12-combat-5e/).
