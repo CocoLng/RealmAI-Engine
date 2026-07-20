@@ -173,6 +173,24 @@ class Combatant(BaseModel):
     """Cumulative saving-throw bonus from phase transitions (task 54)."""
 
 
+class DeathSaveResult(BaseModel):
+    """The outcome of a death saving throw.
+
+    Declared above :class:`CombatState` because the latter queues these in
+    ``pending_death_saves``.
+    """
+
+    character_name: str
+    roll: int
+    success: bool
+    outcome: RollOutcome
+    total_successes: int
+    total_failures: int
+    stabilized: bool
+    died: bool
+    revived: bool
+
+
 class CombatState(BaseModel):
     """The full state of an ongoing combat encounter."""
 
@@ -188,6 +206,12 @@ class CombatState(BaseModel):
     Populated by task 53's ``maybe_spend_legendary_action`` hook and consumed
     by the TurnManager (task 64) so the player sees what the boss did in
     between everyone else's turns."""
+    pending_death_saves: list[DeathSaveResult] = Field(default_factory=list)
+    """Death saving throws rolled during ``advance_turn``, awaiting display.
+    Same contract as ``pending_legendary_summaries``: the engine appends, the
+    TurnManager drains and posts them. A downed PC's save happens at the start
+    of a turn they never get to play, so without this queue the player would
+    never learn they had rolled."""
     recent_events: list[str] = Field(default_factory=list)
     """Short narration-hint strings for the last few mechanical happenings.
     The bot appends entries via :func:`record_combat_event` after each combat
@@ -235,20 +259,6 @@ class SpellCastResult(BaseModel):
     condition_applied: str | None = None
     target_failed_save: bool = True  # True = spell fully effective; False = target saved
     save_outcome: RollOutcome | None = None
-
-
-class DeathSaveResult(BaseModel):
-    """The outcome of a death saving throw."""
-
-    character_name: str
-    roll: int
-    success: bool
-    outcome: RollOutcome
-    total_successes: int
-    total_failures: int
-    stabilized: bool
-    died: bool
-    revived: bool
 
 
 # ---------------------------------------------------------------------------
@@ -467,9 +477,21 @@ def advance_turn(state: CombatState) -> CombatState:
             state.round_number += 1
             round_incremented = True
         candidate = state.combatants[next_index]
-        if candidate.is_alive and not candidate.fled:
+        if not candidate.is_alive or candidate.fled:
+            continue
+        if candidate.character.hp > 0:
             found_eligible = True
             break
+        # At 0 HP. SRD 5e: a dying PC rolls a death saving throw at the
+        # start of their turn, then the turn passes — an unconscious
+        # character cannot act. A natural 20 puts them back on their feet
+        # at 1 HP, and they do get to play. A stabilized PC (three
+        # successes) is skipped silently, no longer rolling.
+        if is_downed(candidate):
+            state.pending_death_saves.append(resolve_death_save(candidate))
+            if candidate.character.hp > 0:
+                found_eligible = True
+                break
 
     state.current_turn_index = next_index
 
@@ -536,10 +558,18 @@ def check_combat_end(state: CombatState) -> CombatEndReason | None:
     out of the fight for both sides. The flee and truce paths may override
     the result explicitly by setting ``state.end_reason`` before calling
     :func:`bot.combat_end.finalize_combat`.
+
+    A PC at 0 HP does **not** count as standing, whether they are still
+    making death saves or already stabilized. They are alive but out of the
+    fight, and counting them kept the encounter running forever on a party
+    wipe.
     """
     players_standing = [
         c for c in state.combatants
-        if c.side == CombatSide.PLAYER and c.is_alive and not c.fled
+        if c.side == CombatSide.PLAYER
+        and c.is_alive
+        and not c.fled
+        and c.character.hp > 0
     ]
     enemies_standing = [
         c for c in state.combatants
@@ -902,6 +932,22 @@ def resolve_spell(
 # ---------------------------------------------------------------------------
 # Death saves
 # ---------------------------------------------------------------------------
+
+
+def is_downed(combatant: Combatant) -> bool:
+    """True if this combatant owes a death saving throw on their turn.
+
+    Only PCs make death saves — an NPC reduced to 0 HP dies outright
+    (see :func:`apply_damage`). A PC stops rolling once stabilized (three
+    successes) or once dead; both stay unconscious at 0 HP.
+    """
+    return (
+        combatant.side == CombatSide.PLAYER
+        and combatant.is_alive
+        and combatant.character.hp <= 0
+        and combatant.death_saves.successes < 3
+        and combatant.death_saves.failures < 3
+    )
 
 
 def resolve_death_save(combatant: Combatant) -> DeathSaveResult:

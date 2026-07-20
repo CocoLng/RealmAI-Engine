@@ -28,7 +28,7 @@ from typing import Any
 import discord
 
 from engine.character import SKILL_ABILITY, Skill
-from engine.combat import AttackResult, SpellCastResult
+from engine.combat import AttackResult, DeathSaveResult, SpellCastResult
 from engine.dice import D20CheckResult, DiceResult, RollOutcome
 from engine.inventory import DamageType
 
@@ -187,6 +187,41 @@ def build_save_check_embed(
         color=color,
     )
     embed.set_footer(text=f"Nat {natural_roll} — marge {check.margin:+d}")
+    return embed
+
+
+def build_death_save_embed(result: DeathSaveResult) -> discord.Embed:
+    """Render a death saving throw.
+
+    Death saves happen at the start of a turn the downed character never
+    gets to play, so this embed is the *only* way the player learns the
+    roll happened. The running tally is the whole tension — it always
+    shows, even on the roll that ends it.
+    """
+    if result.died:
+        color = _COLOR_MISS
+    elif result.revived or result.stabilized:
+        color = _COLOR_CRIT
+    else:
+        color = _color_for_outcome(result.outcome)
+
+    lines = [
+        f"`1d20` → **{result.roll}** vs DC **10**",
+        f"💚 {result.total_successes}/3 succès · 💀 {result.total_failures}/3 échecs",
+    ]
+
+    if result.died:
+        lines.append("**☠️ Trois échecs — le personnage est mort.**")
+    elif result.revived:
+        lines.append("**✨ Nat 20 — debout à 1 PV !**")
+    elif result.stabilized:
+        lines.append("**🩹 Trois succès — stabilisé.** Inconscient, mais hors de danger.")
+
+    embed = discord.Embed(
+        title=f"💀 {result.character_name} — Jet de mort",
+        description="\n".join(lines),
+        color=color,
+    )
     return embed
 
 

@@ -50,6 +50,7 @@ from bot.embeds.combat_end_embed import build_combat_end_embed
 from bot.embeds.combat_start_embed import build_combat_start_embed
 from bot.embeds.dice_embed import (
     build_attack_roll_embed,
+    build_death_save_embed,
     embed_for_dice_entry,
 )
 from bot.embeds.narrative_embed import build_narrative_embed
@@ -700,6 +701,13 @@ class TurnManager:
         for cue in state.pending_legendary_summaries:
             await self._safe_send(f"⚡ {cue}")
         state.pending_legendary_summaries.clear()
+
+        # Death saves are rolled by the engine at the start of a turn the
+        # downed character never gets to play, so this flush is the only
+        # place the player ever learns about them.
+        for save in state.pending_death_saves:
+            await self._safe_send(embed=build_death_save_embed(save))
+        state.pending_death_saves.clear()
 
         for event in state.pending_phase_narrations:
             if event.consumed:
