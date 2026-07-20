@@ -2,11 +2,14 @@
 
 Commit at the end of a phase, do not co author claude.
 
-> **État au 2026-07-20.** `main` = **2913 tests verts**, `ruff` clean,
-> **`mypy` 0 erreur** sur 335 fichiers. Les **9 chantiers de l'audit
-> 2026-06-10 sont clos et mergés**, les 5 critiques compris. Aucune branche
-> en attente. `main` est **poussé et à jour avec `origin/main`**, la CI
-> GitHub est verte sur le HEAD.
+> **État au 2026-07-20 (fin de session d'audit).** `main` = **2991 tests
+> verts**, `ruff` clean, **`mypy` 0 erreur** sur 344 fichiers. Les 9
+> chantiers de l'audit 2026-06-10 sont clos et mergés. L'audit specs↔code du
+> jour (24 specs / 21 plans / 36 fiches) est clos aussi — voir **TEMPS 4**
+> pour ce qui reste ouvert.
+>
+> ⚠️ **14 commits ne sont pas poussés** et 4 worktrees d'agents traînent
+> (tous mergés) — cf. §3.1.
 
 ## Objectif, en trois temps
 
@@ -223,9 +226,12 @@ sessions pilotées par script tester autonome (pattern du skill).
 
 ### 3.1 — Git ⚠️ destructif, à lancer par l'utilisateur
 
-Les 6 branches de chantier sont toutes ancêtres de `main`.
+Les 6 branches de chantier sont toutes ancêtres de `main`. **La session du
+2026-07-20 en a ajouté 4** (3 worktrees d'agents + le chantier lobby), toutes
+mergées dans `main` — donc supprimables aussi.
 
 ```bash
+# Chantiers de l'audit 2026-06-10
 git worktree remove .claude/worktrees/chantier-c-save-load
 git worktree remove .claude/worktrees/chantier-d-orchestrator
 git worktree remove .claude/worktrees/chantier-f-anti-cheat
@@ -234,9 +240,15 @@ git worktree remove .claude/worktrees/generation-robustness
 git branch -d chantier/save-load-session worktree-chantier-d-orchestrator \
   feat/memory-coherence chantier/anti-cheat-clamps fix/generation-robustness \
   worktree-generation-robustness
+
+# Worktrees d'agents de la session 2026-07-20 (tous mergés)
+git worktree list | grep 'worktrees/agent-' | awk '{print $1}' | \
+  xargs -n1 git worktree remove
+git branch --merged main | grep 'worktree-agent-' | xargs -r git branch -d
 ```
 
-Vérifier avant : `git branch --merged main`.
+Vérifier avant : `git branch --merged main`. **13 commits ne sont pas encore
+poussés** au 2026-07-20.
 
 ### 3.2 — Documentation périmée
 
@@ -278,9 +290,94 @@ Vérifier avant : `git branch --merged main`.
 
 ### 3.4 — Fondations pour la suite
 
-- [ ] `CODE_OF_CONDUCT.md` + `SECURITY.md` — **l'utilisateur les crée** (liens
-      déjà câblés dans README + CONTRIBUTING, actuellement morts)
+- [x] `CODE_OF_CONDUCT.md` + `SECURITY.md` — **posés le 2026-07-20.** Repris
+      du commit `be6d9fa` de la branche distante `copilot/…` (Contributor
+      Covenant 2.1 correctement attribué, `SECURITY.md` pointant vers les
+      advisories du dépôt sans exposer d'e-mail), relus intégralement avant
+      reprise, auteur réattribué. Les 2 liens morts de README + CONTRIBUTING
+      sont fermés.
 - [ ] Une fois la CI en place : envisager de protéger `main` (PR obligatoire)
+- [ ] `docs/assets/` n'existe toujours pas → les 2 liens d'images de la
+      section Demo du README restent morts (mais commentés, donc invisibles).
+      Se ferme avec les GIFs du 1.3.
+
+-----
+
+# TEMPS 4 — Audit specs↔code du 2026-07-20
+
+24 specs, 21 plans et 36 fiches combat vérifiés contre le code par 5 agents.
+Verdict : l'essentiel est livré, et la majorité des « écarts » étaient des
+supersessions assumées où la doc avait du retard. Sur 1073 cases `- [ ]` des
+plans, **3 seulement étaient réellement ouvertes** (le reste est de la
+procédure TDD jamais cochée).
+
+**Le fil rouge : une fonction testée n'est pas une fonction câblée.** Les
+trois plus gros trous étaient du code correct et couvert que *rien
+n'appelait en production*.
+
+### 4.1 — Corrigé dans la foulée
+
+- [x] **Jets de mort câblés** — `resolve_death_save` avait 6 tests verts et
+      **0 appelant**. Prouvé : un PJ à 0 PV restait inconscient pour
+      toujours (0 jet après 6 tours), `check_combat_end` le comptait comme
+      debout → le combat ne se terminait jamais. Avec le tour qui attend
+      indéfiniment (décision du 2026-07-19), un joueur solo qui tombait
+      bloquait sa campagne définitivement. Le README le vendait comme
+      livré. 22 tests.
+- [x] **Retry sur la génération de campagne** — spec
+      `campaign-launch-reliability` §3 : 3 tentatives. L'helper existait mais
+      n'était branché que sur le pipeline d'action ; un seul
+      `OllamaUnavailableError` tuait un `/start_campaign`.
+- [x] **pytest n'écrit plus dans la télémétrie de prod** — +86 Ko de
+      `realm_*.log` et +3,3 Ko de décisions synthétiques dans
+      `beat_progression.jsonl` par run. Mesuré, corrigé, re-mesuré à 0.
+- [x] **`concept` du personnage transmis au narrateur** (saisi, persisté,
+      affiché… jamais montré au LLM).
+- [x] **Variété de génération câblée** — atmosphères (12) + anti-répétition
+      d'archétype d'arc entre campagnes d'un même serveur.
+- [x] **Simulateur** — arrêt sur mort du personnage, R1.locked_fact_violation
+      branchée (le registre existait, c'était un trou de plomberie),
+      `agent_retries` honnête.
+- [x] **`QUEST_DETAIL` indexé** dans ChromaDB.
+- [x] Passe de cohérence doc↔code : cadence Director, statut CI, 12 liens
+      morts de `docs/internal/`, `ARCHITECTURE.md` racine rattrapé.
+- [x] `tasks/` nettoyé : chantier combat et audit dead-code archivés.
+
+### 4.2 — Ouvert, décisions à prendre
+
+- [ ] **Bibliothèque d'archétypes NPC** (spec `world-generation-variety` §3,
+      20 archétypes / 5 catégories) — **jamais écrite, laissée ouverte
+      exprès** : c'est de l'écriture de contenu de jeu, elle doit porter tes
+      choix de ton et d'univers. Elle débloquerait d'un coup deux hooks
+      dormants : le paramètre `archetype_context` de `ai/npc_generator.py`
+      (jamais fourni en prod) et le remplacement de ses fallbacks génériques
+      en dur (« A un secret qu'il/elle ne révèle pas facilement »).
+- [ ] **Le sous-système quêtes est dormant** — aucun code de prod ne *crée*
+      de `Quest` aujourd'hui ; `session.quests` n'est peuplé qu'au resume
+      depuis la DB. L'indexation `QUEST_DETAIL` est branchée et correcte,
+      mais restera vide tant qu'un générateur ne produira pas de quêtes.
+      Écart plus large que la mémoire : à trancher (génère-t-on des quêtes,
+      ou les beats d'arc les remplacent-ils définitivement ?).
+- [ ] **~10 fonctions dormantes** restantes, toutes correctes et testées
+      (`is_combat_over` wrapper legacy, `consume_bonus_action`,
+      `get_exhaustion_level`, `compute_spell_attack_bonus`,
+      `restore_spell_slots` — pas de repos long —, `list_archetypes`,
+      `build_damage_roll_embed`, `all_recipes`, les 2 helpers SURPRISED de
+      `conditions.py`). Aucune n'est un bug ; à câbler ou retirer au coup
+      par coup.
+- [ ] **Écarts de spec mineurs, non traités** : pas d'embed de résumé à
+      `/end_campaign` ; budget « thinking » = cap 4096 au lieu du `+2048`
+      spécifié ; pas de cap/éviction ChromaDB (soft cap ~500 docs/campagne) ;
+      `ContextAssembler` recréé à chaque narration au lieu d'être porté par
+      `GameSession` ; `tests/scenarios/test_multiplayer_scenarios.py` absent ;
+      seuil BeatJudge à 0.7 vs 0.85 en spec ; `bot/pipeline/resolve.py`
+      (1540 l.) et `orchestrator.py` (871 l.) dépassent la limite de 500
+      lignes que se fixait la spec Director's Cut.
+- [ ] **Specs à annoter « superseded »** — 3 specs décrivent encore comme
+      in-scope des modules supprimés (`exploration.py`, `/create_character`,
+      `campaign_launcher.py`) sans note. Le code a raison, la spec ment.
+- [ ] Dépréciation amont `discord.py` : `label` → `discord.ui.Label`
+      (3 warnings pytest). Rien de cassé, à planifier avant discord.py 3.x.
 
 -----
 
