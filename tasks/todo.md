@@ -202,10 +202,14 @@ sessions pilotées par script tester autonome (pattern du skill).
   « not found » des premières interactions. Câblé sur les 5 sites : pregen
   lobby (arc + lieu de départ), create_ai_services (NPCGenerator),
   generate_destination (MOVE/prefetch), npc_prefetch, TALK lazy. 8 tests.
-  **Suivi ouvert** : les campagnes créées AVANT ce fix (dont la campagne
-  de test 260558f3) restent sans corpus initial — leur contenu est en DB,
-  pas dans ChromaDB. Si on veut les rattraper : backfill au `/resume`
-  (réindexer beats/lieux/NPC depuis la DB), non fait — à trancher.
+  **Backfill au `/resume` livré dans la foulée** (`feat(rag)` 6105779) :
+  quand le corpus monde manque, une tâche de fond réindexe depuis la DB
+  (thème, beats, lieux hydratés, fiches NPC). Piège évité : les
+  collections pré-fix EXISTENT déjà (notes du Director uniquement — 15
+  past_event sur la campagne live), donc le critère de skip filtre sur la
+  présence d'un doc WORLD_LORE, pas sur « collection non vide ». Vérifié
+  en lecture seule sur les données réelles : les 2 campagnes live
+  (260558f3, 9c4e9073) seront backfillées au prochain `/resume`.
 - La garde anti-monotonie **détecte et re-tente en prod** (5× « NARRATION
   guard: repetition … retrying once » pendant les rounds de combat) —
   confirmation live du verdict simulateur.
