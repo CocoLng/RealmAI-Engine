@@ -187,14 +187,25 @@ sessions pilotées par script tester autonome (pattern du skill).
       single-call — envisager think=False ou un budget dédié).
 
 **Signaux du check du 2026-07-19 soir** (bot live 20h-21h48 : 0 ERROR) :
-- Le fallback du Director brainstorm est **systématique, pas épisodique** :
-  15 occurrences en ~2 h de bot live (une par cadence). ~112 s perdues à
-  chaque fois → candidat n° 1 du prochain micro-fix perf (think=False sur
-  le brainstorm ou num_predict dédié).
-- La collection ChromaDB de la campagne live n'existe pas (5× « Collection
-  campaign_260558f3… not found », RAG lu à vide en dégradation propre) —
-  vérifier que l'indexation sème bien la collection à la création de
-  campagne via le vrai flux lobby.
+- ~~Fallback systématique du Director brainstorm (~112 s/cadence)~~ **RÉGLÉ
+  le 2026-07-20** (`perf(director)` b6674f6). Racine prouvée : think=True
+  avec num_predict=2048, or num_predict plafonne thinking + contenu
+  confondus — la trace du 9b saturait le cap à chaque cadence (15/15),
+  contenu vide, fallback. Fix : think=False + `BRAINSTORM_NUM_PREDICT=1024`.
+  À confirmer sur la prochaine session live : plus aucun « brainstorm
+  failed » dans les logs et cadence Director raccourcie d'~112 s.
+- ~~Collection ChromaDB de la campagne live inexistante (RAG lu à vide)~~
+  **RÉGLÉ le 2026-07-20** (`fix(rag)` 33d1779). Racine : les générateurs
+  acceptent un SemanticIndexer mais AUCUN site prod ne le passait
+  (game_session créait même le NPCGenerator avant l'indexer) — la
+  collection n'était créée que par la 1ʳᵉ note du Director, d'où les 5
+  « not found » des premières interactions. Câblé sur les 5 sites : pregen
+  lobby (arc + lieu de départ), create_ai_services (NPCGenerator),
+  generate_destination (MOVE/prefetch), npc_prefetch, TALK lazy. 8 tests.
+  **Suivi ouvert** : les campagnes créées AVANT ce fix (dont la campagne
+  de test 260558f3) restent sans corpus initial — leur contenu est en DB,
+  pas dans ChromaDB. Si on veut les rattraper : backfill au `/resume`
+  (réindexer beats/lieux/NPC depuis la DB), non fait — à trancher.
 - La garde anti-monotonie **détecte et re-tente en prod** (5× « NARRATION
   guard: repetition … retrying once » pendant les rounds de combat) —
   confirmation live du verdict simulateur.
