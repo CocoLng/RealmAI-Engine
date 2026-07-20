@@ -371,8 +371,11 @@ class TestLockedFactsFlow:
         narration_guard.reset("camp-guard-retry")
         narration_guard.set_dead_npcs("camp-guard-retry", ["Grim"])
         narrator = FakeNarrator(responses=[
+            # Grim is visible in the prose, so the active-verb heuristic is
+            # authoritative (I3): « sourit »/« tend » are recognized actions,
+            # so a dead Grim acting is flagged and the guard retries.
             NarrativeResult(
-                narrative="Grim vous accueille avec un sourire chaleureux.",
+                narrative="Grim vous sourit et vous tend une chope chaleureuse.",
                 tone="humorous", npcs_mentioned=["Grim"],
             ),
             NarrativeResult(

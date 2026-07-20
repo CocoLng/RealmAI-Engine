@@ -152,9 +152,17 @@ def check_narration(
     for rule_fn, mode in RULES.values():
         target = blocking if mode is RuleMode.BLOCK else observed
         target.extend(rule_fn(narrative, effective))
+    # Both tiers are logged on the dedicated ``memory.coherence`` logger so
+    # the first real sessions produce a complete false-positive audit trail:
+    # OBSERVE at info, BLOCK at warning (same structured format, tagged).
     for violation in observed:
         _COHERENCE_LOGGER.info(
             "COHERENCE observe campaign=%s rule=%s expected=%r snippet=%r",
+            campaign_id, violation.rule, violation.expected, violation.snippet,
+        )
+    for violation in blocking:
+        _COHERENCE_LOGGER.warning(
+            "COHERENCE block campaign=%s rule=%s expected=%r snippet=%r",
             campaign_id, violation.rule, violation.expected, violation.snippet,
         )
     return GuardVerdict(blocking=blocking, observed=observed)

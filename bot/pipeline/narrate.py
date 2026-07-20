@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
 
 from ai.models import InterpretedAction, MechanicsOutcome, NarrativeResult
@@ -143,8 +143,22 @@ def build_coherence_snapshot(
     actor_name: str,
     inventory: "Inventory | None",
     moved_this_turn: bool,
+    freshly_dead: Collection[str] = (),
+    locked_fact_ids: Collection[str] | None = None,
 ) -> "CoherenceSnapshot":
     """Map the live session onto the coherence-rule input contract.
+
+    ``freshly_dead`` names an NPC defeated on THIS turn: the guard's grace
+    period keeps the kill narration from being checked against « X is dead »
+    (a death enters the dead set only at end-of-turn). Those names are
+    dropped from ``dead_npcs`` here — the guard's own registry union does not
+    re-add them because that registry is refreshed only at end-of-turn (C2).
+
+    ``locked_fact_ids``, when provided, restricts the snapshot's locked
+    facts to that id set — the orchestrator passes the ids that pre-existed
+    the turn so a fact minted by this turn's beat completion is not checked
+    against the very narration that reveals it (mitigation 5a). ``None``
+    keeps every fact (default; used by unit tests).
 
     isinstance guards mirror the rest of this module: tests drive the
     pipeline with MagicMock sessions."""
@@ -167,12 +181,16 @@ def build_coherence_snapshot(
     combat_active = combat is not None and bool(getattr(combat, "is_active", False))
     zones: list[str] = []
     if combat_active and loc is not None:
-        zones = [z.name for z in (getattr(loc, "zones", []) or [])]
+        zones = [z.name for z in (getattr(loc, "combat_zones", []) or [])]
 
     arc = getattr(session, "story_arc", None)
     raw_facts = getattr(arc, "locked_facts", None) if arc is not None else None
     facts = (
-        [LockedFactSnapshot(id=f.id, text=f.text) for f in raw_facts]
+        [
+            LockedFactSnapshot(id=f.id, text=f.text)
+            for f in raw_facts
+            if locked_fact_ids is None or f.id in locked_fact_ids
+        ]
         if isinstance(raw_facts, list) else []
     )
 
@@ -181,8 +199,12 @@ def build_coherence_snapshot(
         inv_names = [item.name for item in inventory.items]
         inv_names += [item.name for item in inventory.equipped.values()]
 
+    freshly_dead_set = {n for n in freshly_dead}
     return CoherenceSnapshot(
-        dead_npcs=[n.name for n in npcs.values() if not n.is_alive],
+        dead_npcs=[
+            n.name for n in npcs.values()
+            if not n.is_alive and n.name not in freshly_dead_set
+        ],
         known_npc_names=[n.name for n in npcs.values()],
         player_names=[c.name for c in characters.values()],
         current_location=loc_name,
@@ -417,11 +439,14 @@ async def call_narrator(
             "des images, un rythme et un vocabulaire différents, sans "
             "changer les faits."
         )
+    retry_rules = [violation.rule for violation in verdict.blocking]
+    if repeated is not None:
+        retry_rules.append("guard.repetition")
     logger.warning(
         "NARRATION guard: %d blocking violation(s) campaign=%s rules=%s — retrying once",
         len(verdict.blocking) + (1 if repeated is not None else 0),
         campaign_id,
-        [violation.rule for violation in verdict.blocking],
+        retry_rules,
     )
     amended = "\n\n".join([outcome.summary, *constraints])
     retry_result = await retry_llm_call(

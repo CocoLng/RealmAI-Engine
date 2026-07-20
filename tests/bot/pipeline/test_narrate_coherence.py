@@ -75,7 +75,9 @@ async def test_double_failure_falls_back_to_template() -> None:
         snapshot=CoherenceSnapshot(),
     )
     assert result.narrative == "[template] Le récit reprend."
-    narrator.template_narration.assert_called_once()
+    narrator.template_narration.assert_called_once_with(
+        "Talk", "Le PNJ est mort.", "fr",
+    )
 
 
 @pytest.mark.asyncio
@@ -121,3 +123,110 @@ def test_build_coherence_snapshot_reads_session_state() -> None:
     assert snap.known_locations == ["Crypte", "Nef"]
     assert snap.player_hp_ratio == 0.5
     assert snap.combat_active is False
+
+
+def test_snapshot_carries_combat_zone_names_from_real_location() -> None:
+    """C1 — the snapshot reads ``Location.combat_zones`` (the real field),
+    not the non-existent ``.zones``, so the zone rule gets a populated valid
+    set instead of an always-empty one. Uses a REAL Location, not a Mock."""
+    from engine.inventory import Inventory
+    from world.combat_zone import Zone
+    from world.location import Location
+
+    session = MagicMock()
+    session.npcs = {}
+    session.characters = {}
+    session.current_location = Location(
+        name="Nef effondrée",
+        combat_zones=[
+            Zone(name="autel", adjacent_zone_names=["nef"]),
+            Zone(name="nef", adjacent_zone_names=["autel"]),
+        ],
+    )
+    session.combat_state = MagicMock(is_active=True)
+    session.story_arc = None
+    snap = narrate.build_coherence_snapshot(
+        session, actor_name="Kael", inventory=Inventory(), moved_this_turn=False,
+    )
+    assert snap.combat_active is True
+    assert set(snap.combat_zones) == {"autel", "nef"}
+
+
+def test_kill_turn_grace_then_block_on_a_later_turn() -> None:
+    """C2 seam — the NPC defeated THIS turn is excluded from the snapshot's
+    dead set (its own death narration must pass), and the guard registry is
+    refreshed only at end-of-turn, so the SAME NPC acting on a later turn is
+    blocked once the registry re-arms."""
+    from engine.inventory import Inventory
+
+    narration_guard.reset("camp-seam")
+    session = MagicMock()
+    gor = MagicMock()
+    gor.name = "Gor"
+    gor.is_alive = False
+    session.npcs = {"Gor": gor}
+    session.characters = {}
+    session.current_location = None
+    session.combat_state = None
+    session.story_arc = None
+
+    # Turn N — Gor dies this turn: excluded from the snapshot's dead set,
+    # and the guard registry has not been refreshed yet.
+    snap_kill = narrate.build_coherence_snapshot(
+        session, actor_name="Kael", inventory=Inventory(),
+        moved_this_turn=False, freshly_dead=["Gor"],
+    )
+    assert "Gor" not in snap_kill.dead_npcs
+    verdict_kill = narration_guard.check_narration(
+        "camp-seam", narrative="Gor s'effondre, mort.",
+        snapshot=snap_kill, npcs_mentioned=[],
+    )
+    assert verdict_kill.blocking == []
+
+    # End of turn N — update_memory_after_turn refreshes the dead registry.
+    narration_guard.set_dead_npcs("camp-seam", ["Gor"])
+
+    # Turn N+1 — Gor is no longer freshly dead and the registry re-arms the
+    # block, so Gor acting is now caught as a resurrection.
+    snap_next = narrate.build_coherence_snapshot(
+        session, actor_name="Kael", inventory=Inventory(), moved_this_turn=False,
+    )
+    assert "Gor" in snap_next.dead_npcs
+    verdict_next = narration_guard.check_narration(
+        "camp-seam", narrative="Gor attaque avec fureur.",
+        snapshot=snap_next, npcs_mentioned=[],
+    )
+    assert "R1.npc_status" in {v.rule for v in verdict_next.blocking}
+    narration_guard.reset("camp-seam")
+
+
+def test_locked_fact_ids_restricts_snapshot_to_pre_turn_facts() -> None:
+    """Mitigation 5a — a fact minted by THIS turn's beat completion is
+    excluded from the snapshot (so it is not checked against the very
+    narration that reveals it); pre-existing facts stay in scope, and the
+    default of ``None`` keeps every fact."""
+    from engine.inventory import Inventory
+    from world.story_arc import LockedFact
+
+    session = MagicMock()
+    session.npcs = {}
+    session.characters = {}
+    session.current_location = None
+    session.combat_state = None
+    arc = MagicMock()
+    arc.locked_facts = [
+        LockedFact(id="beat:1:0", text="Le roi est mort."),    # pre-existing
+        LockedFact(id="beat:2:0", text="Le pont est gardé."),  # minted this turn
+    ]
+    session.story_arc = arc
+
+    snap = narrate.build_coherence_snapshot(
+        session, actor_name="Kael", inventory=Inventory(),
+        moved_this_turn=False, locked_fact_ids={"beat:1:0"},
+    )
+    assert [f.id for f in snap.locked_facts] == ["beat:1:0"]
+
+    snap_all = narrate.build_coherence_snapshot(
+        session, actor_name="Kael", inventory=Inventory(), moved_this_turn=False,
+    )
+    assert {f.id for f in snap_all.locked_facts} == {"beat:1:0", "beat:2:0"}

@@ -74,6 +74,26 @@ class TestCheckItemUse:
         snap = CoherenceSnapshot(actor_inventory=["Épée courte"])
         assert check_item_use_without_owning("Tu dégaines l'épée courte.", snap) == []
 
+    def test_third_person_npc_item_use_passes(self) -> None:
+        """Mitigation 5c — an NPC drawing its own weapon is scene colour,
+        not a claim about the player's inventory."""
+        snap = CoherenceSnapshot(actor_inventory=["Épée courte"])
+        assert check_item_use_without_owning("Le garde dégaine son épée.", snap) == []
+
+    def test_second_person_item_use_is_flagged(self) -> None:
+        snap = CoherenceSnapshot(actor_inventory=["Épée courte"])
+        violations = check_item_use_without_owning("Tu brandis la torche.", snap)
+        assert len(violations) == 1
+        assert violations[0].rule == "R1.item_use_without_owning"
+
+    def test_named_player_item_use_is_flagged(self) -> None:
+        snap = CoherenceSnapshot(
+            actor_inventory=["Épée courte"], player_names=["Kael"],
+        )
+        violations = check_item_use_without_owning("Kael brandit la torche.", snap)
+        assert len(violations) == 1
+        assert violations[0].rule == "R1.item_use_without_owning"
+
 
 class TestCheckHpMismatch:
     def test_wounded_prose_with_full_hp_is_flagged(self) -> None:
@@ -121,19 +141,30 @@ class TestCheckZoneViolation:
 class TestCheckLockedFactViolation:
     def test_negating_a_locked_fact_is_flagged(self) -> None:
         snap = CoherenceSnapshot(locked_facts=[
-            LockedFactSnapshot(id="beat:3:hint", text="Le pont de pierre est effondré."),
+            LockedFactSnapshot(id="beat:3:hint", text="Le pont de pierre est intact."),
         ])
         violations = check_locked_fact_violation(
-            "Le pont de pierre n'est plus effondré, la voie est libre.", snap,
+            "Le pont de pierre n'est plus intact, la voie est coupée.", snap,
         )
         assert len(violations) == 1
         assert violations[0].rule == "R1.locked_fact_violation"
 
     def test_fact_subject_absent_passes(self) -> None:
         snap = CoherenceSnapshot(locked_facts=[
-            LockedFactSnapshot(id="beat:3:hint", text="Le pont de pierre est effondré."),
+            LockedFactSnapshot(id="beat:3:hint", text="Le pont de pierre est intact."),
         ])
         assert check_locked_fact_violation("La forêt s'étend devant vous.", snap) == []
+
+    def test_self_negating_fact_is_skipped(self) -> None:
+        """Mitigation 5b — a fact that is itself a destruction statement
+        (« Le pont est effondré ») must not false-flag its own faithful
+        re-statement as a negation."""
+        snap = CoherenceSnapshot(locked_facts=[
+            LockedFactSnapshot(id="beat:3:0", text="Le pont de pierre est effondré."),
+        ])
+        assert check_locked_fact_violation(
+            "Le pont de pierre est effondré, infranchissable désormais.", snap,
+        ) == []
 
 
 from memory.coherence_rules import (  # noqa: E402
@@ -208,10 +239,7 @@ class TestRegistry:
 
     def test_initial_modes_match_the_spec(self) -> None:
         blocking = {rid for rid, (_, mode) in RULES.items() if mode is RuleMode.BLOCK}
-        assert blocking == {
-            "R1.npc_status", "R1.item_use_without_owning",
-            "R1.zone_violation", "R1.locked_fact_violation",
-        }
+        assert blocking == {"R1.npc_status", "R1.zone_violation"}
 
     def test_run_rules_aggregates_all_rules(self) -> None:
         snap = CoherenceSnapshot(dead_npcs=["Aldric"])
