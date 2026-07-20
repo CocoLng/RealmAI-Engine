@@ -105,6 +105,7 @@ async def prefetch_npc_sheets(
                     campaign_theme=campaign_theme,
                     language=language,
                     archetype=archetype,
+                    campaign_id=campaign_id,
                 )
             if not _sheet_is_empty(npc):
                 # A TALK action filled the sheet while our call was in

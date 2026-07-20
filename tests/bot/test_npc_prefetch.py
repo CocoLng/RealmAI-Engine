@@ -131,6 +131,28 @@ async def test_prefetch_passes_distinct_archetypes_per_batch(db_factory) -> None
     assert len(set(gen.archetype_ids)) == 5
 
 
+async def test_prefetch_passes_campaign_id_for_indexing(db_factory) -> None:
+    """Prefetched sheets must reach ChromaDB — generate() needs the campaign id."""
+
+    class CampaignIdRecorder(FakeGenerator):
+        def __init__(self) -> None:
+            super().__init__()
+            self.campaign_ids: list[str] = []
+
+        def generate(self, npc_name: str, **kwargs) -> NPCSheet:
+            self.campaign_ids.append(kwargs.get("campaign_id", ""))
+            return super().generate(npc_name, **kwargs)
+
+    gen = CampaignIdRecorder()
+    npcs = {"A": _make_npc("A")}
+    session = _make_session(npcs, gen)
+    _persist_world(db_factory, session)
+
+    await prefetch_npc_sheets(session, db_factory=db_factory)
+
+    assert gen.campaign_ids == [str(session.campaign.id)]
+
+
 async def test_prefetch_fills_empty_sheets_and_persists(db_factory) -> None:
     gen = FakeGenerator()
     npcs = {"Jeanne": _make_npc("Jeanne"), "Père Thomas": _make_npc("Père Thomas")}

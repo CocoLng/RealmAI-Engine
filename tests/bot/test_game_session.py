@@ -87,6 +87,25 @@ class TestCreateAIServices:
         assert session.semantic_memory is None
         assert session.semantic_indexer is None
 
+    def test_npc_generator_receives_semantic_indexer(self) -> None:
+        """NPC sheets generated in-session must land in ChromaDB (RAG seed)."""
+        session = GameSession(campaign=_make_campaign())
+        with patch("bot.game_session.OllamaClient"), patch(
+            "bot.game_session.NPCGenerator"
+        ) as npc_cls:
+            create_ai_services(session)
+        assert session.semantic_indexer is not None
+        assert npc_cls.call_args.kwargs["indexer"] is session.semantic_indexer
+
+    def test_npc_generator_indexer_none_when_semantic_memory_fails(self) -> None:
+        """ChromaDB down degrades the NPC generator to indexer=None."""
+        session = GameSession(campaign=_make_campaign())
+        with patch("bot.game_session.OllamaClient"), patch(
+            "bot.game_session.SemanticMemory", side_effect=RuntimeError("chroma down")
+        ), patch("bot.game_session.NPCGenerator") as npc_cls:
+            create_ai_services(session)
+        assert npc_cls.call_args.kwargs["indexer"] is None
+
 
 class TestGameSessionNpcs:
     """Tests for the npcs field on GameSession."""

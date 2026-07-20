@@ -117,7 +117,11 @@ async def generate_destination(
     from engine.atmospheres import pick_atmosphere
 
     assert session.ollama_client is not None
-    gen = WorldGenerator(session.ollama_client)
+    # The indexer routes the generated location into ChromaDB (RAG seed);
+    # None when Chroma is down — generation itself is unaffected.
+    gen = WorldGenerator(
+        session.ollama_client, getattr(session, "semantic_indexer", None),
+    )
     # Pass arc location hints so generated names match the arc.
     arc_hints: list[str] | None = None
     story_arc = getattr(session, "story_arc", None)
@@ -142,6 +146,7 @@ async def generate_destination(
         location_hints=arc_hints,
         atmosphere=atmosphere.value,
         required_connections=required_connections or None,
+        campaign_id=str(session.campaign.id),
     )
     # Guarantee name stability even if the LLM rephrased it, since the
     # player asked for this exact destination and the DB row (when it's a

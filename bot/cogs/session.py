@@ -816,6 +816,8 @@ class SessionCog(commands.Cog):
         from bot.lobby_state import GenerationPhase
         from engine.arc_recipes import generate_recipe
         from engine.atmospheres import pick_atmosphere
+        from memory.indexer import SemanticIndexer
+        from memory.semantic import SemanticMemory
 
         try:
             client = OllamaClient()
@@ -839,15 +841,31 @@ class SessionCog(commands.Cog):
                 "PREGEN recipe campaign=%s archetype=%s previous=%s",
                 campaign.id, recipe.archetype.value, previous_archetype,
             )
-            arc_gen = ArcGenerator(client)
-            world_gen = WorldGenerator(client)
+            # Seed the campaign's ChromaDB collection at creation time: the
+            # arc (beats, villain, theme) and starting location are the RAG
+            # corpus every later narration queries. Best-effort — Chroma
+            # down degrades to indexer=None, never fails the launch.
+            indexer: SemanticIndexer | None = None
+            try:
+                indexer = SemanticIndexer(SemanticMemory())
+            except Exception:
+                logger.warning(
+                    "PREGEN semantic index unavailable campaign=%s "
+                    "— generating without RAG seed",
+                    campaign.id, exc_info=True,
+                )
+            arc_gen = ArcGenerator(client, indexer)
+            world_gen = WorldGenerator(client, indexer)
 
             # ---- Arc ----
             lobby.pregen_phase = GenerationPhase.ARC
             await self._refresh_lobby_pregen_status(lobby)
             arc_start = time.monotonic()
             arc = await retry_llm_call(
-                lambda: arc_gen.generate(campaign.name, 1, language, recipe),
+                lambda: arc_gen.generate(
+                    campaign.name, 1, language, recipe,
+                    campaign_id=campaign.id,
+                ),
                 log_label=f"PREGEN campaign={campaign.id} arc",
             )
             lobby.story_arc = arc.model_copy(
@@ -885,6 +903,7 @@ class SessionCog(commands.Cog):
                     language=language,
                     location_hints=arc_location_hints,
                     atmosphere=atmosphere.value,
+                    campaign_id=campaign.id,
                 ),
                 log_label=f"PREGEN campaign={campaign.id} location",
             )

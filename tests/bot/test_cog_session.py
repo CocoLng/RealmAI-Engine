@@ -1805,6 +1805,97 @@ class TestPregenRetriesOllamaHiccups:
         assert arc_cls.return_value.generate.call_count == 3
 
 
+class TestPregenSeedsSemanticIndex:
+    """Campaign creation must seed the ChromaDB collection (RAG quick win).
+
+    Live 2026-07-19: the campaign collection never existed — the generators
+    accept an indexer but no prod call site passed one, so the RAG layer
+    read empty until the first Director note. The pregen path is where the
+    arc (beats, villain, theme) and starting location get indexed.
+    """
+
+    def _make_cog_and_lobby(self):
+        from bot.cogs.session import SessionCog
+        from bot.lobby_state import GenerationPhase, LobbyState
+
+        lobby = LobbyState(
+            creator_id=42,
+            language="fr",
+            campaign_name="Brumes du Nord",
+            theme="Brumes du Nord",
+        )
+        lobby.pregen_phase = GenerationPhase.PENDING
+        cog = SessionCog.__new__(SessionCog)
+        cog._refresh_lobby_pregen_status = AsyncMock()  # type: ignore[method-assign]
+        return cog, lobby
+
+    def _fake_arc(self):
+        fake_arc = MagicMock()
+        fake_arc.model_copy.return_value = SimpleNamespace(
+            campaign_id="c1", beats=[], villain_name="L'Ombre",
+        )
+        return fake_arc
+
+    async def test_pregen_passes_indexer_and_campaign_id_to_generators(self):
+        from bot.lobby_state import GenerationPhase
+
+        cog, lobby = self._make_cog_and_lobby()
+        campaign = Campaign(name="Brumes du Nord")
+        fake_loc = Location(name="Place", description="d", generated=True)
+
+        with (
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe"),
+            patch("memory.semantic.SemanticMemory"),
+            patch("memory.indexer.SemanticIndexer") as indexer_cls,
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator") as world_cls,
+        ):
+            arc_cls.return_value.generate.return_value = self._fake_arc()
+            world_cls.return_value.generate.return_value = fake_loc
+            await cog._pregenerate_campaign_world(lobby, campaign, "fr")
+
+        assert lobby.pregen_phase == GenerationPhase.READY
+        # Both generators were constructed WITH the semantic indexer.
+        assert arc_cls.call_args.args[1] is indexer_cls.return_value
+        assert world_cls.call_args.args[1] is indexer_cls.return_value
+        # Both generate calls carry the campaign id so indexing can run.
+        assert (
+            arc_cls.return_value.generate.call_args.kwargs["campaign_id"]
+            == campaign.id
+        )
+        assert (
+            world_cls.return_value.generate.call_args.kwargs["campaign_id"]
+            == campaign.id
+        )
+
+    async def test_pregen_survives_chromadb_failure(self):
+        """ChromaDB down must not kill a launch — indexer degrades to None."""
+        from bot.lobby_state import GenerationPhase
+
+        cog, lobby = self._make_cog_and_lobby()
+        campaign = Campaign(name="Brumes du Nord")
+        fake_loc = Location(name="Place", description="d", generated=True)
+
+        with (
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe"),
+            patch(
+                "memory.semantic.SemanticMemory",
+                side_effect=RuntimeError("chroma down"),
+            ),
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator") as world_cls,
+        ):
+            arc_cls.return_value.generate.return_value = self._fake_arc()
+            world_cls.return_value.generate.return_value = fake_loc
+            await cog._pregenerate_campaign_world(lobby, campaign, "fr")
+
+        assert lobby.pregen_phase == GenerationPhase.READY
+        assert arc_cls.call_args.args[1] is None
+        assert world_cls.call_args.args[1] is None
+
+
 class TestPregenVarietyWiring:
     """The variety machinery must actually run at campaign launch.
 

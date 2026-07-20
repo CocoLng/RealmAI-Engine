@@ -412,6 +412,44 @@ async def test_generate_destination_passes_an_atmosphere() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_destination_wires_indexer_and_campaign_id() -> None:
+    """MOVE-generated locations must be indexed into ChromaDB (RAG seed)."""
+    from bot.world_navigation import generate_destination
+
+    session = _make_session(ollama_client=MagicMock())
+    session.semantic_indexer = MagicMock()
+    fake_gen = MagicMock()
+    fake_gen.generate.return_value = Location(name="Crypte", description="d")
+
+    with patch("ai.world_generator.WorldGenerator", return_value=fake_gen) as world_cls:
+        await generate_destination(
+            session, "Crypte", origin_name="Origin", required_connections=[],
+        )
+
+    assert world_cls.call_args.args[1] is session.semantic_indexer
+    assert (
+        fake_gen.generate.call_args.kwargs["campaign_id"] == session.campaign.id
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_destination_tolerates_missing_indexer() -> None:
+    """Sessions without a semantic indexer (Chroma down) still generate."""
+    from bot.world_navigation import generate_destination
+
+    session = _make_session(ollama_client=MagicMock())  # no semantic_indexer attr
+    fake_gen = MagicMock()
+    fake_gen.generate.return_value = Location(name="Crypte", description="d")
+
+    with patch("ai.world_generator.WorldGenerator", return_value=fake_gen) as world_cls:
+        await generate_destination(
+            session, "Crypte", origin_name="Origin", required_connections=[],
+        )
+
+    assert world_cls.call_args.args[1] is None
+
+
+@pytest.mark.asyncio
 async def test_generate_destination_never_repeats_the_previous_atmosphere() -> None:
     """Two consecutive locations in the same campaign get distinct moods."""
     from bot.world_navigation import generate_destination

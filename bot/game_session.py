@@ -139,7 +139,6 @@ def create_ai_services(session: GameSession) -> None:
         session.narrator = Narrator(client)
         session.interpreter = Interpreter(client)
         session.npc_agent = NPCAgent(client)
-        session.npc_generator = NPCGenerator(client)
         try:
             session.semantic_memory = SemanticMemory()
             session.semantic_indexer = SemanticIndexer(session.semantic_memory)
@@ -156,6 +155,9 @@ def create_ai_services(session: GameSession) -> None:
                 "\u26a0\ufe0f M\u00e9moire s\u00e9mantique indisponible "
                 "\u2014 la coh\u00e9rence narrative long-terme est d\u00e9sactiv\u00e9e."
             )
+        # Built AFTER the semantic block so mid-session NPC sheets land in
+        # ChromaDB too; degrades to indexer=None when Chroma is down.
+        session.npc_generator = NPCGenerator(client, indexer=session.semantic_indexer)
         logger.info("AI services initialized for campaign %s", session.campaign.id)
     except (OllamaUnavailableError, Exception):
         logger.warning(

@@ -612,6 +612,7 @@ def resolve_talk(
                 campaign_theme=campaign_theme,
                 language=language,
                 archetype=draw_archetypes(1)[0],
+                campaign_id=str(getattr(session.campaign, "id", "")),
             )
             npc.personality = sheet.personality
             npc.description = sheet.description

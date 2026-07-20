@@ -151,5 +151,9 @@ async def test_talk_lazy_generates_npc_sheet_when_personality_empty() -> None:
     await pipeline._resolve_mechanics(interpreted)
 
     session.npc_generator.generate.assert_called_once()
+    # The lazy path must pass the campaign id so the sheet reaches ChromaDB.
+    assert (
+        session.npc_generator.generate.call_args.kwargs["campaign_id"] == "test"
+    )
     assert npc.personality == "Méfiant."
     assert "Dom André" in npc.secrets[0]
