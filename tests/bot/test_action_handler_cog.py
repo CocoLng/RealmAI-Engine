@@ -13,6 +13,7 @@ from ai.models import InterpretedAction
 from bot.action_pipeline import (
     ActionPipelineResult,
     AmbiguityResult,
+    LowConfidenceResult,
     PipelinePhase,
     UnknownEntityResult,
 )
@@ -123,6 +124,8 @@ class FakePipelineFactory:
         self.constructed: list[Any] = []
         self.process_calls: list[str] = []
         self.resume_calls: list[tuple[Any, str]] = []
+        self.process_interpreted_calls: list[Any] = []
+        self.resume_output: Any = None
 
     def __call__(self, **kwargs: Any) -> Any:
         pipeline = MagicMock()
@@ -143,8 +146,15 @@ class FakePipelineFactory:
             self.resume_calls.append((ambiguity, chosen_entity_id))
             return self.output
 
+        async def process_interpreted(
+            action: Any, progress_callback: Any = None,
+        ) -> Any:
+            self.process_interpreted_calls.append(action)
+            return self.resume_output if self.resume_output is not None else self.output
+
         pipeline.process = process
         pipeline.resume_with_resolution = resume
+        pipeline.process_interpreted_action = process_interpreted
         self.constructed.append(pipeline)
         return pipeline
 
@@ -577,3 +587,94 @@ class TestOnMessageDispatch:
             e for e in embeds_sent if e.title and "Le Village" in (e.title or "")
         ]
         assert not scene_embeds, "non-MOVE actions must not post a scene embed"
+
+
+# ---------------------------------------------------------------------------
+# Confiance basse — confirmation Oui/Reformuler
+# ---------------------------------------------------------------------------
+
+
+def _low_confidence_output() -> LowConfidenceResult:
+    return LowConfidenceResult(
+        interpreted_action=InterpretedAction(
+            action_type=ActionType.IMPROVISE,
+            actor_name="Aldric",
+            improvise_description="je danse",
+            raw_input="je danse",
+            confidence=0.3,
+        ),
+    )
+
+
+def _success_output() -> ActionPipelineResult:
+    return ActionPipelineResult(
+        narrative="Tu danses.",
+        tone="humorous",
+        mechanics_text="",
+        interpreted_action=InterpretedAction(
+            action_type=ActionType.IMPROVISE,
+            actor_name="Aldric",
+            raw_input="je danse",
+        ),
+    )
+
+
+def _campaign_message(bot: Any) -> FakeMessage:
+    return FakeMessage(
+        content="<@9999> je danse",
+        author=FakeAuthor(id=1),
+        channel=FakeChannel(id=1),
+        mentions=[bot.user],
+    )
+
+
+class TestLowConfidenceFlow:
+    @pytest.mark.asyncio
+    async def test_confirm_resumes_via_process_interpreted_action(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+        factory = FakePipelineFactory(_low_confidence_output())
+        factory.resume_output = _success_output()
+        cog._pipeline_factory = factory
+
+        from bot.views import confirm_action_view as cav_module
+
+        async def _instant_confirm(self: Any) -> None:
+            self.confirmed = True
+
+        monkeypatch.setattr(
+            cav_module.ConfirmActionView, "wait", _instant_confirm,
+        )
+
+        await cog.on_message(_campaign_message(bot))  # type: ignore[arg-type]
+
+        assert len(factory.process_interpreted_calls) == 1
+        resumed = factory.process_interpreted_calls[0]
+        assert resumed.action_type is ActionType.IMPROVISE
+        assert resumed.confidence == 0.3
+
+    @pytest.mark.asyncio
+    async def test_reformulate_drops_action_without_resume(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+        factory = FakePipelineFactory(_low_confidence_output())
+        cog._pipeline_factory = factory
+
+        from bot.views import confirm_action_view as cav_module
+
+        async def _instant_timeout(self: Any) -> None:
+            self.confirmed = False  # Reformuler et timeout : même chemin
+
+        monkeypatch.setattr(
+            cav_module.ConfirmActionView, "wait", _instant_timeout,
+        )
+
+        await cog.on_message(_campaign_message(bot))  # type: ignore[arg-type]
+
+        assert factory.process_interpreted_calls == []

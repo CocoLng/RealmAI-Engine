@@ -19,6 +19,7 @@ from bot.action_pipeline import (
     ActionPipeline,
     ActionPipelineResult,
     AmbiguityResult,
+    LowConfidenceResult,
     PipelineOutput,
     PipelinePhase,
     UnknownEntityResult,
@@ -32,6 +33,10 @@ from bot.story_bible_logger import record_turn_and_maybe_check
 from bot.views.clarification_view import (
     ClarificationView,
     build_clarification_embed,
+)
+from bot.views.confirm_action_view import (
+    ConfirmActionView,
+    build_confirm_embed,
 )
 from engine.validators import ActionType
 
@@ -437,6 +442,15 @@ class ActionHandlerCog(commands.Cog):
                 actor_name=actor_name, raw_text=raw_text, start=start,
                 session=session,
             )
+        elif isinstance(result, LowConfidenceResult):
+            # Même contrainte que la désambiguïsation : c'est le résultat
+            # FINAL (après confirmation + reprise) que la main de combat
+            # doit voir. ``None`` si le joueur reformule / timeout.
+            result = await self._render_low_confidence(
+                progress_msg, result, message.author.id, pipeline,
+                actor_name=actor_name, raw_text=raw_text, start=start,
+                session=session,
+            )
         elif isinstance(result, UnknownEntityResult):
             await self._render_unknown(progress_msg, result)
 
@@ -618,6 +632,96 @@ class ActionHandlerCog(commands.Cog):
         # An ambiguity here would be unusual — fall through to leave the
         # current embed in place rather than crash (it is non-consuming,
         # so returning it never advances the turn).
+        return result
+
+    async def _render_low_confidence(
+        self,
+        progress_msg: discord.Message,
+        low_confidence: LowConfidenceResult,
+        author_id: int,
+        pipeline: Any,
+        *,
+        actor_name: str,
+        raw_text: str,
+        start: float,
+        session: Any,
+    ) -> PipelineOutput | None:
+        """Confirmation Oui/Reformuler puis reprise du pipeline.
+
+        Retourne le résultat FINAL après ``process_interpreted_action``
+        (jamais l'intermédiaire), ou ``None`` quand l'action est abandonnée
+        (Reformuler, timeout, reprise en erreur) — le tour n'est alors pas
+        consommé et l'appelant n'avance pas la rotation de combat.
+        """
+        embed = build_confirm_embed(
+            low_confidence.interpreted_action, session.language,
+        )
+        view = ConfirmActionView(author_id=author_id)
+        await progress_msg.edit(embed=embed, view=view)
+
+        await view.wait()
+
+        if not view.confirmed:
+            # Reformuler ou timeout — même sortie : rien n'est exécuté.
+            cancel_text = (
+                "✏️ Action annulée — reformule ton action."
+                if session.language == "fr"
+                else "✏️ Action cancelled — rephrase your action."
+            )
+            await progress_msg.edit(
+                embed=discord.Embed(description=cancel_text, color=0x95A5A6),
+                view=None,
+            )
+            return None
+
+        async def update_progress(phase: PipelinePhase) -> None:
+            try:
+                await progress_msg.edit(
+                    embed=build_action_progress_embed(
+                        actor_name=actor_name,
+                        raw_text=raw_text,
+                        current_phase=phase,
+                        elapsed_seconds=time.monotonic() - start,
+                    ),
+                    view=None,
+                )
+            except discord.HTTPException:
+                logger.warning(
+                    "ACTION progress edit failed (confirm) campaign=%s phase=%s",
+                    session.campaign.id, phase.name,
+                )
+
+        try:
+            result = await pipeline.process_interpreted_action(
+                low_confidence.interpreted_action,
+                progress_callback=update_progress,
+            )
+        except Exception as exc:
+            logger.exception(
+                "ACTION confirm-resume failed campaign=%s reason=%s",
+                session.campaign.id, exc,
+            )
+            await progress_msg.edit(
+                embed=build_action_progress_embed(
+                    actor_name=actor_name,
+                    raw_text=raw_text,
+                    current_phase=PipelinePhase.FAILED,
+                    elapsed_seconds=time.monotonic() - start,
+                ),
+                view=None,
+            )
+            return None
+
+        if isinstance(result, ActionPipelineResult):
+            await self._render_success(progress_msg, result, session=session)
+        elif isinstance(result, AmbiguityResult):
+            return await self._render_ambiguity(
+                progress_msg, result, author_id, pipeline,
+                actor_name=actor_name, raw_text=raw_text, start=start,
+                session=session,
+            )
+        elif isinstance(result, UnknownEntityResult):
+            await self._render_unknown(progress_msg, result)
         return result
 
 
