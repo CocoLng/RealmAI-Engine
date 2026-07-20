@@ -292,7 +292,7 @@ class TestAmbiguity:
                 actor_name="Aldric",
                 target_name="Marc",
                 raw_input="je parle à Marc",
-                confidence=0.4,
+                confidence=0.75,
             ),
         )
         narrator = FakeNarrator()
@@ -341,7 +341,7 @@ class TestResumeWithResolution:
                 actor_name="Aldric",
                 target_name="Marc",
                 raw_input="je parle à Marc",
-                confidence=0.4,
+                confidence=0.75,
             ),
         )
         narrator = FakeNarrator(
@@ -389,7 +389,7 @@ class TestRefusalGrounding:
                 actor_name="Aldric",
                 target_name="dragon",
                 raw_input="je parle au dragon",
-                confidence=0.5,
+                confidence=0.75,
             ),
         )
         narrator = FakeNarrator(
@@ -428,7 +428,7 @@ class TestRefusalGrounding:
                 actor_name="Aldric",
                 target_name="fantôme",
                 raw_input="je parle au fantôme",
-                confidence=0.5,
+                confidence=0.75,
             ),
         )
         narrator = FakeNarrator(
@@ -496,7 +496,7 @@ class TestUnknownEntity:
                 actor_name="Aldric",
                 target_name="Dragon",
                 raw_input="je parle au dragon",
-                confidence=0.5,
+                confidence=0.75,
             ),
         )
         # Narrator generates the in-character refusal narrative

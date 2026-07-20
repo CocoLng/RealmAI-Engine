@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from bot.pipeline.orchestrator import (
     ActionPipelineResult,
     AmbiguityResult,
+    LowConfidenceResult,
     PipelineOutput,
     PipelinePhase,
     PipelineRunner,
@@ -46,6 +47,7 @@ __all__ = [
     "ActionPipelineResult",
     "AmbiguityResult",
     "DEFENSIVE_CONDITIONS",
+    "LowConfidenceResult",
     "PipelineOutput",
     "PipelinePhase",
     "ProgressCallback",

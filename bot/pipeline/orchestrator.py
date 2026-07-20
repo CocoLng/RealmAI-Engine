@@ -140,6 +140,12 @@ def _persist_story_arc(db_factory: Callable[[], Any], arc: Any) -> None:
 # Phase enum + result types
 # ---------------------------------------------------------------------------
 
+CONFIDENCE_CLARIFY_THRESHOLD = 0.6
+"""Sous ce seuil (strict), l'interprétation est soumise à confirmation du
+joueur avant toute exécution — le prompt interpreter calibre <= 0.5 comme
+« flou », 0.6 absorbe la zone grise. Les QUESTION ne sont jamais gatées
+(gratuites, sans effet d'état)."""
+
 
 class PipelinePhase(IntEnum):
     """Observability for the action pipeline progress."""
@@ -192,7 +198,21 @@ class UnknownEntityResult(BaseModel):
     tone: Literal["dramatic", "tense", "humorous", "somber"] = "somber"
 
 
-PipelineOutput = ActionPipelineResult | AmbiguityResult | UnknownEntityResult
+class LowConfidenceResult(BaseModel):
+    """Interpreter confidence sous le seuil — le caller doit faire confirmer
+    l'action au joueur avant de reprendre via ``process_interpreted_action``."""
+
+    interpreted_action: InterpretedAction
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+PipelineOutput = (
+    ActionPipelineResult
+    | AmbiguityResult
+    | UnknownEntityResult
+    | LowConfidenceResult
+)
 
 ProgressCallback = Callable[[PipelinePhase], Awaitable[None]]
 
@@ -279,6 +299,18 @@ class PipelineRunner:
             actor_name=self.actor_name,
             language=self.language,
         )
+
+        if (
+            interpreted.confidence < CONFIDENCE_CLARIFY_THRESHOLD
+            and interpreted.action_type is not ActionType.QUESTION
+        ):
+            logger.info(
+                "INTERPRET low-confidence gate campaign=%s action=%s confidence=%.2f",
+                self.campaign_id,
+                interpreted.action_type.value,
+                interpreted.confidence,
+            )
+            return LowConfidenceResult(interpreted_action=interpreted)
 
         return await self._continue_from_resolution(
             interpreted, progress_callback,
