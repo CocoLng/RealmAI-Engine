@@ -58,11 +58,19 @@ class StoryDirector:
     The caller is responsible for checking the trigger condition.
 
     Uses a 2-call chain:
-      1. Brainstorm coherence analysis angles (think=True, low budget)
+      1. Brainstorm coherence analysis angles (think=False, dedicated cap)
       2. Generate structured coherence report JSON (think=False)
     """
 
     MODEL = "qwen3.5:9b"
+
+    BRAINSTORM_NUM_PREDICT = 1024
+    """Output-token cap for the brainstorm call (3 short options ≈ 300-500
+    tokens). The call used to run think=True with a 2048 num_predict — but
+    num_predict caps thinking + content COMBINED, and the 9b's reasoning
+    trace saturated it on every live cadence (15/15 on 2026-07-19): ~112 s
+    of GPU per run for an empty content and a fallback. think=False with a
+    dedicated cap keeps the brainstorm fast and always parseable."""
 
     def __init__(self, client: OllamaClient, semantic_memory: SemanticMemory) -> None:
         self._client = client
@@ -92,7 +100,7 @@ class StoryDirector:
             progress_block = self._format_beat_progress(beat_progress)
             context_prompt = f"{context_prompt}\n\n{progress_block}"
 
-        # --- Call 1: Brainstorm (think=True, lower budget) ---
+        # --- Call 1: Brainstorm (think=False, dedicated cap) ---
         brainstorm_context = self._brainstorm(context_prompt)
 
         # --- Call 2: Generate (think=False) ---
@@ -149,7 +157,8 @@ class StoryDirector:
         ]
         try:
             data: dict[str, Any] = self._client.chat_json(
-                self.MODEL, messages, temperature=0.7, think=True, thinking_budget=2048,
+                self.MODEL, messages, temperature=0.7, think=False,
+                num_predict=self.BRAINSTORM_NUM_PREDICT,
             )
             logger.info("DIRECTOR brainstorm returned %d options", len(data.get("options", [])))
             return self._format_brainstorm(data)

@@ -122,6 +122,37 @@ def test_check_coherence_low_priority(
     assert result.coherence_issues == []
 
 
+def test_brainstorm_runs_without_thinking_mode(
+    httpx_mock: HTTPXMock, director: StoryDirector
+) -> None:
+    """Both director calls run think=False with a dedicated brainstorm cap.
+
+    Live 2026-07-19: think=True saturated its 2048-token num_predict with
+    the reasoning trace on EVERY cadence (15/15) — ~112 s of GPU wasted,
+    empty content, then fallback. The brainstorm must not think, and its
+    output gets its own num_predict ceiling.
+    """
+    import json
+
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(_make_brainstorm_response()))
+    httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(
+        {"coherence_issues": [], "suggested_hooks": [], "priority": "low"}
+    ))
+
+    director.check_coherence(campaign_id="camp-perf", context_prompt="ctx")
+
+    requests = httpx_mock.get_requests(url=CHAT_URL)
+    assert len(requests) == 2
+    brainstorm_payload = json.loads(requests[0].content)
+    assert brainstorm_payload["think"] is False
+    assert (
+        brainstorm_payload["options"]["num_predict"]
+        == StoryDirector.BRAINSTORM_NUM_PREDICT
+    )
+    generate_payload = json.loads(requests[1].content)
+    assert generate_payload["think"] is False
+
+
 def test_check_coherence_falls_back_on_brainstorm_failure(
     httpx_mock: HTTPXMock, director: StoryDirector
 ) -> None:
