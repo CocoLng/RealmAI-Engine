@@ -1721,3 +1721,110 @@ class TestLobbyPregenStatus:
             )
 
         assert phases[-1] == GenerationPhase.FAILED
+
+
+class TestPregenRetriesOllamaHiccups:
+    """A transient Ollama failure must not kill a campaign launch.
+
+    Spec: ``2026-04-06-campaign-launch-reliability-design.md`` §3 — arc and
+    location generation get 3 attempts (0s / 5s / 15s). Before this, both
+    calls were bare ``asyncio.to_thread``: one hiccup and the launch was
+    dead with no recovery.
+    """
+
+    def _make_cog_and_lobby(self):
+        from bot.cogs.session import SessionCog
+        from bot.lobby_state import GenerationPhase, LobbyState
+
+        lobby = LobbyState(
+            creator_id=42,
+            language="fr",
+            campaign_name="Brumes du Nord",
+            theme="Brumes du Nord",
+        )
+        lobby.pregen_phase = GenerationPhase.PENDING
+        cog = SessionCog.__new__(SessionCog)
+        cog._refresh_lobby_pregen_status = AsyncMock()  # type: ignore[method-assign]
+        return cog, lobby
+
+    def _fake_arc(self):
+        fake_arc = MagicMock()
+        fake_arc.model_copy.return_value = SimpleNamespace(
+            campaign_id="c1", beats=[], villain_name="L'Ombre",
+        )
+        return fake_arc
+
+    async def test_arc_generation_survives_one_transient_failure(self):
+        from ai.client import OllamaUnavailableError
+        from bot.lobby_state import GenerationPhase
+
+        cog, lobby = self._make_cog_and_lobby()
+        fake_loc = Location(name="Place", description="d", generated=True)
+
+        with (
+            patch("bot.llm_retry.asyncio.sleep", new=AsyncMock()),
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe"),
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator") as world_cls,
+        ):
+            arc_cls.return_value.generate.side_effect = [
+                OllamaUnavailableError("connection reset"),
+                self._fake_arc(),
+            ]
+            world_cls.return_value.generate.return_value = fake_loc
+            await cog._pregenerate_campaign_world(
+                lobby, Campaign(name="Brumes du Nord"), "fr",
+            )
+
+        assert lobby.pregen_phase == GenerationPhase.READY
+        assert arc_cls.return_value.generate.call_count == 2
+
+    async def test_location_generation_survives_one_transient_failure(self):
+        from ai.client import OllamaUnavailableError
+        from bot.lobby_state import GenerationPhase
+
+        cog, lobby = self._make_cog_and_lobby()
+        fake_loc = Location(name="Place", description="d", generated=True)
+
+        with (
+            patch("bot.llm_retry.asyncio.sleep", new=AsyncMock()),
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe"),
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator") as world_cls,
+        ):
+            arc_cls.return_value.generate.return_value = self._fake_arc()
+            world_cls.return_value.generate.side_effect = [
+                OllamaUnavailableError("model loading"),
+                fake_loc,
+            ]
+            await cog._pregenerate_campaign_world(
+                lobby, Campaign(name="Brumes du Nord"), "fr",
+            )
+
+        assert lobby.pregen_phase == GenerationPhase.READY
+        assert lobby.current_location.name == "Place"
+        assert world_cls.return_value.generate.call_count == 2
+
+    async def test_persistent_failure_still_fails_the_lobby(self):
+        """Retries must not mask a genuinely down Ollama — 3 tries, then FAILED."""
+        from ai.client import OllamaUnavailableError
+        from bot.lobby_state import GenerationPhase
+
+        cog, lobby = self._make_cog_and_lobby()
+
+        with (
+            patch("bot.llm_retry.asyncio.sleep", new=AsyncMock()),
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe"),
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator"),
+        ):
+            arc_cls.return_value.generate.side_effect = OllamaUnavailableError("down")
+            await cog._pregenerate_campaign_world(
+                lobby, Campaign(name="Brumes du Nord"), "fr",
+            )
+
+        assert lobby.pregen_phase == GenerationPhase.FAILED
+        assert arc_cls.return_value.generate.call_count == 3

@@ -17,6 +17,7 @@ from discord.ext import commands
 from bot.config import GuildConfig
 from bot.embeds.lobby_embed import build_lobby_embed
 from bot.game_session import GameSession, create_ai_services
+from bot.llm_retry import retry_llm_call
 from bot.lobby_state import LobbyPlayerStatus, LobbyState
 from bot.persistence import persist_session
 from bot.utils.channel_manager import archive_channel, create_session_channel
@@ -744,6 +745,11 @@ class SessionCog(commands.Cog):
         ``lobby.pregen_phase`` advances PENDING → ARC → LOCATION → READY.
         On error, sets FAILED + ``pregen_error``; the launch path will
         surface this to the host.
+
+        Both generations go through :func:`bot.llm_retry.retry_llm_call`
+        (3 attempts, 0s / 5s / 15s). A campaign launch is the worst place to
+        die on a single Ollama hiccup: the host has already gathered players
+        and the lobby is unrecoverable once FAILED.
         """
         from ai.arc_generator import ArcGenerator
         from ai.client import OllamaClient, OllamaUnavailableError
@@ -771,8 +777,9 @@ class SessionCog(commands.Cog):
             lobby.pregen_phase = GenerationPhase.ARC
             await self._refresh_lobby_pregen_status(lobby)
             arc_start = time.monotonic()
-            arc = await asyncio.to_thread(
-                arc_gen.generate, campaign.name, 1, language, recipe,
+            arc = await retry_llm_call(
+                lambda: arc_gen.generate(campaign.name, 1, language, recipe),
+                log_label=f"PREGEN campaign={campaign.id} arc",
             )
             lobby.story_arc = arc.model_copy(update={"campaign_id": campaign.id})
             logger.info(
@@ -793,13 +800,14 @@ class SessionCog(commands.Cog):
                 beat.location_hint for beat in lobby.story_arc.beats if beat.location_hint
             ]
             loc_start = time.monotonic()
-            lobby.current_location = await asyncio.to_thread(
+            lobby.current_location = await retry_llm_call(
                 lambda: world_gen.generate(
                     campaign_context=arc_context,
                     location_type="starting_area",
                     language=language,
                     location_hints=arc_location_hints,
                 ),
+                log_label=f"PREGEN campaign={campaign.id} location",
             )
             logger.info(
                 "PREGEN loc_done campaign=%s elapsed=%.1fs location=%r",
