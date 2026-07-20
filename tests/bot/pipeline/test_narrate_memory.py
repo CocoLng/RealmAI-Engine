@@ -371,8 +371,11 @@ class TestLockedFactsFlow:
         narration_guard.reset("camp-guard-retry")
         narration_guard.set_dead_npcs("camp-guard-retry", ["Grim"])
         narrator = FakeNarrator(responses=[
+            # Grim is visible in the prose, so the active-verb heuristic is
+            # authoritative (I3): « sourit »/« tend » are recognized actions,
+            # so a dead Grim acting is flagged and the guard retries.
             NarrativeResult(
-                narrative="Grim vous accueille avec un sourire chaleureux.",
+                narrative="Grim vous sourit et vous tend une chope chaleureuse.",
                 tone="humorous", npcs_mentioned=["Grim"],
             ),
             NarrativeResult(
@@ -390,7 +393,7 @@ class TestLockedFactsFlow:
         )
 
         assert len(narrator.calls) == 2
-        assert "MORT" in narrator.calls[1]["action_result_text"]
+        assert "CONTRAINTE ABSOLUE (cohérence)" in narrator.calls[1]["action_result_text"]
         assert "Grim" in narrator.calls[1]["action_result_text"]
         assert "cadavre" in result.narrative
         narration_guard.reset("camp-guard-retry")
@@ -442,6 +445,25 @@ class TestLockedFactsFlow:
         assert len(narrator.calls) == 2
         assert result.narrative == "Grim continue de parler."
         narration_guard.reset("camp-guard-loop")
+
+
+class TestRenderLockedFactsCap:
+    def test_render_caps_at_15_lines_deaths_first(self) -> None:
+        from unittest.mock import MagicMock
+
+        from bot.pipeline.narrate import _render_locked_facts
+        from world.story_arc import LockedFact
+        session = MagicMock()
+        facts = [LockedFact(id=f"npc_dead:N{i}", text=f"N{i} est mort.") for i in range(4)]
+        facts += [LockedFact(id=f"beat:{i}:hint", text=f"Fait {i}.") for i in range(20)]
+        session.story_arc.locked_facts = facts
+        rendered = _render_locked_facts(session)
+        lines = rendered.splitlines()
+        assert lines[0] == "[LOCKED FACTS]"
+        assert len(lines) == 1 + 15
+        # Les 4 morts sont tous là, puis les 11 faits de beat les plus récents.
+        assert sum("npc_dead:" in line for line in lines) == 4
+        assert "[beat:19:hint]" in rendered and "[beat:8:hint]" not in rendered
 
 
 class TestAntiMonotonyFlow:

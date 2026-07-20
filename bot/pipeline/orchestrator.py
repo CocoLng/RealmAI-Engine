@@ -514,6 +514,12 @@ class PipelineRunner:
         objectives_dirty = False
         engine_decision: DriftDecision = "STAY"
         beat_progress_snapshot: Any = None  # BeatProgress | None
+        # Mitigation 5a — locked-fact ids that pre-exist this turn. When a
+        # beat completes it mints new facts BEFORE narration; the coherence
+        # snapshot must exclude them so a fresh fact is not checked against
+        # the very narration that reveals it. None → no beat completed →
+        # every fact is in scope.
+        pre_turn_locked_fact_ids: set[str] | None = None
         if self.session is not None and getattr(self.session, "story_arc", None) is not None:
             from typing import Any as _Any
             from engine.beat_progression import (
@@ -610,7 +616,15 @@ class PipelineRunner:
             if should_advance:
                 beat_completed = True
                 old_beat = arc.beats[arc.current_beat_index]
-                hint = await self._apply_beat_effects(old_beat.on_complete)
+                # 5a — snapshot the fact ids that exist BEFORE this beat's
+                # consequences are locked, so the coherence gate only checks
+                # facts that were already canon at the start of the turn.
+                _pre_facts = getattr(arc, "locked_facts", None)
+                if isinstance(_pre_facts, list):
+                    pre_turn_locked_fact_ids = {f.id for f in _pre_facts}
+                hint = await self._apply_beat_effects(
+                    old_beat.on_complete, beat_number=old_beat.beat_number,
+                )
                 if hint:
                     outcome = outcome.model_copy(update={
                         "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
@@ -673,6 +687,24 @@ class PipelineRunner:
         await self._emit(progress_callback, PipelinePhase.NARRATING)
         from ai.story_director import cached_note_for
         director_note = cached_note_for(self.campaign_id)
+        moved_this_turn = interpreted.action_type in (ActionType.MOVE, ActionType.FLEE)
+        # C2 — an NPC defeated THIS turn is excluded from the dead set so the
+        # narration OF the kill is not blocked as a resurrection. The name
+        # enters the guard's dead registry only at end-of-turn (next turn on).
+        freshly_dead = (
+            [outcome.target_defeated] if outcome.target_defeated else []
+        )
+        coherence_snapshot = (
+            narrate.build_coherence_snapshot(
+                self.session,
+                actor_name=self.actor_name,
+                inventory=self.inventory,
+                moved_this_turn=moved_this_turn,
+                freshly_dead=freshly_dead,
+                locked_fact_ids=pre_turn_locked_fact_ids,
+            )
+            if self.session is not None else None
+        )
         narration = await narrate.call_narrator(
             narrator=self.narrator,
             outcome=outcome,
@@ -680,6 +712,7 @@ class PipelineRunner:
             language=self.language,
             campaign_id=self.campaign_id,
             director_note=director_note,
+            snapshot=coherence_snapshot,
         )
 
         # Memory hook (audit H9): persist this turn's exchanges and refresh
@@ -769,7 +802,9 @@ class PipelineRunner:
         )
         return result
 
-    async def _apply_beat_effects(self, effects: BeatEffects) -> str:
+    async def _apply_beat_effects(
+        self, effects: BeatEffects, *, beat_number: int,
+    ) -> str:
         """Apply beat completion effects to the current location.
 
         Returns a narrative hint string for the narrator.
@@ -790,6 +825,8 @@ class PipelineRunner:
                         fact=f"State flag set: {flag}",
                     )
 
+        self._lock_beat_facts(effects, beat_number)
+
         loc = self.location
         if loc is None:
             return effects.narrative_hint
@@ -809,6 +846,16 @@ class PipelineRunner:
         loc.state_flags.update(effects.state_flags)
 
         return effects.narrative_hint
+
+    def _lock_beat_facts(self, effects: BeatEffects, beat_number: int) -> None:
+        """Phase 2 porte de cohérence — beat consequences become locked facts."""
+        from world.story_arc import append_beat_locked_facts
+
+        session = getattr(self, "session", None)
+        arc = getattr(session, "story_arc", None) if session is not None else None
+        if arc is None or not isinstance(getattr(arc, "locked_facts", None), list):
+            return
+        append_beat_locked_facts(arc, effects, beat_number)
 
     def _schedule_story_director(
         self,

@@ -136,12 +136,27 @@ class FakeInventory:
 
 class TestR1ItemUseWithoutOwning:
     def test_uses_item_not_in_inventory_triggers(self) -> None:
-        state = FakeState(inventory=FakeInventory(items=["Épée longue"]))
-        narration = "Le héros boit la Potion de soin."
+        # Named-player subject so the subject-attribution filter (mitigation
+        # 5c) recognises the player as the actor — this also exercises the
+        # sim adapter's player_names wiring. A third-person NPC sentence is
+        # deliberately NOT flagged — see test_third_person_item_use_no_trigger.
+        state = FakeState(
+            inventory=FakeInventory(items=["Épée longue"]),
+            player_names=["Aria"],
+        )
+        narration = "Aria boit la Potion de soin."
         alerts = check_item_use_without_owning(narration, state, diff={}, history=[])
         assert len(alerts) == 1
         assert alerts[0].rule == "R1.item_use_without_owning"
         assert "Potion de soin" in alerts[0].expected
+
+    def test_third_person_item_use_no_trigger(self) -> None:
+        # Mitigation 5c — an NPC using its own gear is not measured against
+        # the player's inventory.
+        state = FakeState(inventory=FakeInventory(items=["Épée longue"]))
+        narration = "Le garde dégaine la hache de guerre."
+        alerts = check_item_use_without_owning(narration, state, diff={}, history=[])
+        assert alerts == []
 
     def test_uses_item_in_inventory_no_trigger(self) -> None:
         state = FakeState(inventory=FakeInventory(items=["Potion de soin"]))

@@ -8,6 +8,8 @@ narration call site only knows the campaign_id.
 import pytest
 
 from memory import narration_guard
+from memory.coherence_rules import CoherenceSnapshot
+from memory.narration_guard import GuardVerdict, check_narration
 
 
 @pytest.fixture(autouse=True)
@@ -50,10 +52,31 @@ class TestDeadNpcViolations:
         narration_guard.set_dead_npcs("camp-guard", ["Grim"])
         violations = narration_guard.find_dead_npc_violations(
             "camp-guard",
-            narrative="GRIM se redresse lentement.",
+            narrative="GRIM ATTAQUE sans prévenir.",
             npcs_mentioned=[],
         )
         assert violations == ["Grim"]
+
+    def test_mention_without_active_verb_does_not_flag(self) -> None:
+        """New contract (spec §1.2): mentioning the corpse is legitimate —
+        only an active verb in the same sentence, or a self-reported
+        mention, counts as a violation."""
+        narration_guard.set_dead_npcs("camp-guard", ["Aldric"])
+        violations = narration_guard.find_dead_npc_violations(
+            "camp-guard",
+            narrative="Le cadavre d'Aldric gît là.",
+            npcs_mentioned=[],
+        )
+        assert violations == []
+
+    def test_active_verb_flags_the_dead_npc(self) -> None:
+        narration_guard.set_dead_npcs("camp-guard", ["Aldric"])
+        violations = narration_guard.find_dead_npc_violations(
+            "camp-guard",
+            narrative="Aldric sourit.",
+            npcs_mentioned=[],
+        )
+        assert violations == ["Aldric"]
 
     def test_no_partial_word_match(self) -> None:
         """'Grim' must not match inside 'Grimoire'."""
@@ -115,7 +138,10 @@ class TestRepetitionGuard:
         narration_guard.record_narration("camp-guard", _LONG_SENTENCE)
         narration_guard.record_narration("camp-guard", "Deuxième narration sans rapport aucun.")
         narration_guard.record_narration("camp-guard", "Troisième narration tout aussi originale.")
-        # The first narration has rolled out of the 2-entry window
+        # find_repetition's legacy BLOCKING check only compares against the
+        # last 2 — the first narration has rolled out of that comparison
+        # window (it is still held by the deque itself, now sized 5 for
+        # the core's R2.repetition/OBSERVE via check_narration).
         assert narration_guard.find_repetition("camp-guard", _LONG_SENTENCE) is None
 
     def test_unknown_campaign_is_silent(self) -> None:
@@ -124,3 +150,53 @@ class TestRepetitionGuard:
     def test_empty_narration_not_recorded(self) -> None:
         narration_guard.record_narration("camp-guard", "   ")
         assert narration_guard.find_repetition("camp-guard", _LONG_SENTENCE) is None
+
+
+class TestCheckNarration:
+    def test_blocking_and_observed_are_split_by_mode(self) -> None:
+        narration_guard.reset("c1")
+        narration_guard.set_dead_npcs("c1", ["Aldric"])
+        snap = CoherenceSnapshot(known_npc_names=["Elara"])
+        verdict = check_narration(
+            "c1",
+            narrative="Aldric sourit tandis que Baldur observe.",
+            snapshot=snap,
+            npcs_mentioned=[],
+        )
+        assert isinstance(verdict, GuardVerdict)
+        assert [v.rule for v in verdict.blocking] == ["R1.npc_status"]
+        assert "R1.phantom_npc" in {v.rule for v in verdict.observed}
+
+    def test_guard_state_merges_into_snapshot(self) -> None:
+        # dead_npcs du registre + recent_narrations de la deque sont fusionnés
+        # même quand le snapshot fourni est vide.
+        narration_guard.reset("c2")
+        narration_guard.set_dead_npcs("c2", ["Mira"])
+        verdict = check_narration(
+            "c2", narrative="Mira attaque sans hésiter.",
+            snapshot=None, npcs_mentioned=[],
+        )
+        assert [v.rule for v in verdict.blocking] == ["R1.npc_status"]
+
+    def test_clean_narration_yields_empty_verdict(self) -> None:
+        narration_guard.reset("c3")
+        verdict = check_narration(
+            "c3", narrative="Le vent souffle.", snapshot=None, npcs_mentioned=[],
+        )
+        assert verdict.blocking == [] and verdict.observed == []
+
+
+class TestRecentNarrationsWindow:
+    def test_deque_keeps_five_but_find_repetition_checks_last_two(self) -> None:
+        narration_guard.reset("c4")
+        eight = "un deux trois quatre cinq six sept huit"
+        narration_guard.record_narration("c4", eight)          # n-3
+        narration_guard.record_narration("c4", "toto")          # n-2
+        narration_guard.record_narration("c4", "titi")          # n-1
+        # La répétition vs n-3 n'est PLUS bloquante (fenêtre legacy = 2)…
+        assert narration_guard.find_repetition("c4", eight) is None
+        # …mais reste visible du noyau via check_narration (R2 en OBSERVE).
+        verdict = check_narration(
+            "c4", narrative=eight, snapshot=None, npcs_mentioned=[],
+        )
+        assert "R2.repetition" in {v.rule for v in verdict.observed}

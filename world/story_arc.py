@@ -79,6 +79,10 @@ class BeatEffects(BaseModel):
     add_items: list[str] = Field(default_factory=list)
     state_flags: dict[str, bool] = Field(default_factory=dict)
     narrative_hint: str = ""
+    locked_facts: list[str] = Field(default_factory=list)
+    """World facts to lock into ``StoryArc.locked_facts`` when this beat
+    completes (max 2, sanitized by the arc generator). Engine-authored
+    channel — the LLM prompt does not expose this field."""
 
 
 class StoryBeat(BaseModel):
@@ -123,6 +127,26 @@ class LockedFact(BaseModel):
 
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
+
+
+def append_beat_locked_facts(
+    arc: "StoryArc", effects: BeatEffects, beat_number: int,
+) -> None:
+    """Lock a completed beat's consequences into the arc — idempotent.
+
+    Sources: explicit ``effects.locked_facts`` entries (``beat:{n}:{i}``)
+    and the beat's ``narrative_hint`` (``beat:{n}:hint``) when present.
+    """
+    existing = {fact.id for fact in arc.locked_facts}
+    entries = [
+        (f"beat:{beat_number}:{i}", text)
+        for i, text in enumerate(effects.locked_facts)
+    ]
+    if effects.narrative_hint:
+        entries.append((f"beat:{beat_number}:hint", effects.narrative_hint))
+    for fact_id, text in entries:
+        if fact_id not in existing:
+            arc.locked_facts.append(LockedFact(id=fact_id, text=text))
 
 
 class StoryArc(BaseModel):

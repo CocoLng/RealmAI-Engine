@@ -741,6 +741,30 @@ class TestSanitizeArcData:
         assert data["villain_stat_block"]["attacks"][0]["damage_type"] == "Slashing"
 
 
+class TestSanitizeLockedFacts:
+    def test_locked_facts_are_clamped_and_deduped(self) -> None:
+        data = {
+            "villain_name": "V",
+            "beats": [{
+                "on_complete": {
+                    "locked_facts": [
+                        "  Un fait valide.  ",
+                        "un fait valide.",          # doublon (casse près)
+                        "x" * 500,                   # trop long
+                        42,                          # mauvais type
+                        "Un second fait valide.",
+                        "Un troisième — au-delà du cap de 2.",
+                    ],
+                },
+            }],
+        }
+        ArcGenerator._sanitize_arc_data(data)
+        facts = data["beats"][0]["on_complete"]["locked_facts"]
+        assert facts[0] == "Un fait valide."
+        assert len(facts) == 2
+        assert all(len(f) <= 200 for f in facts)
+
+
 # ---------------------------------------------------------------------------
 # SemanticIndexer integration
 # ---------------------------------------------------------------------------

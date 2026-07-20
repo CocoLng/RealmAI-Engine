@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
 
 from ai.models import InterpretedAction, MechanicsOutcome, NarrativeResult
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from bot.game_session import GameSession
     from engine.combat import CombatState
     from engine.inventory import Inventory
+    from memory.coherence_rules import CoherenceSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -106,20 +107,115 @@ def assemble_context(
     return "\n\n".join(lines)
 
 
+_LOCKED_FACTS_MAX_LINES = 15
+"""Cap on the [LOCKED FACTS] prompt block — deaths first, then the most
+recent beat facts. Bounds prompt growth on long campaigns (spec §2.2)."""
+
+
 def _render_locked_facts(session: "GameSession") -> str:
     """Render the [LOCKED FACTS] block from the arc's locked facts (H17).
 
     Pure in-memory read — safe on the event loop. Empty string when the
-    session has no arc or no facts.
+    session has no arc or no facts. Capped at
+    :data:`_LOCKED_FACTS_MAX_LINES`: NPC deaths always win a slot, then the
+    most recent beat facts fill what remains. Never mutates
+    ``arc.locked_facts`` — only reads a capped view for rendering.
     """
     arc = getattr(session, "story_arc", None)
     facts = getattr(arc, "locked_facts", None) if arc is not None else None
     # isinstance guard: tests drive the pipeline with MagicMock sessions
     if not isinstance(facts, list) or not facts:
         return ""
+    deaths = [f for f in facts if f.id.startswith("npc_dead:")]
+    others = [f for f in facts if not f.id.startswith("npc_dead:")]
+    kept = deaths[:_LOCKED_FACTS_MAX_LINES]
+    remaining = _LOCKED_FACTS_MAX_LINES - len(kept)
+    if remaining > 0 and others:
+        kept += others[-remaining:]
     lines = ["[LOCKED FACTS]"]
-    lines += [f"- [{fact.id}] {fact.text}" for fact in facts]
+    lines += [f"- [{fact.id}] {fact.text}" for fact in kept]
     return "\n".join(lines)
+
+
+def build_coherence_snapshot(
+    session: "GameSession",
+    *,
+    actor_name: str,
+    inventory: "Inventory | None",
+    moved_this_turn: bool,
+    freshly_dead: Collection[str] = (),
+    locked_fact_ids: Collection[str] | None = None,
+) -> "CoherenceSnapshot":
+    """Map the live session onto the coherence-rule input contract.
+
+    ``freshly_dead`` names an NPC defeated on THIS turn: the guard's grace
+    period keeps the kill narration from being checked against « X is dead »
+    (a death enters the dead set only at end-of-turn). Those names are
+    dropped from ``dead_npcs`` here — the guard's own registry union does not
+    re-add them because that registry is refreshed only at end-of-turn (C2).
+
+    ``locked_fact_ids``, when provided, restricts the snapshot's locked
+    facts to that id set — the orchestrator passes the ids that pre-existed
+    the turn so a fact minted by this turn's beat completion is not checked
+    against the very narration that reveals it (mitigation 5a). ``None``
+    keeps every fact (default; used by unit tests).
+
+    isinstance guards mirror the rest of this module: tests drive the
+    pipeline with MagicMock sessions."""
+    from memory.coherence_rules import CoherenceSnapshot, LockedFactSnapshot
+
+    npcs = getattr(session, "npcs", None)
+    npcs = npcs if isinstance(npcs, dict) else {}
+    characters = getattr(session, "characters", None)
+    characters = characters if isinstance(characters, dict) else {}
+
+    actor = next((c for c in characters.values() if c.name == actor_name), None)
+    max_hp = getattr(actor, "max_hp", 0) if actor is not None else 0
+    ratio = (actor.hp / max_hp) if actor is not None and max_hp else 1.0
+
+    loc = getattr(session, "current_location", None)
+    loc_name = getattr(loc, "name", None) if loc is not None else None
+    connections = list(getattr(loc, "connections", []) or []) if loc is not None else []
+
+    combat = getattr(session, "combat_state", None)
+    combat_active = combat is not None and bool(getattr(combat, "is_active", False))
+    zones: list[str] = []
+    if combat_active and loc is not None:
+        zones = [z.name for z in (getattr(loc, "combat_zones", []) or [])]
+
+    arc = getattr(session, "story_arc", None)
+    raw_facts = getattr(arc, "locked_facts", None) if arc is not None else None
+    facts = (
+        [
+            LockedFactSnapshot(id=f.id, text=f.text)
+            for f in raw_facts
+            if locked_fact_ids is None or f.id in locked_fact_ids
+        ]
+        if isinstance(raw_facts, list) else []
+    )
+
+    inv_names: list[str] = []
+    if inventory is not None:
+        inv_names = [item.name for item in inventory.items]
+        inv_names += [item.name for item in inventory.equipped.values()]
+
+    freshly_dead_set = {n for n in freshly_dead}
+    return CoherenceSnapshot(
+        dead_npcs=[
+            n.name for n in npcs.values()
+            if not n.is_alive and n.name not in freshly_dead_set
+        ],
+        known_npc_names=[n.name for n in npcs.values()],
+        player_names=[c.name for c in characters.values()],
+        current_location=loc_name,
+        known_locations=([loc_name, *connections] if loc_name else []),
+        moved_this_turn=moved_this_turn,
+        actor_inventory=inv_names,
+        player_hp_ratio=ratio,
+        combat_active=combat_active,
+        combat_zones=zones,
+        locked_facts=facts,
+    )
 
 
 async def update_memory_after_turn(
@@ -278,13 +374,19 @@ async def call_narrator(
     has_npc_dialogue: bool = False,
     director_note: "DirectorNote | None" = None,
     guard: bool = True,
+    snapshot: "CoherenceSnapshot | None" = None,
 ) -> NarrativeResult:
     """Call the Narrator LLM with retry logic and return the narrative result.
 
-    When ``guard`` is True (the main action path), the result goes
-    through the deterministic narration guard: a narration that brings a
-    dead NPC back to life triggers ONE corrective retry with an explicit
-    constraint (audit H17). The second result is final — no loops.
+    When ``guard`` is True (the main action path), the result goes through
+    the deterministic coherence gate: any BLOCKING violation (dead NPC
+    resurrected, phantom item, near-verbatim repetition, ...) triggers ONE
+    corrective retry listing each expected fact as an explicit constraint.
+    If the retry still violates a blocking rule, the LLM is never called a
+    third time — the result is a deterministic tier-3 template
+    (``narrator.template_narration``), never a published contradiction.
+    OBSERVE-mode violations never trigger a retry; they are only logged by
+    ``check_narration``.
     """
     def _do(action_text: str) -> NarrativeResult:
         return narrator.narrate(
@@ -305,13 +407,19 @@ async def call_narrator(
         return result
 
     from memory import narration_guard
-    violations = narration_guard.find_dead_npc_violations(
-        campaign_id,
-        narrative=result.narrative,
-        npcs_mentioned=result.npcs_mentioned,
-    )
-    repeated = narration_guard.find_repetition(campaign_id, result.narrative)
-    if not violations and repeated is None:
+
+    def _inspect(res: NarrativeResult) -> tuple["narration_guard.GuardVerdict", str | None]:
+        verdict = narration_guard.check_narration(
+            campaign_id,
+            narrative=res.narrative,
+            snapshot=snapshot,
+            npcs_mentioned=res.npcs_mentioned,
+        )
+        repeated = narration_guard.find_repetition(campaign_id, res.narrative)
+        return verdict, repeated
+
+    verdict, repeated = _inspect(result)
+    if not verdict.blocking and repeated is None:
         if result.locked_facts_used:
             logger.info(
                 "NARRATE locked_facts_used campaign=%s ids=%s",
@@ -319,34 +427,43 @@ async def call_narrator(
             )
         return result
 
-    constraints: list[str] = []
-    if violations:
-        names = ", ".join(violations)
-        logger.warning(
-            "NARRATION guard: dead NPC(s) %s resurrected campaign=%s — retrying once",
-            names, campaign_id,
-        )
-        constraints.append(
-            f"CONTRAINTE ABSOLUE (faits verrouillés) : {names} — MORT(S). "
-            "Un personnage mort ne peut ni parler, ni bouger, ni réagir. "
-            "Réécris la narration sans le(s) faire agir ; tu peux au mieux "
-            "mentionner leur cadavre."
-        )
+    constraints: list[str] = [
+        "CONTRAINTE ABSOLUE (cohérence) : la narration contredit l'état du "
+        f"jeu — {violation.expected}. Réécris en respectant strictement ce fait."
+        for violation in verdict.blocking
+    ]
     if repeated is not None:
-        logger.warning(
-            "NARRATION guard: repetition %r campaign=%s — retrying once",
-            repeated[:80], campaign_id,
-        )
         constraints.append(
             "CONTRAINTE DE VARIATION : ta narration répète presque mot pour "
             f"mot un passage récent (« {repeated[:120]} »). Reformule avec "
             "des images, un rythme et un vocabulaire différents, sans "
             "changer les faits."
         )
+    retry_rules = [violation.rule for violation in verdict.blocking]
+    if repeated is not None:
+        retry_rules.append("guard.repetition")
+    logger.warning(
+        "NARRATION guard: %d blocking violation(s) campaign=%s rules=%s — retrying once",
+        len(verdict.blocking) + (1 if repeated is not None else 0),
+        campaign_id,
+        retry_rules,
+    )
     amended = "\n\n".join([outcome.summary, *constraints])
-    return await retry_llm_call(
+    retry_result = await retry_llm_call(
         lambda: _do(amended),
         log_label=f"ACTION campaign={campaign_id} narrate-guard-retry",
+    )
+
+    verdict2, repeated2 = _inspect(retry_result)
+    if not verdict2.blocking and repeated2 is None:
+        return retry_result
+
+    logger.error(
+        "NARRATION guard: retry still violates campaign=%s rules=%s — template fallback",
+        campaign_id, [violation.rule for violation in verdict2.blocking],
+    )
+    return narrator.template_narration(
+        outcome.summary, outcome.outcome_facts, language,
     )
 
 

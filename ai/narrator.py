@@ -228,6 +228,14 @@ class Narrator:
         # --- Tier 3: template fallback (never raises) ---
         return self._template_fallback(action_result_text, outcome_facts, language)
 
+    def template_narration(
+        self, action_result_text: str, outcome_facts: str, language: str = "fr"
+    ) -> NarrativeResult:
+        """Public tier-3 template — used by the coherence gate when a
+        corrective retry still violates a blocking rule. Never raises,
+        never calls the LLM."""
+        return self._template_fallback(action_result_text, outcome_facts, language)
+
     def _call_llm(
         self,
         *,
