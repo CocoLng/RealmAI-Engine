@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, Field
 
 from engine.contracts import InterpretedAction
+from engine.log_paths import log_dir
 from world.story_arc import (
     GateKind,
     ObjectiveKind,
@@ -378,7 +379,14 @@ class BeatProgressionEngine:
 _logger = logging.getLogger(__name__)
 
 
-_PROD_LOG_PATH = Path("logs/beat_progression.jsonl")
+def _prod_log_path() -> Path:
+    """Telemetry file, resolved at call time via ``REALM_LOG_DIR``.
+
+    Call-time resolution is what keeps the test suite out of the real
+    production telemetry that ``scripts/review_beat_progression.py``
+    aggregates.
+    """
+    return log_dir() / "beat_progression.jsonl"
 
 
 def log_decision(
@@ -395,7 +403,8 @@ def log_decision(
     Failures are swallowed.
     """
     try:
-        _PROD_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        path = _prod_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "ts": datetime.now(UTC).isoformat(),
             "campaign_id": campaign_id,
@@ -411,7 +420,7 @@ def log_decision(
             "reasons": result.reasons,
             "latency_ms": latency_ms,
         }
-        with _PROD_LOG_PATH.open("a") as f:
+        with path.open("a") as f:
             f.write(json.dumps(record) + "\n")
     except Exception:
         _logger.exception("prod log failed for campaign=%s", campaign_id)

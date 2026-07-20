@@ -10,6 +10,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from engine.log_paths import log_dir as resolve_log_dir
+
 
 class _JsonExtraFormatter(logging.Formatter):
     """File formatter that appends any ``extra_payload`` as compact JSON.
@@ -34,17 +36,19 @@ class _JsonExtraFormatter(logging.Formatter):
 
 def setup_logging(
     *,
-    log_dir: str = "logs",
+    log_dir: str | None = None,
     level: int = logging.INFO,
 ) -> None:
     """Configure logging with console + per-session file output.
 
     Args:
-        log_dir: Directory for log files (created if missing).
+        log_dir: Directory for log files (created if missing). Defaults to
+            :func:`engine.log_paths.log_dir`, i.e. ``REALM_LOG_DIR`` or
+            ``logs`` — so the test suite can redirect it to a temp tree.
         level: Root log level for application loggers.
     """
-    log_path = Path(log_dir)
-    log_path.mkdir(exist_ok=True)
+    log_path = Path(log_dir) if log_dir is not None else resolve_log_dir()
+    log_path.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
     root.setLevel(level)

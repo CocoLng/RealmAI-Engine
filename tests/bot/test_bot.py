@@ -87,7 +87,14 @@ class TestRunBot:
     def test_run_bot_requires_token_env(self) -> None:
         from bot.bot import run_bot
 
-        with patch("bot.bot.load_dotenv"), \
+        # setup_logging() is patched out on purpose. This test only cares
+        # about the missing token, but run_bot() otherwise reconfigures the
+        # *root* logger — attaching a FileHandler that every later test in
+        # the session then writes into. Combined with the clear=True below
+        # (which wipes REALM_LOG_DIR), that is exactly how the suite used to
+        # leave an 86 KB logs/realm_*.log of MagicMock noise behind.
+        with patch("bot.bot.setup_logging"), \
+             patch("bot.bot.load_dotenv"), \
              patch.dict("os.environ", {}, clear=True), \
              pytest.raises(KeyError, match="DISCORD_BOT_TOKEN"):
             run_bot()

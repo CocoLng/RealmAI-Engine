@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from ai.client import LLMParseError, OllamaUnavailableError
+from engine.log_paths import log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,16 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_DELAYS: tuple[float, ...] = (5.0, 15.0)
 
 # Where raw LLM parse failures get dumped for offline diagnosis.
-# Override-able for tests.
-NARRATOR_FAILURES_DIR = Path("logs/narrator_failures")
+# ``None`` (the default) means "resolve from REALM_LOG_DIR at call time";
+# tests may set it to an explicit Path to override.
+NARRATOR_FAILURES_DIR: Path | None = None
+
+
+def _failures_dir() -> Path:
+    """Resolve the dump directory, honouring an explicit test override."""
+    if NARRATOR_FAILURES_DIR is not None:
+        return NARRATOR_FAILURES_DIR
+    return log_dir() / "narrator_failures"
 
 _LABEL_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -41,9 +50,10 @@ def _sanitize_label(label: str) -> str:
 def _persist_parse_failure(label: str, exc: LLMParseError) -> None:
     """Dump a raw LLM parse failure to ``logs/narrator_failures/`` for diagnosis."""
     try:
-        NARRATOR_FAILURES_DIR.mkdir(parents=True, exist_ok=True)
+        failures_dir = _failures_dir()
+        failures_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = NARRATOR_FAILURES_DIR / f"{ts}_{_sanitize_label(label)}.txt"
+        path = failures_dir / f"{ts}_{_sanitize_label(label)}.txt"
 
         system_msg = ""
         user_msg = ""

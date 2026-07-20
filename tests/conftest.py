@@ -1,11 +1,13 @@
 """Shared test fixtures for RealmAI-Engine."""
 
 import logging
+import os
 
 import pytest
 from sqlalchemy.orm import Session
 
 from db.database import Base, get_engine, get_session_factory
+from engine.log_paths import LOG_DIR_ENV
 from engine.character import AbilityScores, Character, CharacterClass, Race, create_character
 from engine.inventory import (
     DamageType,
@@ -30,15 +32,28 @@ from world.quest import Quest, QuestObjective, QuestStatus
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _suppress_file_logging():
-    """Remove file handlers so tests don't pollute logs/realm.log."""
+def _redirect_runtime_logs(tmp_path_factory):
+    """Point every runtime log sink at a temp tree for the whole session.
+
+    Three sinks resolve their path through ``REALM_LOG_DIR``
+    (:func:`engine.log_paths.log_dir`): the per-launch ``realm_*.log``, the
+    narrator parse-failure dumps, and ``beat_progression.jsonl``.
+
+    Setting the env var — rather than stripping handlers once at session
+    start, as this fixture used to — is what actually works: a test that
+    calls ``run_bot()`` re-creates a ``FileHandler`` *after* the fixture has
+    run, and every later test then logs into it. That is how the suite came
+    to append synthetic decisions into the production telemetry that
+    ``scripts/review_beat_progression.py`` aggregates, and to leave an 86 KB
+    ``realm_*.log`` of MagicMock noise per run.
+    """
+    os.environ[LOG_DIR_ENV] = str(tmp_path_factory.mktemp("realm-logs"))
+
     root = logging.getLogger()
-    file_handlers = [
-        h for h in root.handlers if isinstance(h, logging.FileHandler)
-    ]
-    for h in file_handlers:
+    for h in [h for h in root.handlers if isinstance(h, logging.FileHandler)]:
         root.removeHandler(h)
     yield
+    del os.environ[LOG_DIR_ENV]
 
 
 # ---------------------------------------------------------------------------
