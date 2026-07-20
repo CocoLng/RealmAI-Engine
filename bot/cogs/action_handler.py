@@ -208,9 +208,31 @@ class ActionHandlerCog(commands.Cog):
         result: PipelineOutput | None = None
         try:
             async with session.action_lock:
-                result = await self._process_and_render(
-                    message, session, raw_text, start,
-                )
+                # Garde anti-course (TOCTOU, spec §6) : _chain_pending_intents
+                # a vérifié l'absence de combat AVANT de relâcher action_lock ;
+                # entre ce moment et l'acquisition du lock ci-dessus pour
+                # l'intention chaînée, un AUTRE joueur peut avoir gagné le
+                # lock et bootstrappé un combat. Jamais de tour de combat
+                # consommé sans validation — on abandonne l'intention
+                # chaînée (annoncée) sans exécuter le pipeline.
+                is_chained_run = chain_budget < MAX_CHAINED_INTENTS - 1
+                if (
+                    is_chained_run
+                    and session.combat_state is not None
+                    and session.combat_state.is_active
+                ):
+                    logger.info(
+                        "ACTION chained intent dropped (combat started) "
+                        "campaign=%s text=%r",
+                        session.campaign.id, raw_text[:100],
+                    )
+                    await self._announce_dropped_intents(
+                        message.channel, [raw_text], session.language,
+                    )
+                else:
+                    result = await self._process_and_render(
+                        message, session, raw_text, start,
+                    )
         finally:
             # The action never produced a result (pipeline error, dropped
             # progress message, cancelled clarification, or an exception
@@ -252,6 +274,26 @@ class ActionHandlerCog(commands.Cog):
             message, session, result, chain_budget,
         )
 
+    async def _announce_dropped_intents(
+        self, channel: Any, intents: list[str], language: str,
+    ) -> None:
+        """Annonce les intentions non exécutées — jamais de perte silencieuse.
+
+        No-op si ``intents`` (après filtrage des entrées blanches) est vide.
+        Tolère les échecs d'envoi Discord (log warning), comme les autres
+        envois du cog — un abandon d'intention ne doit jamais faire planter
+        le pipeline.
+        """
+        filtered = [intent for intent in intents if intent.strip()]
+        if not filtered:
+            return
+        try:
+            await channel.send(
+                embed=_build_dropped_intents_embed(filtered, language),
+            )
+        except _SEND_ERRORS:
+            logger.warning("ACTION dropped-intents send failed")
+
     async def _chain_pending_intents(
         self,
         message: discord.Message,
@@ -265,8 +307,17 @@ class ActionHandlerCog(commands.Cog):
         - cap global ``MAX_CHAINED_INTENTS`` actions par message joueur ;
         - jamais de chaînage quand un combat est actif (y compris un combat
           bootstrappé par la première action) ;
-        - toute intention abandonnée est annoncée — pas de perte silencieuse.
+        - toute intention abandonnée est annoncée — pas de perte silencieuse,
+          y compris quand la PREMIÈRE action a été refusée
+          (``UnknownEntityResult``) : un refus est une condition d'arrêt,
+          on n'enchaîne jamais dessus, mais on annonce quand même.
         """
+        if isinstance(result, UnknownEntityResult):
+            await self._announce_dropped_intents(
+                message.channel, result.pending_intents, session.language,
+            )
+            return
+
         if not isinstance(result, ActionPipelineResult):
             return
         pending = [
@@ -286,17 +337,9 @@ class ActionHandlerCog(commands.Cog):
         dropped = pending[1:] if next_intent is not None else pending
 
         if dropped:
-            try:
-                await message.channel.send(
-                    embed=_build_dropped_intents_embed(
-                        dropped, session.language,
-                    ),
-                )
-            except _SEND_ERRORS:
-                logger.warning(
-                    "ACTION dropped-intents send failed campaign=%s",
-                    session.campaign.id,
-                )
+            await self._announce_dropped_intents(
+                message.channel, dropped, session.language,
+            )
 
         if next_intent is not None:
             logger.info(
@@ -525,7 +568,7 @@ class ActionHandlerCog(commands.Cog):
             result = await self._render_ambiguity(
                 progress_msg, result, message.author.id, pipeline,
                 actor_name=actor_name, raw_text=raw_text, start=start,
-                session=session,
+                session=session, channel=message.channel,
             )
         elif isinstance(result, LowConfidenceResult):
             # Même contrainte que la désambiguïsation : c'est le résultat
@@ -534,7 +577,7 @@ class ActionHandlerCog(commands.Cog):
             result = await self._render_low_confidence(
                 progress_msg, result, message.author.id, pipeline,
                 actor_name=actor_name, raw_text=raw_text, start=start,
-                session=session,
+                session=session, channel=message.channel,
             )
         elif isinstance(result, UnknownEntityResult):
             await self._render_unknown(progress_msg, result)
@@ -633,6 +676,7 @@ class ActionHandlerCog(commands.Cog):
         raw_text: str,
         start: float,
         session: Any,
+        channel: Any,
     ) -> PipelineOutput | None:
         """Run the clarification flow and return the FINAL pipeline output.
 
@@ -657,6 +701,11 @@ class ActionHandlerCog(commands.Cog):
                 ),
                 view=None,
             )
+            await self._announce_dropped_intents(
+                channel,
+                ambiguity.partial_action.pending_intents,
+                session.language,
+            )
             return None
 
         if view.chosen_entity_id is None:
@@ -669,6 +718,11 @@ class ActionHandlerCog(commands.Cog):
                     elapsed_seconds=time.monotonic() - start,
                 ),
                 view=None,
+            )
+            await self._announce_dropped_intents(
+                channel,
+                ambiguity.partial_action.pending_intents,
+                session.language,
             )
             return None
 
@@ -708,6 +762,11 @@ class ActionHandlerCog(commands.Cog):
                 ),
                 view=None,
             )
+            await self._announce_dropped_intents(
+                channel,
+                ambiguity.partial_action.pending_intents,
+                session.language,
+            )
             return None
 
         if isinstance(result, ActionPipelineResult):
@@ -730,6 +789,7 @@ class ActionHandlerCog(commands.Cog):
         raw_text: str,
         start: float,
         session: Any,
+        channel: Any,
     ) -> PipelineOutput | None:
         """Confirmation Oui/Reformuler puis reprise du pipeline.
 
@@ -756,6 +816,11 @@ class ActionHandlerCog(commands.Cog):
             await progress_msg.edit(
                 embed=discord.Embed(description=cancel_text, color=0x95A5A6),
                 view=None,
+            )
+            await self._announce_dropped_intents(
+                channel,
+                low_confidence.interpreted_action.pending_intents,
+                session.language,
             )
             return None
 
@@ -795,6 +860,11 @@ class ActionHandlerCog(commands.Cog):
                 ),
                 view=None,
             )
+            await self._announce_dropped_intents(
+                channel,
+                low_confidence.interpreted_action.pending_intents,
+                session.language,
+            )
             return None
 
         if isinstance(result, ActionPipelineResult):
@@ -803,7 +873,7 @@ class ActionHandlerCog(commands.Cog):
             return await self._render_ambiguity(
                 progress_msg, result, author_id, pipeline,
                 actor_name=actor_name, raw_text=raw_text, start=start,
-                session=session,
+                session=session, channel=channel,
             )
         elif isinstance(result, UnknownEntityResult):
             await self._render_unknown(progress_msg, result)

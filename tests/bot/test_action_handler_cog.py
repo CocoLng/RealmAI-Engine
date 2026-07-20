@@ -130,6 +130,13 @@ class FakePipelineFactory:
     def __call__(self, **kwargs: Any) -> Any:
         pipeline = MagicMock()
         pipeline.kwargs = kwargs
+        # A bare MagicMock auto-vivifies these two attributes as truthy,
+        # which routes _process_and_render into the real combat-bootstrap
+        # block (it then indexes/iterates the auto-vivified mocks and
+        # swallows the resulting TypeErrors — noisy logs, no test value).
+        # Pin them to their "nothing pending" values explicitly.
+        pipeline._pending_combat_start_embed = None
+        pipeline._pending_dice_embeds = []
 
         async def process(player_text: str, progress_callback: Any = None) -> Any:
             self.process_calls.append(player_text)
@@ -606,6 +613,29 @@ def _low_confidence_output() -> LowConfidenceResult:
     )
 
 
+def _low_confidence_output_with_pending(pending: list[str]) -> LowConfidenceResult:
+    return LowConfidenceResult(
+        interpreted_action=InterpretedAction(
+            action_type=ActionType.IMPROVISE,
+            actor_name="Aldric",
+            improvise_description="je danse",
+            raw_input="je danse et je vais au nord",
+            confidence=0.3,
+            pending_intents=pending,
+        ),
+    )
+
+
+def _dropped_intents_embeds(channel: Any) -> list[Any]:
+    """Extrait les embeds « intention(s) non exécutée(s) » envoyés sur ``channel``."""
+    embeds_sent = [
+        call.kwargs.get("embed")
+        for call in channel.send.call_args_list
+        if call.kwargs.get("embed") is not None
+    ]
+    return [e for e in embeds_sent if e.title and "Intention" in e.title]
+
+
 def _success_output() -> ActionPipelineResult:
     return ActionPipelineResult(
         narrative="Tu danses.",
@@ -678,6 +708,37 @@ class TestLowConfidenceFlow:
         await cog.on_message(_campaign_message(bot))  # type: ignore[arg-type]
 
         assert factory.process_interpreted_calls == []
+
+    @pytest.mark.asyncio
+    async def test_reformulate_announces_dropped_pending_intents(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Finding 1b — Reformuler ne doit jamais perdre silencieusement les
+        intentions chaînées après la première action à confiance basse."""
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+        factory = FakePipelineFactory(
+            _low_confidence_output_with_pending(["je vais au nord"]),
+        )
+        cog._pipeline_factory = factory
+
+        from bot.views import confirm_action_view as cav_module
+
+        async def _instant_timeout(self: Any) -> None:
+            self.confirmed = False  # Reformuler et timeout : même chemin
+
+        monkeypatch.setattr(
+            cav_module.ConfirmActionView, "wait", _instant_timeout,
+        )
+
+        msg = _campaign_message(bot)
+        await cog.on_message(msg)  # type: ignore[arg-type]
+
+        assert factory.process_interpreted_calls == []
+        dropped_embeds = _dropped_intents_embeds(msg.channel)
+        assert dropped_embeds, "expected a dropped-intents embed"
+        assert "je vais au nord" in dropped_embeds[0].description
 
 
 # ---------------------------------------------------------------------------
@@ -790,3 +851,77 @@ class TestPendingIntentChaining:
         assert factory.process_calls == ["je danse"]  # pas de 2e passe
         # L'intention abandonnée est annoncée.
         assert msg.channel.send.await_count >= 2  # progress + annonce drop
+
+    @pytest.mark.asyncio
+    async def test_unknown_entity_pending_intents_announced_never_chained(
+        self,
+    ) -> None:
+        """Finding 1a — un premier refus (entité inconnue) est une condition
+        d'arrêt : les intentions chaînées ne sont jamais rejouées, mais
+        doivent quand même être annoncées, pas perdues en silence."""
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+        unknown = UnknownEntityResult(
+            field_name="target_name",
+            raw_value="Dragon",
+            partial_action=InterpretedAction(
+                action_type=ActionType.TALK,
+                actor_name="Aldric",
+                target_name="Dragon",
+                raw_input="je parle au dragon et je vais au nord",
+                pending_intents=["je vais au nord"],
+            ),
+            refusal_narrative="Tu ne vois pas de dragon.",
+            tone="somber",
+            pending_intents=["je vais au nord"],
+        )
+        factory = FakePipelineFactory(unknown)
+        cog._pipeline_factory = factory
+
+        msg = FakeMessage(
+            content="<@9999> je parle au dragon et je vais au nord",
+            author=FakeAuthor(id=1),
+            channel=FakeChannel(id=1),
+            mentions=[bot.user],
+        )
+        await cog.on_message(msg)  # type: ignore[arg-type]
+
+        assert factory.process_calls == [
+            "je parle au dragon et je vais au nord",
+        ]  # pas de chaînage après un refus
+        dropped_embeds = _dropped_intents_embeds(msg.channel)
+        assert dropped_embeds, "expected a dropped-intents embed"
+        assert "je vais au nord" in dropped_embeds[0].description
+
+    @pytest.mark.asyncio
+    async def test_chained_run_drops_when_combat_active_at_lock_acquisition(
+        self,
+    ) -> None:
+        """Finding 2 (TOCTOU) — si un combat est devenu actif entre le check
+        de _chain_pending_intents et l'acquisition du lock pour l'intention
+        chaînée, le pipeline ne doit PAS tourner (jamais de tour de combat
+        consommé sans validation) ; l'intention chaînée elle-même est
+        annoncée comme abandonnée."""
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+
+        combat_state = MagicMock()
+        combat_state.is_active = True
+        session.combat_state = combat_state
+        session.combat_turn_manager = None
+
+        factory = FakePipelineFactory(_success_output())
+        cog._pipeline_factory = factory
+
+        msg = _campaign_message(bot)
+
+        await cog._run_pipeline(  # type: ignore[arg-type]
+            msg, session, "je vais au nord", chain_budget=0,
+        )
+
+        assert factory.process_calls == []
+        dropped_embeds = _dropped_intents_embeds(msg.channel)
+        assert dropped_embeds, "expected the chained intent to be announced as dropped"
+        assert "je vais au nord" in dropped_embeds[0].description

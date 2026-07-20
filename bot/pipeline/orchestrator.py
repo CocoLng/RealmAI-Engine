@@ -196,6 +196,11 @@ class UnknownEntityResult(BaseModel):
     partial_action: InterpretedAction
     refusal_narrative: str
     tone: Literal["dramatic", "tense", "humorous", "somber"] = "somber"
+    pending_intents: list[str] = Field(default_factory=list)
+    """Intentions chaînées non exécutées, reprises depuis
+    ``interpreted.pending_intents`` (spec §4) — un refus est une condition
+    d'arrêt : jamais de chaînage après, mais l'abandon reste annoncé par
+    le cog plutôt que perdu en silence."""
 
 
 class LowConfidenceResult(BaseModel):
@@ -397,6 +402,7 @@ class PipelineRunner:
                 partial_action=interpreted,
                 refusal_narrative=refusal.narrative,
                 tone=refusal.tone,
+                pending_intents=interpreted.pending_intents,
             )
 
         # status in {"resolved", "not_applicable"} — patch action with the
@@ -476,6 +482,7 @@ class PipelineRunner:
                 partial_action=interpreted,
                 refusal_narrative=refusal.narrative,
                 tone=refusal.tone,
+                pending_intents=interpreted.pending_intents,
             )
 
         await self._emit(progress_callback, PipelinePhase.RESOLVING_ACTION)

@@ -520,6 +520,77 @@ class TestUnknownEntity:
         # The narrator was invoked to generate the refusal
         assert len(narrator.calls) == 1
 
+    @pytest.mark.asyncio
+    async def test_unknown_entity_carries_pending_intents(
+        self,
+        cathedral: Location,
+        aldric: NPC,
+    ) -> None:
+        """Finding 1a — a refused first action must not silently drop the
+        intentions chained after it; the orchestrator forwards them onto
+        UnknownEntityResult so the cog can announce (never chain) them."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.TALK,
+                actor_name="Aldric",
+                target_name="Dragon",
+                raw_input="je parle au dragon et je vais au nord",
+                confidence=0.75,
+                pending_intents=["je vais au nord"],
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[
+                NarrativeResult(
+                    narrative="Tu ne vois aucun dragon.",
+                    tone="somber",
+                ),
+            ],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, {aldric.name: aldric},
+        )
+
+        result = await pipeline.process(
+            player_text="je parle au dragon et je vais au nord",
+        )
+
+        assert isinstance(result, UnknownEntityResult)
+        assert result.pending_intents == ["je vais au nord"]
+
+    @pytest.mark.asyncio
+    async def test_rule_failure_also_carries_pending_intents(
+        self,
+        cathedral: Location,
+        aldric: NPC,
+    ) -> None:
+        """Same fix on the sibling branch: a rule-failure refusal (ATTACK
+        with no active combat) must forward pending_intents too."""
+        interp = FakeInterpreter(
+            response=InterpretedAction(
+                action_type=ActionType.ATTACK,
+                actor_name="Aldric",
+                target_name="Père Aldric",
+                raw_input="j'attaque le prêtre et je fuis",
+                confidence=0.7,
+                pending_intents=["je fuis"],
+            ),
+        )
+        narrator = FakeNarrator(
+            responses=[NarrativeResult(narrative="(refusal)", tone="tense")],
+        )
+        pipeline = _make_pipeline(
+            interp, narrator, cathedral, npcs={aldric.name: aldric},
+        )
+
+        result = await pipeline.process(
+            player_text="j'attaque le prêtre et je fuis",
+        )
+
+        assert isinstance(result, UnknownEntityResult)
+        assert result.field_name == "rule"
+        assert result.pending_intents == ["je fuis"]
+
 
 # ---------------------------------------------------------------------------
 # Progress callback observability

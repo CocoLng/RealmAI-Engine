@@ -505,6 +505,28 @@ pas seulement capturés côté harnais) et un vrai chaînage de 2 intentions
 bout en bout (latence ~2 tours de narration assumée par le design, jamais
 mesurée en conditions réelles).
 
+**Post-revue finale (2026-07-20)** — deux trous refermés dans « tout abandon
+toujours annoncé », la revue de branche complète les avait trouvés vrais
+avant ce correctif :
+- [x] **Pertes silencieuses sur échec/annulation** — `UnknownEntityResult`
+      porte maintenant `pending_intents` (peuplé côté orchestrateur sur les
+      deux branches de refus : entité inconnue et échec de règle) ; les
+      chemins Annuler/Reformuler/timeout/reprise-en-erreur de
+      `_render_low_confidence` et `_render_ambiguity` annoncent leurs
+      intentions en attente avant de retourner `None`. Helper commun
+      `ActionHandlerCog._announce_dropped_intents` pour éviter la
+      triplication.
+- [x] **Garde anti-course (TOCTOU) chaînage/combat** — `_run_pipeline`
+      re-vérifie `combat_state.is_active` juste après avoir ré-acquis
+      `action_lock` pour une intention chaînée ; si un combat a démarré
+      entre-temps (autre joueur), l'intention chaînée est abandonnée
+      (annoncée) sans exécuter le pipeline — jamais de tour de combat
+      consommé sans validation.
+- Gates : `pytest -q` 3085 passed / 1 skipped (6 tests neufs), `ruff check .`
+  clean, `mypy` clean sur les fichiers touchés. Le flaky
+  `test_combat_persists_through_multiple_rounds` ne s'est pas manifesté sur
+  ce run.
+
 -----
 
 # Annexe — Historique clos
