@@ -444,6 +444,25 @@ class TestLockedFactsFlow:
         narration_guard.reset("camp-guard-loop")
 
 
+class TestRenderLockedFactsCap:
+    def test_render_caps_at_15_lines_deaths_first(self) -> None:
+        from unittest.mock import MagicMock
+
+        from bot.pipeline.narrate import _render_locked_facts
+        from world.story_arc import LockedFact
+        session = MagicMock()
+        facts = [LockedFact(id=f"npc_dead:N{i}", text=f"N{i} est mort.") for i in range(4)]
+        facts += [LockedFact(id=f"beat:{i}:hint", text=f"Fait {i}.") for i in range(20)]
+        session.story_arc.locked_facts = facts
+        rendered = _render_locked_facts(session)
+        lines = rendered.splitlines()
+        assert lines[0] == "[LOCKED FACTS]"
+        assert len(lines) == 1 + 15
+        # Les 4 morts sont tous là, puis les 11 faits de beat les plus récents.
+        assert sum("npc_dead:" in line for line in lines) == 4
+        assert "[beat:19:hint]" in rendered and "[beat:8:hint]" not in rendered
+
+
 class TestAntiMonotonyFlow:
     """A narration that near-verbatim repeats one of the last 2 gets ONE
     corrective retry asking for variation."""

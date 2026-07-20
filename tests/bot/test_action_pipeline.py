@@ -2547,7 +2547,7 @@ class TestBeatCompletionIndexing:
             narrative_hint="A breach opens in the wall.",
             state_flags={"breach_open": True},
         )
-        await runner._apply_beat_effects(effects)
+        await runner._apply_beat_effects(effects, beat_number=1)
 
         # narrative_hint indexed:
         indexer.index_revealed_fact.assert_any_call(
@@ -2574,4 +2574,4 @@ class TestBeatCompletionIndexing:
             narrative_hint="A breach opens.", state_flags={"breach_open": True},
         )
         # Must not raise.
-        await runner._apply_beat_effects(effects)
+        await runner._apply_beat_effects(effects, beat_number=1)

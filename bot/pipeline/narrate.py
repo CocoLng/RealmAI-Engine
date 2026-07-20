@@ -107,19 +107,33 @@ def assemble_context(
     return "\n\n".join(lines)
 
 
+_LOCKED_FACTS_MAX_LINES = 15
+"""Cap on the [LOCKED FACTS] prompt block — deaths first, then the most
+recent beat facts. Bounds prompt growth on long campaigns (spec §2.2)."""
+
+
 def _render_locked_facts(session: "GameSession") -> str:
     """Render the [LOCKED FACTS] block from the arc's locked facts (H17).
 
     Pure in-memory read — safe on the event loop. Empty string when the
-    session has no arc or no facts.
+    session has no arc or no facts. Capped at
+    :data:`_LOCKED_FACTS_MAX_LINES`: NPC deaths always win a slot, then the
+    most recent beat facts fill what remains. Never mutates
+    ``arc.locked_facts`` — only reads a capped view for rendering.
     """
     arc = getattr(session, "story_arc", None)
     facts = getattr(arc, "locked_facts", None) if arc is not None else None
     # isinstance guard: tests drive the pipeline with MagicMock sessions
     if not isinstance(facts, list) or not facts:
         return ""
+    deaths = [f for f in facts if f.id.startswith("npc_dead:")]
+    others = [f for f in facts if not f.id.startswith("npc_dead:")]
+    kept = deaths[:_LOCKED_FACTS_MAX_LINES]
+    remaining = _LOCKED_FACTS_MAX_LINES - len(kept)
+    if remaining > 0 and others:
+        kept += others[-remaining:]
     lines = ["[LOCKED FACTS]"]
-    lines += [f"- [{fact.id}] {fact.text}" for fact in facts]
+    lines += [f"- [{fact.id}] {fact.text}" for fact in kept]
     return "\n".join(lines)
 
 

@@ -7,6 +7,7 @@ from engine.character import AbilityScores, CharacterClass, Race
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, NPCDisposition
+from world.story_arc import StoryArc, StoryBeat
 
 
 # ---------------------------------------------------------------------------
@@ -188,3 +189,50 @@ class TestCampaign:
         restored = Campaign.model_validate(data)
         assert restored.id == sample_campaign.id
         assert restored.name == sample_campaign.name
+
+
+# ---------------------------------------------------------------------------
+# StoryArc — append_beat_locked_facts (coherence gate, task 6)
+# ---------------------------------------------------------------------------
+
+
+def _make_beat(n: int) -> StoryBeat:
+    return StoryBeat(
+        beat_number=n, title="B", description="d", location_hint="l",
+        encounter_type="social",
+    )
+
+
+class TestAppendBeatLockedFacts:
+    def _arc(self) -> StoryArc:
+        return StoryArc(
+            campaign_id="c1", theme="t", premise="Une longue prémisse valide.",
+            beats=[_make_beat(n) for n in range(1, 9)],
+            villain_name="V", villain_motivation="m",
+        )
+
+    def test_explicit_facts_and_hint_are_locked(self) -> None:
+        from world.story_arc import BeatEffects, append_beat_locked_facts
+        arc = self._arc()
+        effects = BeatEffects(
+            locked_facts=["Le pont de pierre est effondré."],
+            narrative_hint="La herse de la crypte est levée.",
+        )
+        append_beat_locked_facts(arc, effects, beat_number=3)
+        ids = [f.id for f in arc.locked_facts]
+        assert ids == ["beat:3:0", "beat:3:hint"]
+        assert arc.locked_facts[1].text == "La herse de la crypte est levée."
+
+    def test_append_is_idempotent(self) -> None:
+        from world.story_arc import BeatEffects, append_beat_locked_facts
+        arc = self._arc()
+        effects = BeatEffects(narrative_hint="La herse est levée.")
+        append_beat_locked_facts(arc, effects, beat_number=3)
+        append_beat_locked_facts(arc, effects, beat_number=3)
+        assert len(arc.locked_facts) == 1
+
+    def test_empty_effects_add_nothing(self) -> None:
+        from world.story_arc import BeatEffects, append_beat_locked_facts
+        arc = self._arc()
+        append_beat_locked_facts(arc, BeatEffects(), beat_number=3)
+        assert arc.locked_facts == []

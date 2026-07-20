@@ -208,6 +208,18 @@ class ArcGenerator:
                         k: (v if isinstance(v, bool) else bool(v))
                         for k, v in flags.items()
                     }
+                raw_facts = on_complete.get("locked_facts")
+                if isinstance(raw_facts, list):
+                    cleaned: list[str] = []
+                    seen_facts: set[str] = set()
+                    for entry in raw_facts:
+                        if not isinstance(entry, str):
+                            continue
+                        text = entry.strip()[:200]
+                        if text and text.lower() not in seen_facts:
+                            seen_facts.add(text.lower())
+                            cleaned.append(text)
+                    on_complete["locked_facts"] = cleaned[:2]
             ArcGenerator._sanitize_beat_objectives(beat, villain_name=villain_name)
 
         ArcGenerator._scaffold_beat_effects(data)

@@ -470,7 +470,7 @@ class TestBeatEffectsIndexingOffLoopM4:
             state_flags={"breach_open": True},
         )
 
-        hint = await runner._apply_beat_effects(effects)
+        hint = await runner._apply_beat_effects(effects, beat_number=1)
 
         assert hint == "A breach opens."
         assert len(recorded) == 2  # narrative_hint + one truthy flag

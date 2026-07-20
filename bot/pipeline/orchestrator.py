@@ -610,7 +610,9 @@ class PipelineRunner:
             if should_advance:
                 beat_completed = True
                 old_beat = arc.beats[arc.current_beat_index]
-                hint = await self._apply_beat_effects(old_beat.on_complete)
+                hint = await self._apply_beat_effects(
+                    old_beat.on_complete, beat_number=old_beat.beat_number,
+                )
                 if hint:
                     outcome = outcome.model_copy(update={
                         "outcome_facts": (outcome.outcome_facts + " " + hint).strip(),
@@ -780,7 +782,9 @@ class PipelineRunner:
         )
         return result
 
-    async def _apply_beat_effects(self, effects: BeatEffects) -> str:
+    async def _apply_beat_effects(
+        self, effects: BeatEffects, *, beat_number: int,
+    ) -> str:
         """Apply beat completion effects to the current location.
 
         Returns a narrative hint string for the narrator.
@@ -801,6 +805,8 @@ class PipelineRunner:
                         fact=f"State flag set: {flag}",
                     )
 
+        self._lock_beat_facts(effects, beat_number)
+
         loc = self.location
         if loc is None:
             return effects.narrative_hint
@@ -820,6 +826,16 @@ class PipelineRunner:
         loc.state_flags.update(effects.state_flags)
 
         return effects.narrative_hint
+
+    def _lock_beat_facts(self, effects: BeatEffects, beat_number: int) -> None:
+        """Phase 2 porte de cohérence — beat consequences become locked facts."""
+        from world.story_arc import append_beat_locked_facts
+
+        session = getattr(self, "session", None)
+        arc = getattr(session, "story_arc", None) if session is not None else None
+        if arc is None or not isinstance(getattr(arc, "locked_facts", None), list):
+            return
+        append_beat_locked_facts(arc, effects, beat_number)
 
     def _schedule_story_director(
         self,
