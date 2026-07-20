@@ -1,346 +1,159 @@
-"""Hard incoherence rules (R1.*) — direct contradiction with engine state."""
+"""Hard incoherence rules (R1.*) — thin adapters over the shared prod core.
+
+The rule logic lives in ``memory/coherence_rules.py`` (chantier « porte de
+cohérence »). These wrappers keep the simulator-facing signature
+``(narration, state, diff, history)`` and the ``IncoherenceAlert`` output
+so the checker, runner and reports stay untouched.
+"""
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
+from memory.coherence_rules import (
+    CoherenceSnapshot,
+    CoherenceViolation,
+    LockedFactSnapshot,
+)
+from memory.coherence_rules import check_hp_mismatch as _core_hp_mismatch
+from memory.coherence_rules import (
+    check_item_use_without_owning as _core_item_use,
+)
+from memory.coherence_rules import (
+    check_location_mismatch as _core_location_mismatch,
+)
+from memory.coherence_rules import (
+    check_locked_fact_violation as _core_locked_fact,
+)
+from memory.coherence_rules import check_npc_status as _core_npc_status
+from memory.coherence_rules import check_phantom_npc as _core_phantom_npc
+from memory.coherence_rules import check_zone_violation as _core_zone_violation
 from tests.simulation.records import IncoherenceAlert
 
-# Active-verb patterns (French) that suggest the NPC is acting/speaking.
-_NPC_ACTIVE_PATTERN = re.compile(
-    r"\b(parle|dit|s'?ad?dresse|attaque|s'avance|sourit|hoche|crie|murmure|"
-    r"r[ée]pond|demande|propose|tend|frappe|lance)\b",
-    re.IGNORECASE,
-)
 
-
-def _snippet_around(text: str, needle: str, radius: int = 80) -> str:
-    """Return up to 200 chars around the first occurrence of needle."""
-    idx = text.lower().find(needle.lower())
-    if idx < 0:
-        return text[:200]
-    start = max(0, idx - radius)
-    end = min(len(text), idx + len(needle) + radius)
-    snippet = text[start:end].strip()
-    return snippet[:200]
-
-
-def check_npc_status(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
-) -> list[IncoherenceAlert]:
-    """R1.npc_status — a dead NPC speaks or acts in the narration."""
-    alerts: list[IncoherenceAlert] = []
-    for npc in state.npcs.values():
-        is_dead = npc.status == "dead" or npc.hp <= 0
-        if not is_dead:
-            continue
-        # NPC name must appear AND an active verb must appear nearby in the same sentence.
-        if npc.name.lower() not in narration.lower():
-            continue
-        # Check each sentence containing the NPC name for an active verb.
-        for sentence in re.split(r"[.!?]", narration):
-            if npc.name.lower() not in sentence.lower():
-                continue
-            if _NPC_ACTIVE_PATTERN.search(sentence):
-                alerts.append(
-                    IncoherenceAlert(
-                        severity="hard",
-                        category="dead_npc_speaks",
-                        turn=getattr(state, "current_turn", 0),
-                        rule="R1.npc_status",
-                        narration_snippet=_snippet_around(narration, npc.name),
-                        expected=f"{npc.name} is dead (status={npc.status}, hp={npc.hp})",
-                    )
-                )
-                break
-    return alerts
-
-
-# Common French capitalized nouns that are NOT proper names (whitelist).
-_PROPER_NOUN_WHITELIST: frozenset[str] = frozenset({
-    "Le", "La", "Les", "L", "Un", "Une", "Des", "Du", "De", "Dans", "Sur",
-    "Avec", "Sans", "Pour", "Par", "Vers", "Chez", "Vous", "Nous", "Il",
-    "Elle", "Ils", "Elles", "Je", "Tu", "On", "Que", "Qui", "Quoi",
-    "Dieu", "Dieux", "Roi", "Reine", "Capitaine", "Seigneur", "Dame",
-    "Maître", "Madame", "Monsieur", "Père", "Mère", "Frère", "Sœur",
-    "Or", "Mais", "Et", "Donc", "Car", "Aussi", "Si", "Alors", "Puis",
-    "Tout", "Tous", "Toute", "Toutes", "Cette", "Ce", "Ces", "Ses",
-    "Son", "Sa", "Leur", "Leurs", "Mon", "Ma", "Mes", "Notre", "Votre",
-})
-
-_PROPER_NOUN_RE = re.compile(r"\b([A-ZÉÈÊÀÂÔÛÎ][a-zéèêàâôûîç']{2,})\b")
-
-
-def _canonical_npc_names(state: Any) -> set[str]:
-    """Lowercase set of registered NPC names + first-word short forms.
-
-    Registry entries like ``"Elara, la Gardienne des Marbres"`` are
-    surfaced both verbatim and as ``"elara"`` so the short form the
-    narrator naturally falls back to is accepted as canonical.
-    """
-    result: set[str] = set()
-    for n in state.npcs:
-        result.add(n.lower())
-        words = n.split()
-        if words:
-            head = words[0].rstrip(",.;:!?")
-            if head:
-                result.add(head.lower())
-    return result
-
-
-def _location_name_words(state: Any) -> set[str]:
-    """Lowercase set of every word appearing in a known location name.
-
-    Locations like ``"Salle des échos"`` contribute ``salle``, ``des``,
-    ``échos``, and the full ``"salle des échos"``. The regex that drives
-    :func:`check_phantom_npc` matches individual capitalized tokens, so
-    we need each token of a multi-word location to be recognised — not
-    only the full string.
-    """
-    result: set[str] = set()
-    for loc in getattr(state, "locations_known", []) or []:
-        result.add(loc.lower())
-        for token in loc.split():
-            cleaned = token.rstrip(",.;:!?")
-            if cleaned:
-                result.add(cleaned.lower())
-    return result
-
-
-_ITEM_USE_RE = re.compile(
-    r"\b(utilise|boit|consomme|brandit|d[ée]gaine|enfile|active)\s+"
-    r"(le|la|les|l'|un|une|des|sa|son|ses|ma|mon|mes|la grande|le grand)\s+"
-    r"([A-Za-zÀ-ÿ' -]{3,40})",
-    re.IGNORECASE,
-)
-
-
-def check_item_use_without_owning(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
-) -> list[IncoherenceAlert]:
-    """R1.item_use_without_owning — character uses an item missing from inventory."""
-    alerts: list[IncoherenceAlert] = []
+def snapshot_from_sim(state: Any, history: list[Any]) -> CoherenceSnapshot:
+    """Map the simulator's state + history tail onto the neutral snapshot."""
+    last = history[-1] if history and isinstance(history[-1], dict) else {}
     inv = getattr(state, "inventory", None)
-    if inv is None:
-        return alerts
-    owned = {item.lower() for item in getattr(inv, "items", [])}
-    for match in _ITEM_USE_RE.finditer(narration):
-        item_raw = match.group(3).strip().rstrip(".")
-        item_text = item_raw.lower()
-        if not item_text:
-            continue
-        # Match if any owned item name appears in the matched span.
-        matched_owned = any(o in item_text or item_text in o for o in owned)
-        if matched_owned:
-            continue
-        alerts.append(
-            IncoherenceAlert(
-                severity="hard",
-                category="item_use_without_owning",
-                turn=getattr(state, "current_turn", 0),
-                rule="R1.item_use_without_owning",
-                narration_snippet=_snippet_around(narration, match.group(0)),
-                expected=f"Item '{item_raw}' is not in inventory (owned: {sorted(owned)})",
-            )
-        )
-    return alerts
+    combat_state = getattr(state, "combat_state", None)
+    facts = [
+        LockedFactSnapshot(id=str(f.get("id", "")), text=str(f.get("text", "")))
+        for f in (last.get("locked_facts", []) or [])
+        if isinstance(f, dict)
+    ]
+    recent = [
+        h.get("narration", "")
+        for h in (history[-5:] if history else [])
+        if isinstance(h, dict) and h.get("narration")
+    ]
+    return CoherenceSnapshot(
+        dead_npcs=[
+            npc.name for npc in state.npcs.values()
+            if getattr(npc, "status", None) == "dead" or getattr(npc, "hp", 1) <= 0
+        ],
+        known_npc_names=list(state.npcs),
+        player_names=list(getattr(state, "player_names", [])),
+        current_location=getattr(
+            getattr(state, "current_location", None), "name", None,
+        ),
+        known_locations=list(
+            last.get("location_known", [])
+            or getattr(state, "locations_known", [])
+            or []
+        ),
+        known_factions=list(getattr(state, "factions_known", []) or []),
+        moved_this_turn=bool(last.get("moved_this_turn")),
+        actor_inventory=list(getattr(inv, "items", [])) if inv is not None else [],
+        player_hp_ratio=float(getattr(state, "player_hp_ratio", 1.0)),
+        combat_active=bool(getattr(state, "combat_active", False)),
+        combat_zones=(
+            list(getattr(combat_state, "zones", []))
+            if combat_state is not None else []
+        ),
+        locked_facts=facts,
+        recent_narrations=recent,
+    )
 
 
-_WOUNDED_RE = re.compile(
-    r"\b(agonise|chancelle|s'effondre|gri[èe]vement bless[ée]|au bord de la mort|"
-    r"à l'agonie|mourant[e]?)\b",
-    re.IGNORECASE,
-)
-
-
-def check_hp_mismatch(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
+def _to_alerts(
+    violations: list[CoherenceViolation], state: Any, category: str,
 ) -> list[IncoherenceAlert]:
-    """R1.hp_mismatch — narration claims wounded/dying while player HP ≥ 80%."""
-    match = _WOUNDED_RE.search(narration)
-    if not match:
-        return []
-    ratio = getattr(state, "player_hp_ratio", 1.0)
-    if ratio < 0.8:
-        return []
     return [
         IncoherenceAlert(
-            severity="hard",
-            category="hp_mismatch",
+            severity=v.severity,
+            category=category,
             turn=getattr(state, "current_turn", 0),
-            rule="R1.hp_mismatch",
-            narration_snippet=_snippet_around(narration, match.group(0)),
-            expected=(
-                f"Player HP = {state.player_hp}/{state.player_max_hp} "
-                f"(ratio {ratio:.2f}), but narration describes wounding"
-            ),
+            rule=v.rule,
+            narration_snippet=v.snippet,
+            expected=v.expected,
         )
+        for v in violations
     ]
 
 
-def check_location_mismatch(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
+def check_npc_status(
+    narration: str, state: Any, diff: dict[str, list[Any]], history: list[Any],
 ) -> list[IncoherenceAlert]:
-    """R1.location_mismatch — a known location other than current is described as present."""
-    current = getattr(state.current_location, "name", None)
-    if current is None:
+    """R1.npc_status — a dead NPC speaks or acts in the narration."""
+    snap = snapshot_from_sim(state, history)
+    return _to_alerts(_core_npc_status(narration, snap), state, "dead_npc_speaks")
+
+
+def check_item_use_without_owning(
+    narration: str, state: Any, diff: dict[str, list[Any]], history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.item_use_without_owning — item used while missing from inventory."""
+    if getattr(state, "inventory", None) is None:
         return []
+    snap = snapshot_from_sim(state, history)
+    return _to_alerts(
+        _core_item_use(narration, snap), state, "item_use_without_owning",
+    )
+
+
+def check_hp_mismatch(
+    narration: str, state: Any, diff: dict[str, list[Any]], history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.hp_mismatch — wounded prose while player HP ≥ 80 %."""
+    snap = snapshot_from_sim(state, history)
+    return _to_alerts(_core_hp_mismatch(narration, snap), state, "hp_mismatch")
+
+
+def check_location_mismatch(
+    narration: str, state: Any, diff: dict[str, list[Any]], history: list[Any],
+) -> list[IncoherenceAlert]:
+    """R1.location_mismatch — another known location described as present."""
     if not history:
         return []
-    last = history[-1] if isinstance(history[-1], dict) else {}
-    if last.get("moved_this_turn"):
-        return []
-    known = last.get("location_known", []) or []
-    alerts: list[IncoherenceAlert] = []
-    narration_lower = narration.lower()
-    for loc_name in known:
-        if loc_name == current:
-            continue
-        if loc_name.lower() in narration_lower:
-            alerts.append(
-                IncoherenceAlert(
-                    severity="hard",
-                    category="location_mismatch",
-                    turn=getattr(state, "current_turn", 0),
-                    rule="R1.location_mismatch",
-                    narration_snippet=_snippet_around(narration, loc_name),
-                    expected=(
-                        f"Current location is '{current}' and player did not move "
-                        f"this turn, but narration mentions '{loc_name}'"
-                    ),
-                )
-            )
-    return alerts
+    snap = snapshot_from_sim(state, history)
+    return _to_alerts(
+        _core_location_mismatch(narration, snap), state, "location_mismatch",
+    )
 
 
 def check_phantom_npc(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
+    narration: str, state: Any, diff: dict[str, list[Any]], history: list[Any],
 ) -> list[IncoherenceAlert]:
-    """R1.phantom_npc — capitalized proper noun absent from known entities.
-
-    A proper noun is "known" if its lowercase form matches any of:
-    - a registered NPC name (full form or first-word short form),
-    - a player character name,
-    - a known location name or one of its individual words.
-    """
-    alerts: list[IncoherenceAlert] = []
-    known_npcs = _canonical_npc_names(state)
-    known_players = {p.lower() for p in getattr(state, "player_names", [])}
-    known_locations = _location_name_words(state)
-    seen: set[str] = set()
-    for match in _PROPER_NOUN_RE.finditer(narration):
-        word = match.group(1)
-        if word in _PROPER_NOUN_WHITELIST:
-            continue
-        lower = word.lower()
-        if lower in known_npcs or lower in known_players or lower in known_locations:
-            continue
-        if lower in seen:
-            continue
-        seen.add(lower)
-        alerts.append(
-            IncoherenceAlert(
-                severity="hard",
-                category="phantom_npc",
-                turn=getattr(state, "current_turn", 0),
-                rule="R1.phantom_npc",
-                narration_snippet=_snippet_around(narration, word),
-                expected=f"Proper noun '{word}' is not in NPC registry or player names",
-            )
-        )
-    return alerts
-
-
-_NEGATION_RE = re.compile(
-    r"\b(n['']\w*\s+(plus|pas|jamais)|n['']\s*(plus|pas|jamais)|aucun[e]?|"
-    r"sans|d[ée]truit[e]?|effondr[ée]|disparu[e]?|ras[ée]|an[ée]anti[e]?)\b",
-    re.IGNORECASE,
-)
-
-
-def _fact_subject(fact_text: str) -> str:
-    """Extract the noun-phrase subject of a locked fact (first 4 words)."""
-    words = fact_text.split()
-    return " ".join(words[:4]).rstrip(".").lower()
+    """R1.phantom_npc — capitalized proper noun absent from known entities."""
+    snap = snapshot_from_sim(state, history)
+    return _to_alerts(_core_phantom_npc(narration, snap), state, "phantom_npc")
 
 
 def check_locked_fact_violation(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
+    narration: str, state: Any, diff: dict[str, list[Any]], history: list[Any],
 ) -> list[IncoherenceAlert]:
     """R1.locked_fact_violation — narration negates a locked world fact."""
     if not history:
         return []
-    last = history[-1] if isinstance(history[-1], dict) else {}
-    facts = last.get("locked_facts", []) or []
-    alerts: list[IncoherenceAlert] = []
-    narration_lower = narration.lower()
-    for fact in facts:
-        subject = _fact_subject(fact["text"])
-        if not subject or subject not in narration_lower:
-            continue
-        # Look for negation in a window of 60 chars around the subject mention.
-        idx = narration_lower.find(subject)
-        window = narration[max(0, idx - 20) : idx + len(subject) + 60]
-        if _NEGATION_RE.search(window):
-            alerts.append(
-                IncoherenceAlert(
-                    severity="hard",
-                    category="locked_fact_violation",
-                    turn=getattr(state, "current_turn", 0),
-                    rule="R1.locked_fact_violation",
-                    narration_snippet=_snippet_around(narration, subject),
-                    expected=f"Locked fact: '{fact['text']}'",
-                )
-            )
-    return alerts
-
-
-_ZONE_RE = re.compile(r"\bzone\s+([a-zà-ÿ]+(?:\s+[a-zà-ÿ]+)?)\b", re.IGNORECASE)
+    snap = snapshot_from_sim(state, history)
+    return _to_alerts(
+        _core_locked_fact(narration, snap), state, "locked_fact_violation",
+    )
 
 
 def check_zone_violation(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
+    narration: str, state: Any, diff: dict[str, list[Any]], history: list[Any],
 ) -> list[IncoherenceAlert]:
-    """R1.zone_violation — narration references a combat zone that doesn't exist."""
-    if not state.combat_active or state.combat_state is None:
-        return []
-    valid = {z.lower() for z in getattr(state.combat_state, "zones", [])}
-    alerts: list[IncoherenceAlert] = []
-    for match in _ZONE_RE.finditer(narration):
-        zone = match.group(1).strip().lower()
-        if zone in valid:
-            continue
-        alerts.append(
-            IncoherenceAlert(
-                severity="hard",
-                category="zone_violation",
-                turn=getattr(state, "current_turn", 0),
-                rule="R1.zone_violation",
-                narration_snippet=_snippet_around(narration, match.group(0)),
-                expected=f"Zone '{zone}' not in combat zones {sorted(valid)}",
-            )
-        )
-    return alerts
+    """R1.zone_violation — narration references a nonexistent combat zone."""
+    snap = snapshot_from_sim(state, history)
+    return _to_alerts(_core_zone_violation(narration, snap), state, "zone_violation")
