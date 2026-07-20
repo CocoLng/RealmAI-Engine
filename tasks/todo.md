@@ -2,10 +2,11 @@
 
 Commit at the end of a phase, do not co author claude.
 
-> **État au 2026-07-18.** `main` = **2890 tests verts**, `ruff` clean,
-> **`mypy` 0 erreur** sur 334 fichiers. Les **9 chantiers de l'audit
+> **État au 2026-07-20.** `main` = **2913 tests verts**, `ruff` clean,
+> **`mypy` 0 erreur** sur 335 fichiers. Les **9 chantiers de l'audit
 > 2026-06-10 sont clos et mergés**, les 5 critiques compris. Aucune branche
-> en attente. Rien n'a été poussé sur le remote.
+> en attente. `main` est **poussé et à jour avec `origin/main`**, la CI
+> GitHub est verte sur le HEAD.
 
 ## Objectif, en trois temps
 
@@ -239,15 +240,21 @@ Vérifier avant : `git branch --merged main`.
 
 ### 3.2 — Documentation périmée
 
-- [ ] **`CLAUDE.md` annonce « Phase 1 — Game engine without AI [CURRENT] »**
-      alors que les phases 1 à 3 sont livrées. Trois phases de retard, dans le
-      fichier que **chaque agent lit en premier**. À corriger en priorité : ça
-      oriente mal toute session qui démarre. Le README, lui, est juste.
-- [ ] `CLAUDE.md` — la « Project Structure » liste des fichiers qui n'existent
-      plus (`engine/character.py` devenu un package, `bot/views/combat_view.py`
-      renommé `combat_action_view.py`, `world/facts.py`/`npcs.py`/`locations.py`
-      jamais créés sous ces noms, `bot/cogs/character.py` documenté avec
-      `/create_character` supprimé)
+- [x] **Statut de phase de `CLAUDE.md`** — corrigé : Phase 4 marquée `[CURRENT]`,
+      phases 1-3 `✅ shipped`. (Vérifié le 2026-07-20 : c'était déjà fait, la
+      case était restée ouverte.)
+- [x] `CLAUDE.md` — « Project Structure » : les 60 chemins de l'arbre ont été
+      vérifiés un par un le 2026-07-20, **zéro manquant**. Ajoutés au passage :
+      `engine/combat_trigger.py`, `engine/starter_gear.py`, `bot/combat_truce.py`
+      (vivants en prod, absents de l'arbre).
+- [x] **Cadence du Story Director tranchée (2026-07-20)** — le code fait
+      `% 6` + 3 déclencheurs (fin de combat, drift, `/story_catch_up`) alors que
+      `CLAUDE.md`, `README.md` et `ARCHITECTURE.md` annonçaient « ~20 ». Corrigé
+      dans les trois. À ne pas confondre avec les **résumés mémoire**, eux bien
+      à 20 (`memory/summarizer.py:SUMMARY_INTERVAL`).
+- [x] Compteurs faux remis d'équerre : 26 → **25** objets, 17 → **18**
+      conditions, 2890 → **2913** tests, 22/19 → **24/21** specs/plans,
+      MCP 7 → **8** outils.
 - [x] **Passe de cohérence `docs/internal/*.md` faite (2026-07-19)** — audit
       par agent (60+ écarts vérifiés contre le code) puis corrections : 12
       fichiers, +118/−119. Les plus graves : STATE.md annonçait « non fait »

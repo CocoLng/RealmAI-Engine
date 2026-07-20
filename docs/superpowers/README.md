@@ -25,8 +25,8 @@ plans/2026-04-25-beat-progression-engine.md
 
 | Dossier | Contenu | Quand le consulter |
 |---|---|---|
-| [`specs/`](specs/) | Specs de design (22) : intention, contraintes, alternatives écartées, schémas data | Comprendre **pourquoi** une feature existe sous sa forme actuelle, ou avant un refactor important du même domaine |
-| [`plans/`](plans/) | Plans d'implémentation (19) : découpage en phases, ordre des PRs, gates, tests à écrire | Reconstituer **comment** une feature a été livrée, ou s'inspirer d'un plan similaire pour un nouveau chantier |
+| [`specs/`](specs/) | Specs de design (24) : intention, contraintes, alternatives écartées, schémas data | Comprendre **pourquoi** une feature existe sous sa forme actuelle, ou avant un refactor important du même domaine |
+| [`plans/`](plans/) | Plans d'implémentation (21) : découpage en phases, ordre des PRs, gates, tests à écrire | Reconstituer **comment** une feature a été livrée, ou s'inspirer d'un plan similaire pour un nouveau chantier |
 
 ## Quand utiliser ces docs
 

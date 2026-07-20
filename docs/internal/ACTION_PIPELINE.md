@@ -121,7 +121,7 @@ Checks :
 | `IMPROVISE` flaggé `is_lethal_intent=True` | `LETHAL_INTENT` | `PLAYERS` | `detect_combat_trigger` — path IMPROVISE |
 | `INTERACT` sur `Location.combat_triggers[target]` | `AMBUSH` | `NPCS` (party surprise) | `detect_combat_trigger` — path INTERACT (dormant : `hasattr` guard) |
 | `TALK` dépassant l'`aggression_threshold` d'un PNJ | `PROVOCATION` | décidé par le resolver TRUCE | Reserved |
-| Beat scripté combat au lancement/advancement | `SCRIPTED_BEAT` | décidé par le générateur d'arc | Called from `bot/campaign_launcher.py` |
+| Beat scripté combat au lancement/advancement | `SCRIPTED_BEAT` | décidé par le générateur d'arc | Called from `bot/cogs/session.py` (lancement de campagne) |
 
 `enter_combat(session, trigger)` assemble un `CombatState` party-wide (tous les PCs + les enemies nommés dans `trigger.enemy_names`, résolus via `session.npcs`) et le stocke sur `session.combat_state`. Raise `ValueError` si aucun enemy trouvable. L'initiative et la condition `SURPRISED` sont appliquées par `engine.combat.start_combat(combatants, trigger)` — pas par `enter_combat`. `CombatTrigger` / `CombatTriggerKind` / `InitiativeSide` vivent dans `engine/combat_trigger.py` pour que `engine/` puisse les importer sans violer la règle « engine ne dépend jamais de bot/ai ».
 

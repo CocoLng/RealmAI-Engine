@@ -77,7 +77,7 @@ Modèles in-memory : `Campaign`, `NPC`, `Location`, `Quest`, `StoryArc` (+ `Stor
 - `bot.py` : `RealmBot`, chargement des 7 cogs + `test_bridge` (si `TEST_MODE=true`).
 - `cogs/` : `rolls`, `session`, `character`, `inventory`, `combat`, `action_handler`, `hint`, `test_bridge` (l'ancien `exploration` a été supprimé, remplacé par le free-text `action_handler`).
 - `pipeline/` : l'orchestration des 6 phases (`orchestrator.py::PipelineRunner`, phases dans `interpret.py` / `resolve.py` / `narrate.py`) ; `action_pipeline.py` est une façade de compatibilité (voir [ACTION_PIPELINE.md](ACTION_PIPELINE.md)).
-- `campaign_launcher.py` : orchestrateur d'onboarding (arc + location + persos + gear en parallèle).
+- `lobby_state.py` : état du lobby d'onboarding (roster, statuts joueur, résultat de la pré-génération arc + location). L'orchestration vit dans `cogs/session.py` ; l'ancien `campaign_launcher.py` a été supprimé.
 - `game_session.py` : conteneur in-memory d'une campagne active (chars, inv, npcs, arc, lock asyncio).
 - `scene_hydration.py` : promeut les NPCs string de `Location.npcs_present` en vraies lignes DB.
 - `story_bible_logger.py` : log Markdown append-only par campagne (`logs/campaigns/<id>.md`).

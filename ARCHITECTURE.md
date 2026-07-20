@@ -69,7 +69,7 @@ bot orchestrates everything else. (Guard test:
 |---|---|
 | `dice.py` | `NdM+X` parser, d20 check with 6 outcome tiers |
 | `character/` | `Character`, `AbilityScores`, races (7), classes (6), XP, level-up, presets, random stats |
-| `inventory.py` | Items catalogue (25+), 9 slots, attunement, weight, AC |
+| `inventory.py` | Items catalogue (25), 9 slots, attunement, weight, AC |
 | `spells.py` | Spell catalogue (~20 SRD), slots, cantrip scaling |
 | `conditions.py` | 17 SRD conditions + advantage/disadvantage effects, `consume_surprise_if_present`, `check_concentration_save` |
 | `combat.py` | Initiative (3 cases), attacks, saves, death saves, `apply_damage`, `advance_turn`, `check_combat_end`, `record_combat_event` |
@@ -104,7 +104,7 @@ imports too).
 | `world_generator.py` | qwen3.5:9b | Locations, NPCs, items, combat zones + triggers |
 | `arc_generator.py` | qwen3.5:9b | 10-15 beats with calibrated `objectives[]`, boss villain stat block |
 | `beat_judge.py` | qwen3.5:4b | Per-beat `judge_rubric` → confidence + reasoning |
-| `story_director.py` | qwen3.5:9b | Periodic coherence check (~20 turns) |
+| `story_director.py` | qwen3.5:9b | Coherence check. Cadence decided by `bot/pipeline/orchestrator.py::should_run_director`: every 6th interaction, **or** right after a combat ends, **or** when the `DriftTracker` flags a stale narrator, **or** on an explicit `force` |
 | `entity_resolver.py` | qwen3.5:4b (fallback) | Rule-based first: exact → FR lemma → fuzzy → LLM fallback |
 | `objective_recipes.py` | — | Recipe table + `scaffold_objectives()` (pure Python safety net) |
 | `scene_context.py` | — | Snapshot of what the acting character perceives |
@@ -179,14 +179,18 @@ Entry point: `main.py` → `bot.bot.run_bot()`.
 | `llm_retry.py` | Exponential backoff (5s, 15s) on `OllamaUnavailableError` |
 | `i18n.py` | Static FR/EN labels (races, classes, kits) |
 | `world_navigation.py` | MOVE + location-change helpers |
+| `npc_prefetch.py` | Background NPC-sheet pre-generation (4b) scheduled after scene hydration, so the first TALK skips its 18-27 s lazy call |
+| `location_prefetch.py` | Background pre-generation (9b) of the current location's neighbors on arrival, so the next MOVE finds a generated row instead of paying ~57-80 s inline |
+| `prefetch_gate.py` | Coordination for both prefetchers: one background generation in flight process-wide, and never while `session.action_lock` is held |
+| `logging_config.py` | `setup_logging()` — console + per-launch file handler, `extra_payload` dumped as single-line JSON |
 | `utils/channel_manager.py` | Channel creation, permission overrides, archival |
 | `utils/arc_tracker.py` | Arc tracker pinned message manager |
 
 ### `mcp_discord/` — MCP test rig
 
-Stdio MCP server exposing 7 tools to Claude Code (read messages, send
-command, click button, submit modal, select option, wait for response,
-game state). Used to drive a separate "tester bot" against a live instance
+Stdio MCP server exposing 8 tools to Claude Code (status, send command,
+read messages, click button, select option, submit modal, wait for
+response, game state). Used to drive a separate "tester bot" against a live instance
 of the game in a dedicated Discord channel. Not part of the runtime — only
 loaded under `TEST_MODE`.
 
@@ -407,7 +411,7 @@ Plus one safety invariant specific to combat:
 
 ## 9. Testing topology
 
-- ~2 200 unit tests across `tests/{engine, ai, bot, memory, db, world}/`
+- ~2 850 unit tests across `tests/{engine, ai, bot, memory, db, world}/`
 - 13 end-to-end scenario files (60+ tests) via
   `tests/scenarios/scenario_runner.py` (campaign lifecycle, combat e2e,
   character creation lobby, beat progression, persistence integrity, edge
@@ -419,7 +423,17 @@ Plus one safety invariant specific to combat:
   `uv run python -m tests.simulation [--mock-llm] [--max-turns N]`
 - Live Discord smoke testing via `mcp_discord/` driving a tester bot
 - Coverage targets: engine ≥98%, matchers ≥95%, everywhere else best-effort
-- Quality gates: `uv run pytest`, `uv run ruff check .`, `uv run mypy .`
+- Quality gates: `uv run pytest`, `uv run ruff check .`, `uv run mypy`
+- **CI**: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the three
+  gates as parallel jobs (`ruff` / `mypy` / `pytest`) on every push to `main`
+  and every pull request, with `concurrency` cancelling superseded runs. Each
+  job checks out, installs with `uv sync --locked` (Python 3.12, pinned by
+  `.python-version`) and runs its gate. `mypy` is invoked **without an
+  argument** on purpose — `pyproject.toml`'s `files` key defines the scan
+  surface, and `mypy .` would rescan excluded paths. `astral-sh/setup-uv` is
+  pinned by commit SHA; the `pytest` job caches ChromaDB's default ONNX
+  embedding model (~79 MB) under `~/.cache/chroma` so only the first run pays
+  the download.
 
 See [`docs/internal/TESTING.md`](docs/internal/TESTING.md) for the full
 testing strategy.

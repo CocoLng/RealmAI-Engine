@@ -9,7 +9,7 @@ Inspiration SRD 5e simplifié. Chaque module porte une responsabilité unique.
 | Module | Lignes | Responsabilité |
 |---|---|---|
 | [dice.py](../../engine/dice.py) | 135 | Parseur `"2d6+3"`, jets d20 avec 6 tiers d'outcome |
-| [character.py](../../engine/character.py) | 373 | Personnages, races, classes, stats, niveaux, XP |
+| [character/](../../engine/character/) | 1 104 | **Package** (depuis le refactor 2026-04-10) : personnages, races, classes, stats, skills, features, niveaux, XP |
 | [inventory.py](../../engine/inventory.py) | 631 | Items, équipement, armures, weapons, slots, attunement |
 | [spells.py](../../engine/spells.py) | 557 | Slots, cantrips scaling, catalogue ~20 sorts |
 | [conditions.py](../../engine/conditions.py) | 325 | 17 conditions SRD (+ SURPRISED, CONCENTRATING), durées, interactions |
@@ -40,7 +40,25 @@ roll_check("1d20+5", dc=15) -> D20CheckResult(dc, outcome, margin, natural_roll)
 
 Thresholds hardcoded (pas de constantes nommées). Nat 1/20 overrides margin.
 
-## `character.py`
+## `character/`
+
+Package depuis le refactor 2026-04-10 (l'ancien monolithe `engine/character.py`
+n'existe plus). `engine/character/__init__.py` re-exporte tout le public — les
+imports `from engine.character import Character, create_character, …` restent
+valides. Découpage :
+
+| Module | Contenu |
+|---|---|
+| [models.py](../../engine/character/models.py) | `AbilityScores`, `Character` |
+| [enums.py](../../engine/character/enums.py) | `Ability`, `Race`, `CharacterClass`, `Size`, `Skill`, `SKILL_ABILITY` |
+| [abilities.py](../../engine/character/abilities.py) | modificateurs, standard array, bonus raciaux, jets 4d6 |
+| [races.py](../../engine/character/races.py) | tables raciales (bonus, taille, vitesse) |
+| [classes.py](../../engine/character/classes.py) | hit die, saving throws, features et choix de skills par classe |
+| [creation.py](../../engine/character/creation.py) | `create_character()` |
+| [progression.py](../../engine/character/progression.py) | `XP_THRESHOLDS`, `PROFICIENCY_BONUS_BY_LEVEL`, `add_xp`, `check_level_up`, `level_up` |
+| [features.py](../../engine/character/features.py) | `Feature`, `MechanicalEffect`, helpers d'effets (darkvision, résistances) |
+| [presets.py](../../engine/character/presets.py) | `CLASS_STAT_PRESETS` pour la création guidée |
+| [random_stats.py](../../engine/character/random_stats.py) | tirage aléatoire de stats (bouton « Aléatoire » du setup flow) |
 
 ### Modèles
 

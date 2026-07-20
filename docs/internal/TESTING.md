@@ -27,7 +27,7 @@ Chaque module `engine/`, `ai/`, `memory/`, `world/`, `db/`, `bot/` a un `test_<m
 
 ### 2. Tests de scénario (`tests/scenarios/`)
 
-**ScenarioRunner** ([tests/scenarios/scenario_runner.py](../../tests/scenarios/scenario_runner.py), 896 lignes) : orchestrateur de gameplay end-to-end **sans Discord réel**.
+**ScenarioRunner** ([tests/scenarios/scenario_runner.py](../../tests/scenarios/scenario_runner.py), ~1 150 lignes) : orchestrateur de gameplay end-to-end **sans Discord réel**.
 
 - **Real engine + real in-memory DB** (foreign keys ON).
 - **Mocked Discord interactions** : `TestInteraction` wrap `discord.Interaction`, capture embeds/buttons/selects via `EmbedCapture`.
@@ -53,10 +53,13 @@ Helpers dans [tests/scenarios/conftest.py](../../tests/scenarios/conftest.py) : 
 - `test_combat_system_e2e.py` — gate de fin du chantier combat. Mageta vs Vellus avec boss stat block complet (phase 2, legendary actions), VICTORY/DEFEAT/TRUCE finalisés via `bot.combat_end.finalize_combat`, idempotence double-finalize, non-régression commoner/TALK hors combat/MOVE bloqué. Fixture `vellus_stat_block` dans `conftest.py`.
 - `test_edge_cases.py` — actions invalides, items manquants
 - `test_persistence_integrity.py` — save → reload → equality
-- `test_free_text_exploration.py` — exploration sans chemins structurés
+- `test_exploration_move.py` — MOVE free-text résolu via `Location.exit_aliases` → `bot.world_navigation.change_location`
 - `test_attack_bootstrap_combat.py` — Lot C : ATTACK hors combat
 - `test_trivial_npc_kill.py` — Lot E : one-shot
-- `test_beat_advance.py` — Lot D : progression d'arc
+- `test_blocked_player_recovery.py` — progression de beat / déblocage joueur (successeur de l'ancien `test_beat_advance.py`)
+- `test_character_creation_lobby.py` — création de perso pilotée par `LobbyState` → transition `GameSession`
+- `test_headless_character_flow.py`, `test_headless_session_flow.py` — drivers headless de `CharacterSetupFlow` et `SessionCog`
+- `test_beat_progression_e2e.py` — `/hint` + progression sur un vrai serveur Discord (skippé sans `DISCORD_TEST_BOT_TOKEN`)
 
 **Note ScenarioRunner** : `_finalize_combat` délègue maintenant à `bot.combat_end.finalize_combat` (même code path que le live bot). `assert_not_in_combat` tolère les deux invariants (`combat_state is None` OU `is_active=False`). `attack(target=...)` no-op gracieusement sur cible morte pour que les boucles `for _ in range(10): await scenario.attack(...)` continuent de fonctionner maintenant que le combat_state est préservé post-finalize.
 
@@ -68,10 +71,6 @@ Couverts par le serveur MCP `mcp_discord/` (voir plus bas) + l'agent `discord-li
 - `TEST_MODE=true` pour activer le cog `test_bridge` côté jeu.
 
 Commandes `!test` notables, en plus des commandes joueur/combat simulées : `!test lobby` (ouvre le **vrai** lobby de campagne sur le canal de test — production code, pilotable via `click_button`/`submit_modal`) et `!test hint` (invoque le `HintCog` réel).
-
-### 4. Tests d'observabilité
-
-[test_campaign_launcher_observability.py](../../tests/test_campaign_launcher_observability.py) — vérifie que les états / transitions du `CampaignLauncher` émettent bien les logs structurés attendus.
 
 ## MCP Discord Test Server
 
@@ -115,12 +114,12 @@ TEST_MODE=true
 | Zone | Fichiers de tests | État |
 |---|---|---|
 | `engine/` (dice, character, combat, inventory, spells, conditions, validators, starter_gear) | ~8 fichiers, ~2 300 lignes | 🟢 ~98% |
-| `world/` | `test_world_models.py`, `tests/world/` | 🟢 solide |
-| `db/` | `test_database.py`, `test_db_repos.py`, `test_mappers.py`, `test_player_character_repo.py`, `test_campaign_channel_repo.py` | 🟢 complet |
-| `memory/` | `test_memory_models.py`, `test_memory_repos.py`, `test_memory_state.py`, `test_summarizer.py`, `test_semantic.py`, `test_sliding_window.py`, `test_context_assembler.py`, `test_token_utils.py` | 🟢 solide |
-| `ai/` | `tests/ai/test_*.py` (10+ fichiers) | 🟡 unit ok, pas d'e2e vrai Ollama |
-| `bot/` | `test_cog_*`, `tests/bot/test_action_pipeline*.py`, `test_views.py`, `test_embeds.py`, etc. | 🟡 unit ok, integration light |
-| Scénarios | 8 fichiers dans `tests/scenarios/` | 🟢 couvrent gameplay principal |
+| `world/` | `tests/world/` (`test_world_models.py`, `test_story_arc.py`, `test_combat_zone.py`, …) | 🟢 solide |
+| `db/` | `tests/db/` (`test_database.py`, `test_db_repos.py`, `test_mappers.py`, `test_player_character_repo.py`, `test_campaign_channel_repo.py`, `test_memory_repos.py`, …) | 🟢 complet |
+| `memory/` | `tests/memory/` (`test_memory_models.py`, `test_memory_state.py`, `test_summarizer.py`, `test_semantic.py`, `test_sliding_window.py`, `test_context_assembler.py`, `test_narration_guard.py`, `test_token_utils.py`) | 🟢 solide |
+| `ai/` | `tests/ai/test_*.py` (20 fichiers) | 🟡 unit ok, pas d'e2e vrai Ollama |
+| `bot/` | `tests/bot/` : `test_cog_*.py`, `test_action_pipeline*.py`, `pipeline/`, `views/`, `embeds/`, `test_embeds.py`, etc. | 🟡 unit ok, integration light |
+| Scénarios | 13 fichiers dans `tests/scenarios/` | 🟢 couvrent gameplay principal |
 
 ## Lessons captured (`tasks/lessons.md`)
 

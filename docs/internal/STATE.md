@@ -29,7 +29,7 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 | **Phase 2a — World + DB** | 🟢 Terminée | `world/`, `db/`, 11 repos, mappers |
 | **Phase 2b — Memory 4 couches** | 🟢 Terminée | `memory/`, ChromaDB, context assembler — modules écrits tôt mais **branchés en prod seulement au chantier G** (2026-07-18) |
 | **Phase 2c — AI Core** | 🟢 Terminée | `ai/` (8 services), prompts, entity resolver |
-| **Phase 3 — Discord Bot** | 🟢 Fonctionnelle | Cogs, pipeline, views, embeds, launcher, combat 5e, beat progression — bout en bout |
+| **Phase 3 — Discord Bot** | 🟢 Fonctionnelle | Cogs, pipeline, views, embeds, lobby d'onboarding, combat 5e, beat progression — bout en bout |
 | **Phase 4 — Polish + ship** | 🟡 En cours | README/ARCHITECTURE à jour + LICENSE/CONTRIBUTING + CI GitHub Actions ; reste sessions de jeu réelles, GIFs, blog post |
 
 ## Chantier combat D&D 5e (tasks/combat/)
@@ -49,9 +49,9 @@ Refonte du combat pour atteindre une fidélité "core 5e" : orthogonal aux beats
 | **Phase 8 — Fin de combat** | 🟢 Done | Task 80 ✅ — `bot/combat_end.py::finalize_combat(session, reason) -> CombatEndSummary` : point d'entrée unique (idempotent via `CombatState._finalized` `PrivateAttr`) qui construit le récap (survivors/killed/fled + loot `stat_block.attacks[0].name` + XP par tier MINION=50/ELITE=150/BOSS=500/fallback=25), **applique** l'XP aux survivants via `add_xp` + flag `level_ups` via `check_level_up`, purge `SURPRISED` + `CONCENTRATING` (préserve POISONED/PRONE/etc.), préserve `session.combat_state` pour l'historique. `bot/embeds/combat_end_embed.py::build_combat_end_embed` : 4 couleurs (VICTORY vert / DEFEAT rouge / FLED gris / TRUCE violet), champs optionnels. `TurnManager._finalize` refactoré pour déléguer à `finalize_combat` + poster l'embed + freeze hub ; `_apply_xp_stub` supprimé. `ActionPipeline._resolve_flee` route le cleanup FLED via `finalize_combat` (import local, zéro cycle). **80.7** — persistance combat : `ActionPipeline` auto-checkpoint existe déjà pour les actions PC ; `TurnManager` reçoit désormais `db_factory` (via `CombatCog.build_turn_manager`) et appelle `_persist_state` après `advance_turn` + après `_finalize` pour couvrir les tours NPC et l'état final (pas de timeout côté combat — Discord tolère les déconnexions, combat reprenable). Task 81 ✅ — `NPCStatBlock.mindless: bool` ajouté. `engine/validators.py::validate_truce_attempt` rejette allié/sans stat_block/mindless/cible manquante. `validate_exploration_action` délègue TALK-en-combat à `validate_truce_attempt` (autres exploration actions restent bloquées). `bot/combat_truce.py::attempt_truce(actor, target, state) -> (succeeded, check, summary)` roule `1d20 + CHA_mod + 2` vs `aggression_threshold`, succès **strict** (SUCCESS + CRITICAL_SUCCESS uniquement, NEAR_SUCCESS compte comme échec), auto-refus mindless / boss-phase-2 (triggered à ≤50%), consomme l'Action sur roll réel, marque tous les enemies vivants `fled=True` sur succès. `ActionPipeline._resolve_talk_in_combat` dispatche TALK en combat vers `attempt_truce` + appelle `finalize_combat(session, TRUCE)` sur succès, queue le check dans `_pending_dice_embeds` pour affichage task 60. Task 82 ✅ — `tests/scenarios/test_combat_system_e2e.py` (13 tests Mageta vs Vellus : bootstrap, phase 2, truce success/refus/failure, VICTORY, DEFEAT, idempotence double-finalize, non-régression commoner/TALK hors combat/MOVE bloqué) + fixture `vellus_stat_block` dans `conftest.py`. Live Discord test plan documenté dans [combat_system_e2e_results.md](combat_system_e2e_results.md). **99 tests Phase 8 verts** (40 combat_end + 23 combat_truce + 13 e2e + 8 turn_manager persist/finalize + 15 autres). |
 | **Phase 9 — Documentation** | 🟢 Done | [docs/internal/COMBAT_SYSTEM.md](COMBAT_SYSTEM.md) : référence développeur (architecture, data models, pipeline, API). Indexée dans le README. |
 
-## Lots post-mortem campagne 1 (tasks/agents/)
+## Lots post-mortem campagne 1
 
-Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations significatives, le code a été refactoré en 6 lots parallèles — **tous complétés** :
+Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations significatives, le code a été refactoré en 6 lots parallèles — **tous complétés**. Les fiches d'agent (`tasks/agents/`) ont été supprimées une fois les lots mergés ; seul ce tableau en garde la trace :
 
 | Lot | Sujet | État | Impact |
 |---|---|---|---|
@@ -108,15 +108,16 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 
 ### Discord Bot
 - ✅ 7 cogs (+1 test_bridge conditionnel)
-- ✅ Slash commands : session, character, inventory, rolls, exploration (legacy)
+- ✅ Slash commands : session, character, inventory, rolls, hint
 - ✅ `@mention` → ActionPipeline (cœur de l'UX)
 - ✅ Pipeline 6 phases avec progress embed live
-- ✅ `CampaignLauncher` avec onboarding multijoueur parallèle
-  - ✅ Character re-creation — re-clic « Créer Personnage » pour recommencer avant le launch
-  - ✅ Force-launch — créateur peut forcer le lancement, excluant joueurs non-ready
-  - ✅ Launch immersion — purge channel, countdown 3-2-1, opening crawl embed
-- ✅ 8 views Discord (character create, starter gear, combat, target select, spell select, clarification, start onboarding, force launch)
-- ✅ 8 embeds (narrative + opening crawl, progress, scene, beat, character, combat, inventory, état/state)
+- ✅ Lobby d'onboarding multijoueur (`bot/lobby_state.py` + `LobbyView`, orchestré par `SessionCog` — remplace l'ancien `CampaignLauncher`)
+  - ✅ Pré-génération arc + location en tâche de fond dès `/start_campaign`
+  - ✅ Setup de personnage en une vue (`CharacterSetupFlow`, 6 étapes, Recommencer / Annuler)
+  - ✅ Lancement host-only sur bouton « Démarrer », joueurs non-prêts exclus
+  - ✅ Launch immersion — purge channel, countdown 3-2-1, cartes de groupe, opening crawl embed
+- ✅ 9 views Discord (lobby, character setup flow, combat action, target select, spell select, zone select, potion select, equip select, clarification)
+- ✅ 13 embeds (narrative + opening crawl + state, progress, scene, beat, character, character setup, combat, combat start, combat end, dice, inventory, lobby, arc tracker)
 - ✅ Channel manager avec permissions + archives
 - ✅ i18n statique FR/EN (labels)
 - ✅ Scene hydration (promotion PNJ string → rows DB)

@@ -96,7 +96,9 @@ Player (Discord) → INTERPRETER (LLM:4b, text→JSON)
                  → NARRATOR (LLM:9b, ActionResult→narrative)
                  → Discord (embed: narrative + raw stats)
 
-Background: STORY DIRECTOR every ~20 interactions.
+Background: STORY DIRECTOR every 6 interactions, or on any of:
+  combat just ended · narrative drift detected · /story_catch_up.
+  (`bot/pipeline/orchestrator.py:should_run_director`)
 ```
 
 ### Tech Stack
@@ -119,7 +121,9 @@ Background: STORY DIRECTOR every ~20 interactions.
 
 1. **Structured state** (SQLite) — HP, AC, inventory, quests. Source of truth.
 1. **Sliding window** — last 10-12 exchanges for continuity.
-1. **Compressed summaries** — auto-generated every ~20 interactions.
+1. **Compressed summaries** — auto-generated every 20 exchanges
+   (`memory/summarizer.py:SUMMARY_INTERVAL`). Distinct from the Story
+   Director cadence above — don't conflate the two.
 1. **Semantic RAG** (ChromaDB) — lore, NPC sheets. Queried only when relevant.
 
 ### Anti-Cheat (non-negotiable)
@@ -150,6 +154,8 @@ realmAI-engine/
 │   │                     #   progression, creation, features, presets
 │   ├── combat.py         # Initiative, attacks, damage, turns, zones
 │   ├── combat_phases.py  # Boss phase transitions
+│   ├── combat_trigger.py # Why a fight starts: aggressor, joiners, surprise
+│   ├── starter_gear.py   # Starter kits per class (used by the lobby flow)
 │   ├── npc_ai/           # scripted (minions), elite, boss_brain, legendary
 │   ├── npc_stat_block.py # NPC combat stats, LLM-authored values clamped here
 │   ├── npc_library.py    # Combat archetypes by tier
@@ -188,6 +194,7 @@ realmAI-engine/
 │   ├── pipeline/         # interpret → resolve → narrate + orchestrator
 │   ├── action_pipeline.py    # Thin delegating facade over pipeline/
 │   ├── combat_turn_manager.py · combat_entry.py · combat_end.py
+│   ├── combat_truce.py   # CHA de-escalation: talk a fight to a close
 │   ├── persistence.py · world_navigation.py · scene_hydration.py
 │   ├── location_prefetch.py · npc_prefetch.py · prefetch_gate.py
 │   ├── cogs/         # session, character, inventory, combat, rolls,
@@ -211,10 +218,11 @@ realmAI-engine/
 
 ## Development Phases
 
-> **Current status (2026-07-18): Phases 1-3 are shipped. Phase 4 is the only
-> one still open.** Quality gates are all green — `pytest` 2890 passed,
-> `ruff` clean, `mypy` 0 errors. The 9 chantiers of the 2026-06-10 system
-> audit are closed and merged, all 5 criticals included.
+> **Current status (2026-07-20): Phases 1-3 are shipped. Phase 4 is the only
+> one still open.** Quality gates are all green — `pytest` 2913 passed,
+> `ruff` clean, `mypy` 0 errors on 335 files — and **CI freezes the three of
+> them on every push** (green on GitHub). The 9 chantiers of the 2026-06-10
+> system audit are closed and merged, all 5 criticals included.
 > Working task board: `tasks/todo.md`.
 
 ### Phase 1 — Game engine without AI ✅ shipped
@@ -246,10 +254,19 @@ the `/start_campaign` lobby flow.
 
 README with GIFs + architecture diagram, GitHub Actions CI/CD, real play sessions (3+ with friends), blog post / LinkedIn.
 
-Remaining gaps, in order: **CI/CD** (all three gates are green
-simultaneously — freeze them before they drift), then **real play sessions**
-(these also close the three live-Discord verifications that have never been
-run against an online bot), then GIFs and the write-up.
+Shipped: **CI/CD** (`.github/workflows/ci.yml`, 3 parallel jobs, green on
+GitHub since 2026-07-19) and the **architecture diagram** (Mermaid, in the
+README). Three live-Discord sessions closed the verifications that had never
+been run against an online bot — lobby → character creation → opening
+narrative, exploration + H8 latencies, `/hint`. They were driven by autonomous
+tester scripts, and they paid for themselves: two real bugs found (the DB
+round-trip flattening every item to a base `Item`, and `/hint` leaking a raw
+judge sentinel).
+
+Remaining gaps, in order: **demo GIFs** (needs a graphical Discord client —
+capture checklist in `tasks/todo.md` §1.3), **multi-player sessions with real
+players** (the three closed sessions were solo and script-driven), then the
+blog post / LinkedIn write-up.
 
 -----
 

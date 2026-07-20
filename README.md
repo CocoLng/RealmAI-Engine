@@ -7,7 +7,7 @@
 [![Pydantic v2](https://img.shields.io/badge/pydantic-v2-e92063.svg)](https://docs.pydantic.dev/latest/)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![Types: mypy](https://img.shields.io/badge/types-mypy-2a6db2.svg)](https://mypy-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-2890+-brightgreen.svg)](#run-the-test-suite)
+[![Tests](https://img.shields.io/badge/tests-2913+-brightgreen.svg)](#run-the-test-suite)
 
 An AI-powered RPG Game Master that runs as a Discord bot. A deterministic
 Python engine handles all game mechanics (dice, combat, inventory, rules).
@@ -17,7 +17,7 @@ an MCP server for live-testing the bot from Claude Code.
 **The LLM narrates. The code arbitrates. No exceptions.**
 
 > **Status — July 2026:** Phases 1-3 shipped; Phase 4 (polish + ship) in
-> progress. CI freezes the three quality gates (ruff, mypy, pytest — ~2 890
+> progress. CI freezes the three quality gates (ruff, mypy, pytest — ~2 910
 > tests) on every push, and the full lobby → character creation →
 > opening-narrative flow is verified against live Discord. Remaining:
 > real multi-player sessions, demo GIFs, write-up. See
@@ -48,8 +48,8 @@ No other open-source project combines a deterministic engine + LLM narration
 
 ## Features
 
-- **Deterministic 5e-style engine** — dice, 6 classes × 7 races, a 26-item
-  catalogue, 21 spells, 17 conditions, and multi-enemy combat with initiative,
+- **Deterministic 5e-style engine** — dice, 6 classes × 7 races, a 25-item
+  catalogue, 21 spells, 18 conditions, and multi-enemy combat with initiative,
   surprise, death saves, and tiered NPC AI (minion → elite → boss).
 - **Blind LLM narration** — the narrator only turns an `ActionResult` into
   prose; it never decides an outcome. Discord shows the narrative **and** the
@@ -63,7 +63,7 @@ No other open-source project combines a deterministic engine + LLM narration
 - **Multiplayer campaigns** — one dedicated channel per campaign, a join/leave
   lobby, per-guild language (FR/EN/ES/DE/PT), save/resume, and channel
   archival on `/end_campaign`.
-- **Built to be tested** — ~2 890 tests, 63 end-to-end scenarios, and an
+- **Built to be tested** — ~2 910 tests, 63 end-to-end scenarios, and an
   autonomous LLM playthrough simulator that hunts for narrative incoherence.
 
 ### Commands
@@ -93,7 +93,7 @@ flowchart TD
     OUT["Discord embed<br/>narrative + raw mechanics side by side"]
     SQL[("SQLite<br/>WorldState")]
     RAG[("ChromaDB<br/>semantic RAG")]
-    BG["Background<br/>STORY DIRECTOR every ~20 interactions<br/>BEAT PROGRESSION after every player turn"]
+    BG["Background<br/>STORY DIRECTOR every 6 interactions (or combat end / drift / catch-up)<br/>BEAT PROGRESSION after every player turn"]
 
     P --> INT --> VAL --> ENG --> CTX --> NAR --> OUT
     ENG <--> SQL
@@ -224,7 +224,7 @@ uv run python main.py
 ### Run the test suite
 
 ```bash
-uv run pytest                  # full suite (~2 890 tests)
+uv run pytest                  # full suite (~2 910 tests)
 uv run pytest tests/engine -q  # engine only
 uv run pytest tests/scenarios  # end-to-end scenarios via ScenarioRunner
 ```

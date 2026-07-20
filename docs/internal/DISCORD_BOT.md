@@ -25,7 +25,7 @@ main.py  →  bot.bot.run_bot()
 - intents (default + message_content + members)
 - engine SQLAlchemy + session factory (`get_engine`, `get_session_factory`)
 - `sessions: dict[channel_id, GameSession]` (in-memory)
-- `launchers: dict[channel_id, CampaignLauncher]` (in-memory, temporaire pour onboarding)
+- `lobbies: dict[channel_id, LobbyState]` (in-memory, temporaire pour l'onboarding — voir [bot/lobby_state.py](../../bot/lobby_state.py))
 
 ## Cogs
 
@@ -35,11 +35,13 @@ Tous dans [bot/cogs/](../../bot/cogs/).
 
 | Commande | Description |
 |---|---|
-| `/start_campaign <theme> <@players>` | Crée campagne, channel dédié, lance `CampaignLauncher` |
-| `/resume <campaign_id>` | Recharge campagne depuis DB, re-instancie services IA |
+| `/start_campaign <theme> [name] [players]` | Crée campagne + channel dédié, ouvre le lobby (`LobbyState` + `LobbyView`), démarre la pré-génération arc/location |
+| `/add_member <user>` | Ajoute un joueur au lobby, ou un spectateur si la campagne est déjà lancée (host-only) |
+| `/resume` | Recharge campagne depuis DB, re-instancie services IA |
 | `/save` | Flush session in-memory → DB (atomique) |
 | `/end_campaign` | Archive le channel, pop la session |
 | `/settings` | Configure `GuildConfig` (catégorie, langue) |
+| `/story_catch_up` | Relance le Story Director et poste un recap de l'objectif courant |
 
 Voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md) pour le flux détaillé.
 
@@ -47,9 +49,10 @@ Voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md) pour le flux détaillé.
 
 | Commande | Description |
 |---|---|
-| `/create_character` | Lance `CharacterCreateView` (race → class → align → name) |
 | `/character [public]` | Affiche la fiche du personnage (ephemeral par défaut) |
-| `/levelup` | Avance d'un niveau (check XP threshold) |
+| `/level_up` | Avance d'un niveau (check XP threshold) |
+
+La création de personnage n'a plus de slash command : elle passe par le bouton **Rejoindre** du lobby, qui ouvre `CharacterSetupFlow` (voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md#2b-création-des-personnages-par-joueur)).
 
 ### `inventory.py` — `InventoryCog`
 
@@ -58,7 +61,7 @@ Voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md) pour le flux détaillé.
 | `/inventory [public]` | Embed avec équipement + backpack + gold |
 | `/equip <item> <slot>` | Déplace vers slot, recomputent AC |
 | `/unequip <slot>` | Déplace vers backpack |
-| `/use <item>` | Consomme consommable |
+| `/use_item <item>` | Consomme un consommable |
 
 ### `combat.py` — `CombatCog`
 
@@ -105,20 +108,20 @@ Toutes héritent de `LoggedView(ui.View)` pour un logging uniforme des erreurs.
 
 | View | Flow | Timeout |
 |---|---|---|
-| `CharacterCreateView` | Race select → Class select → Align select → Name modal | — |
-| `StarterGearView` | Boutons de kits (2-3) + détails | — |
-| `CombatActionView` | Attaquer / Sort / Défendre / Fuir / Se déplacer — hub PC édité en place | — (TurnManager timeout) |
+| `LobbyView` | Rejoindre / Quitter / Démarrer l'aventure — vue persistante du lobby, Démarrer réservé au host | — (persistante) |
+| `CharacterSetupFlow` | Vue unique éditée en place : `IdentityModal` → race+classe → stats → skills → kit+motivation → review | — |
+| `CombatActionView` | Attaquer / Sort / Potion / Défendre / Fuir / Se déplacer / Équiper — hub PC édité en place | — (TurnManager timeout) |
 | `TargetSelectView` | Ephemeral followup après Attaquer / Sort — enemies vivants ≤ 25 | 60 s |
 | `SpellSelectView` | Ephemeral followup après Sort — sorts castables (slots dispo) | 60 s |
 | `ZoneSelectView` | Ephemeral followup après Se déplacer — zones adjacentes | 60 s |
+| `PotionSelectView` | Ephemeral followup après Potion — consommables utilisables | 60 s |
+| `EquipSelectView` | Ephemeral followup après Équiper — armes équipables | 60 s |
 | `ClarificationView` | Jusqu'à 4 candidats + Annuler (Lot B) | 2 min |
-| `StartOnboardingView` | Bouton « Créer Personnage » (re-cliquable pour recommencer) | — |
-| `ForceLaunchView` | Bouton « Lancer la partie » réservé au créateur (exclut joueurs non-ready) | 10 min |
 
 `CombatActionView` et les trois selects secondaires vérifient `interaction.user.id == acting_user_id` dans `interaction_check` (tout autre clic reçoit un message éphémère « Ce n'est pas ton tour. »). Les boutons sont désactivés quand leur pré-condition est vide (pas de cible vivante → Attaquer grisé, pas de sort jetable → Sort grisé, pas de zone adjacente → Se déplacer grisé). La vue elle-même a `timeout=None` — c'est le `TurnManager` qui arme une task asyncio de 5 min. Sur un vrai serveur elle poste **un rappel unique** (« c'est toujours ton tour ») puis attend : aucune action n'est jouée à la place du joueur (décision 2026-07-19), le tour reste ouvert indéfiniment. Sous `TEST_MODE` uniquement, l'auto-Défense historique est conservée pour que les harnais de test déroulent un combat qui avance tout seul.
 
 `ClarificationView` vérifie via `interaction_check` que seul l'acteur original peut cliquer.
-`ForceLaunchView` vérifie que seul le créateur de la campagne (`creator_id`) peut cliquer.
+`LobbyView.launch` vérifie que seul le host de la campagne (`creator_id`) peut cliquer, et refuse tant qu'aucun joueur n'est prêt (`LobbyState.has_any_ready()`).
 
 ## Embeds (`bot/embeds/`)
 
@@ -136,13 +139,15 @@ Toutes les couleurs sont pilotées par le `tone` renvoyé par le Narrator.
 | `combat_end_embed.py` | Embed de récap fin de combat : 4 couleurs (🏆 Victoire/💀 Défaite/🏃 Fuite/🕊️ Trêve), champs optionnels (killed_enemies, killed_pcs, fled_pcs, loot, XP, level_ups, durée). Consommé par `TurnManager._finalize`. |
 | `dice_embed.py` | Jets d20 : `build_attack_roll_embed`, `build_save_check_embed`, `build_damage_roll_embed`, `build_generic_check_embed` — couleurs hit/miss/crit, français |
 | `inventory_embed.py` | Équipement + backpack + gold |
-| `state_embed.py` | Embed d'état bleu (0x4A90D9) pour les actions QUESTION : items, PNJs, sorties, objectif de beat actif |
+| `narrative_embed.py::build_state_embed` | Embed d'état bleu (0x4A90D9) pour les actions QUESTION : items, PNJs, sorties, objectif de beat actif |
+| `lobby_embed.py` | Embed du lobby : thème, host, roster + statut de chaque joueur, avancement de la pré-génération |
+| `arc_tracker_embed.py` | Embed épinglé : chapitre courant, objectif, beats récents, quêtes actives |
 
 Les titres de scène utilisent un emoji thématique choisi par keywords bilingues FR/EN (donjon/dungeon, château/castle, forêt/forest, etc.).
 
-## `campaign_launcher.py` — `CampaignLauncher`
+## `lobby_state.py` — `LobbyState`
 
-Orchestrateur temporaire qui vit dans `bot.launchers[channel_id]` pendant l'onboarding. Voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md#2-onboarding--campaignlauncher).
+État d'onboarding, stocké dans `bot.lobbies[channel_id]` entre `/start_campaign` et le clic sur **Démarrer**. Structure de données passive (`LobbyState`, `LobbyPlayer`, `LobbyPlayerStatus`, `GenerationPhase`) : elle ne pilote rien, c'est `SessionCog` qui orchestre les callbacks de `LobbyView`, la pré-génération de l'arc/location et la transition vers `GameSession`. Elle remplace l'ancien `CampaignLauncher`, supprimé. Voir [CAMPAIGN_LIFECYCLE.md](CAMPAIGN_LIFECYCLE.md#2-onboarding--le-lobby).
 
 ## `game_session.py` — `GameSession`
 
@@ -272,13 +277,15 @@ Extraits — voir [ISSUES.md](ISSUES.md) pour le détail.
 - Trivial kill détection : `max_hp < 10` hardcodé.
 - Pas de spell slot recovery on rest implémenté.
 
-## Test coverage (`tests/bot/` et `tests/test_cog_*.py`)
+## Test coverage (`tests/bot/`)
 
-- `test_action_pipeline*.py` — orchestration + TALK + interaction + ambiguity
-- `test_action_handler_cog.py` — filtres OOC
+- `test_action_pipeline*.py` + `tests/bot/pipeline/` — orchestration + TALK + interaction + ambiguity + cadence
+- `test_action_handler_cog.py`, `test_action_handler_resilience.py` — filtres OOC, résilience
 - `test_scene_embed.py`, `test_scene_hydration.py`
-- `test_cog_character.py`, `test_cog_combat.py`, `test_cog_inventory.py`, `test_cog_exploration.py`, `test_cog_rolls.py`, `test_cog_session.py`
-- `test_views.py`, `test_embeds.py`, `test_bot_config.py`, `test_bot.py`
-- `test_game_session.py`, `test_campaign_launcher_observability.py`, `test_test_bridge.py`, `test_tester_bot.py`, `test_channel_manager.py`, `test_i18n.py`, `test_llm_retry.py`
+- `test_cog_character.py`, `test_cog_inventory.py`, `test_cog_rolls.py`, `test_cog_session.py`, `test_hint_cog.py`
+- `tests/bot/views/` (`test_character_setup_flow.py`, `test_lobby_view.py`, `test_equip_select_view.py`, `test_potion_select_view.py`), `test_combat_action_view.py`
+- `tests/bot/embeds/` (`test_lobby_embed.py`, `test_narrative_embed.py`), `test_embeds.py`, `test_combat_embed.py`, `test_combat_start_embed.py`, `test_dice_embed.py`
+- `test_lobby_state.py`, `test_bot_config.py`, `test_bot.py`
+- `test_game_session.py`, `test_test_bridge.py`, `tests/test_tester_bot.py`, `test_channel_manager.py`, `test_i18n.py`, `test_llm_retry.py`
 
 Tests majoritairement unitaires avec heavy mocking. Couverture scenario end-to-end via `tests/scenarios/` (voir [TESTING.md](TESTING.md)).

@@ -195,7 +195,7 @@ Le combat est **orthogonal** à l'exploration — il peut démarrer via quatre d
 | **Attaque explicite** sur NPC combat-worthy (stat_block ou HP/AC seuil) | `PLAYER_ATTACK` | `PLAYERS` si cible passive, `BOTH_READY` si déjà hostile | path `ATTACK` dans `detect_combat_trigger` |
 | **Intention létale** (IMPROVISE flaggé `is_lethal_intent=True` par l'interpreter) | `LETHAL_INTENT` | `PLAYERS` | path `IMPROVISE` |
 | **Piège / ambush** (INTERACT sur un `Location.combat_triggers[key]`) | `AMBUSH` | `NPCS` | path `INTERACT` |
-| **Beat scripté** combat (le générateur d'arc pose un trigger sur le beat) | `SCRIPTED_BEAT` | décidé par le générateur | depuis `campaign_launcher` |
+| **Beat scripté** combat (le générateur d'arc pose un trigger sur le beat) | `SCRIPTED_BEAT` | décidé par le générateur | depuis le lancement de campagne (`bot/cogs/session.py`) |
 
 Le cinquième vecteur — **provocation sociale** (TALK qui dépasse `aggression_threshold`) — est réservé comme `PROVOCATION` mais pour l'instant la résolution sociale passe par le chemin TRUCE inverse (voir "Cycle de vie").
 
@@ -254,13 +254,13 @@ Le watcher 5 min auto-DEFEND du turn manager est un **filet AFK court**, pas une
 1. Ajouter la valeur dans `ConditionType` enum ([engine/conditions.py](../../engine/conditions.py#L31)).
 2. Si elle bloque les attaques, les saves, ou le mouvement : ajouter au frozenset de classification approprié (`has_disadvantage_on_attacks`, `cannot_move`, `auto_fails_str_dex_saves`, `is_incapacitated`).
 3. Si elle a un effet actif, ajouter le helper et le hook dans `advance_turn` / `_validate_common` / `_on_damage_taken` selon besoin.
-4. Tests dans [tests/test_conditions.py](../../tests/test_conditions.py).
+4. Tests dans [tests/engine/test_conditions.py](../../tests/engine/test_conditions.py).
 
 ### Ajouter un nouvel archétype NPC
 
 1. Ajouter une factory `_build_my_archetype()` dans [engine/npc_library.py](../../engine/npc_library.py).
 2. Enregistrer dans `ARCHETYPE_BUILDERS` (à la fin du fichier) — la clé est le nom utilisé par le hydration layer et le world generator.
-3. Tests dans [tests/test_npc_library.py](../../tests/test_npc_library.py).
+3. Tests dans [tests/engine/test_npc_library.py](../../tests/engine/test_npc_library.py).
 4. Si le world generator doit pouvoir l'invoquer, étendre [ai/prompts/system_world_generator.txt](../../ai/prompts/system_world_generator.txt) avec le nouveau role.
 
 **Rappel** : `get_archetype(name)` doit **toujours** retourner une instance fraîche (construction complète, pas un `deepcopy` d'un singleton) — sinon les `uses_remaining` décrémentés et les `phases[].triggered=True` fuitent entre combats.

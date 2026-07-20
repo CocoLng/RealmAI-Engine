@@ -229,13 +229,13 @@ Tout est `CASCADE` delete : supprimer une `campaigns` row nettoie tout l'état S
 
 ## Test coverage
 
-- [test_database.py](../../tests/test_database.py) — engine init, foreign keys, migration
-- [test_db_repos.py](../../tests/test_db_repos.py) — CRUD pour 4 repos principaux (Campaign, NPC, Location, Quest)
-- [test_mappers.py](../../tests/test_mappers.py) — bidirectionnel pour toutes les entités
-- [test_player_character_repo.py](../../tests/test_player_character_repo.py)
-- [test_campaign_channel_repo.py](../../tests/test_campaign_channel_repo.py)
-- [test_world_models.py](../../tests/test_world_models.py) — validation Pydantic
-- [test_world_navigation.py](../../tests/test_world_navigation.py)
+- [tests/db/test_database.py](../../tests/db/test_database.py) — engine init, foreign keys, migration
+- [tests/db/test_db_repos.py](../../tests/db/test_db_repos.py) — CRUD pour 4 repos principaux (Campaign, NPC, Location, Quest)
+- [tests/db/test_mappers.py](../../tests/db/test_mappers.py) — bidirectionnel pour toutes les entités
+- [tests/db/test_player_character_repo.py](../../tests/db/test_player_character_repo.py)
+- [tests/db/test_campaign_channel_repo.py](../../tests/db/test_campaign_channel_repo.py)
+- [tests/world/test_world_models.py](../../tests/world/test_world_models.py) — validation Pydantic
+- [tests/bot/test_world_navigation.py](../../tests/bot/test_world_navigation.py)
 - [tests/world/](../../tests/world/) — NPC et Location edge cases
 
 ## Anomalies
