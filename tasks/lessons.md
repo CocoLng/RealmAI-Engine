@@ -325,3 +325,11 @@
   fidèlement, et invisibles des tests parce que `MagicMock` répond à
   n'importe quel attribut. Chaque builder/adaptateur qui mappe un modèle réel
   reçoit au moins un test de couture sur les vrais modèles Pydantic.
+- **Relire l'entrée de board AVANT d'exécuter le nettoyage qu'elle décrit.**
+  « push & clean » : la purge de `logs/` a été faite de mémoire
+  (`rm -rf logs/*`) alors que l'entrée du board, une ligne plus bas,
+  précisait « `beat_progression.jsonl` est de la vraie télémétrie à
+  conserver. Purger les vieux `realm_*.log` seulement ». Télémétrie perdue,
+  irrécupérable. Un `rm` se prépare comme un commit : lire la cible et la
+  consigne qui la concerne d'abord, supprimer par liste explicite ensuite —
+  jamais de glob destructif sur un dossier dont on n'a pas relu le contenu.

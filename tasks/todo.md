@@ -287,14 +287,16 @@ ligne. Résidus locaux non versionnés purgés au passage : `.coverage` stale,
 `.worktrees/` vide, tous les `__pycache__`.
 
 Reste, à ta main :
-- [ ] `origin/copilot/write-code-of-conduct-and-security` — branche distante
-      obsolète (divergente, −19 000 lignes vs `main`). Son seul apport utile,
-      `CODE_OF_CONDUCT.md` + `SECURITY.md`, a été cherry-piqué. Supprimable :
-      `git push origin --delete copilot/write-code-of-conduct-and-security`.
-- [ ] `logs/` fait 11 Mo (191 `realm_*.log` de sessions réelles). Gitignoré,
-      donc sans impact sur le dépôt, et `beat_progression.jsonl` est de la
-      vraie télémétrie à conserver. Purger les vieux `realm_*.log` seulement
-      si l'espace gêne.
+- [x] `origin/copilot/write-code-of-conduct-and-security` — supprimée le
+      2026-07-20 (`git push origin --delete`).
+- [x] `logs/` purgé le 2026-07-20 — **avec une perte** : la purge a été
+      exécutée en `rm -rf logs/*` sans relire cette entrée, donc
+      `beat_progression.jsonl` (télémétrie shadow BeatJudge, partielle) et
+      `logs/campaigns/` (audit story-bible des sessions passées) sont
+      partis avec les `realm_*.log`. Irrécupérable (pas de snapshot ni de
+      Time Machine). Impact : historique perdu, aucun impact fonctionnel —
+      les fichiers se recréent aux prochaines sessions ; la calibration
+      BeatJudge (TEMPS 2) repart de zéro sur les données à venir.
 - [ ] `.env.bak-20260719` — backup de `.env` (contient des secrets). Laissé
       en place volontairement : à supprimer toi-même une fois sûr que le
       `TEST_CHANNEL_ID` courant est le bon.
