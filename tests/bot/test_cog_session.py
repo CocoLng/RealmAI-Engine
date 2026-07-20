@@ -1721,3 +1721,104 @@ class TestLobbyPregenStatus:
             )
 
         assert phases[-1] == GenerationPhase.FAILED
+
+
+class TestPregenVarietyWiring:
+    """The variety machinery must actually run at campaign launch.
+
+    Covers the two wirings the 2026-07-20 spec↔code audit found dormant:
+    ``previous_archetype`` (cross-campaign anti-repetition) and
+    ``atmosphere`` (location mood pool).
+    """
+
+    def _make_cog(self, previous_archetype: str | None):
+        from bot.cogs.session import SessionCog
+        from bot.lobby_state import LobbyState
+
+        lobby = LobbyState(
+            creator_id=42,
+            language="fr",
+            campaign_name="Brumes du Nord",
+            theme="Brumes du Nord",
+        )
+        cog = SessionCog.__new__(SessionCog)
+
+        arc_repo = MagicMock()
+        arc_repo.get_latest_archetype_for_guild.return_value = previous_archetype
+        db_session = MagicMock()
+        cog.bot = SimpleNamespace(db_factory=lambda: db_session)  # type: ignore[attr-defined]
+
+        async def _noop(_lobby) -> None:
+            return None
+
+        cog._refresh_lobby_pregen_status = _noop  # type: ignore[method-assign]
+        return cog, lobby, arc_repo
+
+    async def _run_pregen(self, cog, lobby, arc_repo, *, guild_id=777):
+        from world.location import Location
+
+        fake_arc = MagicMock()
+        fake_arc.model_copy.return_value = SimpleNamespace(
+            campaign_id="c1", beats=[], villain_name="L'Ombre",
+        )
+        fake_loc = Location(name="Place", description="d", generated=True)
+        recipe = SimpleNamespace(archetype=SimpleNamespace(value="heist"))
+
+        with (
+            patch("ai.client.OllamaClient"),
+            patch("engine.arc_recipes.generate_recipe", return_value=recipe) as recipe_fn,
+            patch(
+                "db.repositories.story_arc_repo.StoryArcRepository",
+                return_value=arc_repo,
+            ),
+            patch("ai.arc_generator.ArcGenerator") as arc_cls,
+            patch("ai.world_generator.WorldGenerator") as world_cls,
+        ):
+            arc_cls.return_value.generate.return_value = fake_arc
+            world_cls.return_value.generate.return_value = fake_loc
+            await cog._pregenerate_campaign_world(
+                lobby, Campaign(name="Brumes du Nord"), "fr", guild_id=guild_id,
+            )
+        return recipe_fn, fake_arc, world_cls
+
+    async def test_previous_archetype_is_fed_to_the_recipe(self):
+        cog, lobby, arc_repo = self._make_cog("siege")
+        recipe_fn, _, _ = await self._run_pregen(cog, lobby, arc_repo)
+
+        arc_repo.get_latest_archetype_for_guild.assert_called_once()
+        assert arc_repo.get_latest_archetype_for_guild.call_args.args[0] == 777
+        assert recipe_fn.call_args.kwargs["previous_archetype"] == "siege"
+
+    async def test_no_history_means_no_exclusion(self):
+        cog, lobby, arc_repo = self._make_cog(None)
+        recipe_fn, _, _ = await self._run_pregen(cog, lobby, arc_repo)
+
+        assert recipe_fn.call_args.kwargs["previous_archetype"] is None
+
+    async def test_archetype_is_stamped_on_the_generated_arc(self):
+        cog, lobby, arc_repo = self._make_cog(None)
+        _, fake_arc, _ = await self._run_pregen(cog, lobby, arc_repo)
+
+        update = fake_arc.model_copy.call_args.kwargs["update"]
+        assert update["archetype"] == "heist"
+
+    async def test_starting_location_gets_an_atmosphere(self):
+        from engine.atmospheres import ATMOSPHERES
+
+        cog, lobby, arc_repo = self._make_cog(None)
+        _, _, world_cls = await self._run_pregen(cog, lobby, arc_repo)
+
+        atmosphere = world_cls.return_value.generate.call_args.kwargs["atmosphere"]
+        assert atmosphere in {a.value for a in ATMOSPHERES}
+        # Remembered on the lobby so the first in-campaign move differs.
+        assert lobby.last_atmosphere == atmosphere
+
+    async def test_archetype_lookup_failure_does_not_break_pregen(self):
+        from bot.lobby_state import GenerationPhase
+
+        cog, lobby, arc_repo = self._make_cog(None)
+        arc_repo.get_latest_archetype_for_guild.side_effect = RuntimeError("db down")
+        recipe_fn, _, _ = await self._run_pregen(cog, lobby, arc_repo)
+
+        assert recipe_fn.call_args.kwargs["previous_archetype"] is None
+        assert lobby.pregen_phase == GenerationPhase.READY

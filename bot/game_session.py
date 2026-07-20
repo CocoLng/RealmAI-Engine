@@ -72,6 +72,14 @@ class GameSession:
     part of the opening reframer's anti-chosen-one armor."""
     language: str = "fr"
 
+    last_atmosphere: str | None = None
+    """Atmosphere served to the last generated location (spec §2.1).
+
+    Read by ``bot.world_navigation.generate_destination`` so the pool never
+    serves the same ambiance twice in a row. Seeded from the lobby at launch
+    (the starting location already consumed one) and purely in-memory — a
+    /resume simply starts the rotation over."""
+
     # AI services — None if Ollama is unavailable
     ollama_client: OllamaClient | None = None
     narrator: Narrator | None = None

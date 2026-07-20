@@ -85,6 +85,10 @@ class LobbyState:
     story_arc: StoryArc | None = None
     current_location: Location | None = None
     pregen_error: str | None = None  # set on FAILED, surfaced at launch time
+    last_atmosphere: str | None = None
+    """Atmosphere used for the pre-generated starting location (spec §2.1).
+    Handed to the GameSession at launch so the first move gets a different
+    ambiance."""
 
     def add_player(self, user_id: int) -> None:
         """Add a player to the lobby in JOINED state. Idempotent."""

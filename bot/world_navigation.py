@@ -107,12 +107,14 @@ async def generate_destination(
 
     Shared by the synchronous MOVE path (:func:`change_location`) and the
     background neighbor prefetch (``bot/location_prefetch.py``) so both
-    produce identical locations: arc hints from ``session.story_arc``, the
-    requested name forced back on the result, and required back-links
-    injected as a safety net. Raises whatever the generator raises —
-    callers wrap errors. ``session.ollama_client`` must be set.
+    produce identical locations: arc hints from ``session.story_arc``, an
+    atmosphere drawn from :mod:`engine.atmospheres`, the requested name
+    forced back on the result, and required back-links injected as a safety
+    net. Raises whatever the generator raises — callers wrap errors.
+    ``session.ollama_client`` must be set.
     """
     from ai.world_generator import WorldGenerator
+    from engine.atmospheres import pick_atmosphere
 
     assert session.ollama_client is not None
     gen = WorldGenerator(session.ollama_client)
@@ -125,6 +127,12 @@ async def generate_destination(
             for beat in story_arc.beats
             if beat.location_hint
         ]
+    # Mood variety (spec §2.1) — never the same ambiance twice in a row.
+    # Best-effort: the neighbor prefetch may generate concurrently, in which
+    # case two siblings can land on the same draw. Harmless, and it keeps
+    # the pick lock-free.
+    atmosphere = pick_atmosphere(getattr(session, "last_atmosphere", None))
+    session.last_atmosphere = atmosphere.value
     new_dest = await asyncio.to_thread(
         gen.generate,
         campaign_context=f"Moving from {origin_name} to {destination_name}",
@@ -132,6 +140,7 @@ async def generate_destination(
         location_name=destination_name,
         language=session.language,
         location_hints=arc_hints,
+        atmosphere=atmosphere.value,
         required_connections=required_connections or None,
     )
     # Guarantee name stability even if the LLM rephrased it, since the

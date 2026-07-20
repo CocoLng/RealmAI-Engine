@@ -149,3 +149,26 @@ def test_init_db_reconciles_existing_db(tmp_path: Path) -> None:
     init_db(engine)
     cols = {c["name"] for c in inspect(engine).get_columns("campaigns")}
     assert "combat_state_json" in cols
+
+
+def test_ensure_schema_adds_story_arc_archetype_column(tmp_path: Path) -> None:
+    """A pre-existing story_arcs table gains the ``archetype`` column.
+
+    Guards the cross-campaign anti-repetition wiring: without the column,
+    ``get_latest_archetype_for_guild`` would fail on a legacy database.
+    """
+    engine = _engine(tmp_path)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE story_arcs ("
+            "  campaign_id VARCHAR(36) PRIMARY KEY,"
+            "  arc_json TEXT NOT NULL,"
+            "  current_beat_index INTEGER"
+            ")",
+        )
+
+    report = ensure_schema(engine)
+
+    columns = {c["name"] for c in inspect(engine).get_columns("story_arcs")}
+    assert "archetype" in columns
+    assert "story_arcs.archetype" in report.columns_added

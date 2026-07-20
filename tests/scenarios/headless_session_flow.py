@@ -119,6 +119,7 @@ class HeadlessSessionFlow:
             lobby: Any,
             campaign: Any,
             language: str,
+            guild_id: int | None = None,
         ) -> None:
             if pregen_arc is not None:
                 lobby.story_arc = pregen_arc.model_copy(
