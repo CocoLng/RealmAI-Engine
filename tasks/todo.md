@@ -456,8 +456,10 @@ n'appelait en production*.
 
 # Axe robustesse interpreter (2026-07-20)
 
-Branche `feat/interpreter-robustness`, 7 tâches TDD, pas encore mergée dans
-`main`. Spec : `docs/superpowers/specs/2026-07-20-interpreter-robustness-design.md`.
+**Mergé dans `main` et poussé le 2026-07-20** (fast-forward `c16fce3..91cc8ec`,
+branche `feat/interpreter-robustness` supprimée après revue de branche
+complète : verdict « Ready to merge »). 7 tâches TDD.
+Spec : `docs/superpowers/specs/2026-07-20-interpreter-robustness-design.md`.
 Plan : `docs/superpowers/plans/2026-07-20-interpreter-robustness.md`.
 
 **Livré (Tâches 1-7) :**
@@ -522,10 +524,25 @@ avant ce correctif :
       entre-temps (autre joueur), l'intention chaînée est abandonnée
       (annoncée) sans exécuter le pipeline — jamais de tour de combat
       consommé sans validation.
-- Gates : `pytest -q` 3085 passed / 1 skipped (6 tests neufs), `ruff check .`
-  clean, `mypy` clean sur les fichiers touchés. Le flaky
-  `test_combat_persists_through_multiple_rounds` ne s'est pas manifesté sur
-  ce run.
+- Gates : `pytest -q` 3085 passed / 1 skipped (5 tests neufs : 3 cog +
+  2 orchestrateur), `ruff check .` clean, `mypy` clean sur les fichiers
+  touchés. Le flaky `test_combat_persists_through_multiple_rounds` ne s'est
+  pas manifesté sur ce run.
+
+**Mineurs de suivi (revue finale, aucun bloquant)** :
+- [ ] `_render_ambiguity` : le fall-through quand la reprise produit une
+      *seconde* `AmbiguityResult` (autre champ encore ambigu) n'annonce pas
+      les `pending_intents` — cas préexistant et très étroit.
+- [ ] `_parse_pending_intents` tronque à 3 sans trace — logger l'overflow
+      (le prompt ne mentionne pas non plus le cap au 4b).
+- [ ] Les intentions chaînées contournent `looks_like_action` — un
+      découpage dégénéré du 4b (« ok ») brûle un appel interpreter que le
+      filtre OOC aurait bloqué (mitigé par le gate de confiance).
+- [ ] Pas de test end-to-end du chaînage avec ré-interprétation sur scène
+      mise à jour (couvert seulement par mocks côté cog) — la vérification
+      live Discord ci-dessus en tient lieu de première passe.
+- [ ] Message d'`interaction_check` FR-only dans `ConfirmActionView` ET
+      `ClarificationView` (défaut partagé, à corriger ensemble).
 
 -----
 
