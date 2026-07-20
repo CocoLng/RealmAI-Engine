@@ -71,6 +71,14 @@ Chaque règle est une fonction `(narration: str, snapshot:
 CoherenceSnapshot) -> list[CoherenceViolation]`. Les ids de règles
 restent **identiques à ceux du simulateur** (continuité de télémétrie).
 
+**Amendement (planification)** : les 2 règles R3 (drift) ne sont **pas
+portées**. Elles consomment le *diff d'état* calculé par le harnais
+simulateur (`diff: dict[path, [avant, après]]`), machinerie sans
+équivalent prod — où le moteur arbitre déjà tout changement d'état par
+construction. Elles restent dans `tests/simulation/rules/drift.py`,
+inchangées. Le noyau partagé couvre donc 11 règles (7 dures + 4
+souples).
+
 Registre avec mode d'application par règle :
 
 ```python
@@ -87,14 +95,13 @@ RULES: dict[str, tuple[RuleFn, RuleMode]] = { ... }
 |---|---|---|
 | `R1.npc_status` (PNJ mort qui agit) | BLOCK | Déjà bloquant en prod ; le portage **fusionne** les deux variantes : verbe actif dans la même phrase (simulateur, évite le faux positif « mentionner le cadavre ») + formes courtes de nom et `npcs_mentioned` auto-déclaré (prod) |
 | `R1.item_use_without_owning` | BLOCK | Ancré dans l'inventaire moteur |
-| `R1.hp_mismatch` | BLOCK | « Agonisant » avec HP ≥ 80 % : signal sûr |
-| `R1.location_mismatch` | BLOCK | Gardé par `moved_this_turn` |
 | `R1.locked_fact_violation` | BLOCK | Fenêtre de négation 60 chars, déjà calibrée |
-| `R1.zone_violation` | BLOCK | Zones du `combat_state`, déterministe |
+| `R1.zone_violation` | BLOCK | Zones de combat du lieu, déterministe |
+| `R1.hp_mismatch` | OBSERVE *(amendé)* | Le regex « blessé/chancelle/s'effondre » ne distingue pas le sujet : en combat multi-PC il matche la description légitime d'un ennemi blessé — un scénario que le simulateur solo n'a jamais exercé. Données réelles d'abord. |
+| `R1.location_mismatch` | OBSERVE *(amendé)* | En prod, les lieux connus incluent les sorties du lieu courant ; mentionner une sortie (« la porte vers les Catacombes ») est légitime et déclencherait le blocage. Données réelles d'abord. |
 | `R1.phantom_npc` | OBSERVE | Heuristique de noms propres bruyante ; 1 alerte douteuse déjà vue en live (T09) — promotion après données réelles |
 | `R2.repetition` (fenêtre élargie) | OBSERVE | Faux positif R2 connu (re-look statique) ; le check difflib actuel du guard (2 narrations, 8 mots) reste BLOCK tel quel |
 | `R2.npc_name_drift` · `R2.tense_drift` · `R2.unknown_proper_noun` | OBSERVE | Souples par nature |
-| `R3.disposition_silent_change` · `R3.condition_phantom` | OBSERVE | Drift, non bloquant |
 
 Changer un mode = une ligne dans `RULES`. Aucune option de configuration
 externe : le registre **est** la configuration.
@@ -177,11 +184,20 @@ entrées vides éliminées, doublons retirés, **max 2 faits par beat**,
 
 À la complétion d'un beat (site existant d'application des
 `BeatEffects`), chaque fait devient
-`LockedFact(id=f"beat:{beat_id}:{i}", text=...)` ajouté à
-`StoryArc.locked_facts` — idempotent (id déjà présent → ignoré). Le
-contenu est **autorisé** par l'arc generator (prompt étendu : champ
-optionnel par beat, exemples fournis) et les recipes ; l'écriture est
-**arbitrée** par le code au moment exact de la complétion.
+`LockedFact(id=f"beat:{beat_number}:{i}", text=...)` ajouté à
+`StoryArc.locked_facts` — idempotent (id déjà présent → ignoré).
+
+**Amendement (planification)** : le prompt de l'arc generator n'est
+**pas** étendu — il interdit explicitement tout champ hors schéma
+(« The engine derives objectives, completion rules, world effects… »,
+`system_arc_generator.txt:95`) et `on_complete` est déjà scaffoldé
+déterministiquement par `_scaffold_beat_effects`. Les faits verrouillés
+proviennent donc de deux sources moteur : (a) le champ
+`BeatEffects.locked_facts` (canal d'autorisation pour le scaffold, les
+recipes et les auteurs futurs, sanitizé), (b) le `narrative_hint`
+existant du beat, verrouillé à la complétion sous l'id
+`beat:{beat_number}:hint` — c'est déjà la phrase « conséquence majeure »
+du beat, écrite et sanitizée en amont.
 
 ### 2.2 Effets immédiats
 
