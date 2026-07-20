@@ -454,6 +454,59 @@ n'appelait en production*.
 
 -----
 
+# Axe robustesse interpreter (2026-07-20)
+
+Branche `feat/interpreter-robustness`, 7 tâches TDD, pas encore mergée dans
+`main`. Spec : `docs/superpowers/specs/2026-07-20-interpreter-robustness-design.md`.
+Plan : `docs/superpowers/plans/2026-07-20-interpreter-robustness.md`.
+
+**Livré (Tâches 1-7) :**
+- [x] **Fallback IMPROVISE → confirmation** — quand `retry_llm_call` épuise
+      ses retries sur `LLMParseError` (jamais sur `OllamaUnavailableError`,
+      panne réelle), `call_interpreter` forge un `InterpretedAction`
+      IMPROVISE avec `confidence=0.3` au lieu de laisser planter le tour.
+      0.3 < 0.6 le fait automatiquement passer par le gate ci-dessous —
+      aucun tour perdu en silence (leçon H11).
+- [x] **Gate de confiance < 0.6 (sauf QUESTION)** —
+      `bot/pipeline/orchestrator.py` retourne `LowConfidenceResult` et met le
+      pipeline en pause avant résolution d'entités. Nouvelle vue
+      `bot/views/confirm_action_view.py` (Oui/Reformuler, calquée sur
+      `ClarificationView` : author-only, timeout 120 s = Reformuler, tour
+      non consommé sauf Oui). **Oui** reprend via
+      `pipeline.process_interpreted_action()`, qui ne re-gate jamais (voie
+      aussi empruntée par les boutons combat et l'auto-Dodge).
+- [x] **Chaînage multi-intentions borné (hors combat)** —
+      `InterpretedAction.pending_intents` (le 4b découpe sans classifier la
+      2ᵉ intention, elle est ré-interprétée contre la scène mise à jour
+      après la 1ʳᵉ). Cap dur à 2 actions par message ; tout abandon
+      (cap atteint, bootstrap de combat, action échouée/annulée) toujours
+      annoncé au joueur, jamais silencieux.
+- [x] **Auto-confirm du simulateur** — `tests/scenarios/scenario_runner.py`,
+      juste après `pipeline.process(text)` : si le résultat est un
+      `LowConfidenceResult`, reprise immédiate via
+      `pipeline.process_interpreted_action(result.interpreted_action)`. Un
+      scénario headless ne peut pas cliquer « Oui » ; l'auto-confirm exerce
+      le même chemin de reprise que le vrai bouton sans bloquer les runs
+      simulateur (mock ou Ollama réel).
+- [x] **Gates qualité complets** — `uv run pytest -q` (3080 passed, 1
+      skipped), `uv run ruff check .` (all checks passed), `uv run mypy .`
+      (no issues found, 361 fichiers). Un test préexistant,
+      `test_combat_persists_through_multiple_rounds`, est **flaky**
+      (dés non seedés côté combat : le Troll HP 30/AC 10 peut mourir avant
+      la fin des 3 rounds testés, laissant `combat_state.is_active=False`
+      sans que le test le prévoie) — reproduit identique sur `main` avant
+      cette branche, donc hors scope de cet axe. À traiter séparément si ça
+      gêne la CI (seed déterministe ou assertion plus tolérante).
+
+**Suite possible** : vérification live Discord via le tester bot (skill
+`discord-live-testing`) — en particulier le rendu réel de la vue de
+confirmation Oui/Reformuler (embed + boutons tels qu'affichés par Discord,
+pas seulement capturés côté harnais) et un vrai chaînage de 2 intentions
+bout en bout (latence ~2 tours de narration assumée par le design, jamais
+mesurée en conditions réelles).
+
+-----
+
 # Annexe — Historique clos
 
 ## Audit système 2026-06-10 — 9/9 chantiers clos

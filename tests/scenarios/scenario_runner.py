@@ -957,6 +957,16 @@ class ScenarioRunner:
         )
         result = await pipeline.process(text)
 
+        # Confiance basse : le runner headless auto-confirme — un scénario
+        # ne peut pas cliquer « Oui ». Le simulateur exerce ainsi le même
+        # chemin de reprise que le vrai bouton.
+        from bot.action_pipeline import LowConfidenceResult
+
+        if isinstance(result, LowConfidenceResult):
+            result = await pipeline.process_interpreted_action(
+                result.interpreted_action,
+            )
+
         # Surface the narration via channel_capture / responses so that
         # GameDriver._extract_narration finds it.
         narration_text = self._extract_pipeline_narration(result)
