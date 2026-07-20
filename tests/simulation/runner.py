@@ -148,7 +148,7 @@ class SimulationRunner:
                 outcome=outcome,
                 diff=diff,
                 alerts=alerts,
-                agent_retries=0,
+                agent_retries=self._agent_retries(),
             )
             self.recorder.append(record)
 
@@ -158,8 +158,11 @@ class SimulationRunner:
             # works for both stub and change_location-backed moves.
             # ``location_known`` accumulates over the run so the rule has
             # a stable "places the player has been told about" set.
-            # ``locked_facts`` is plumbed as an empty list until the
-            # session gains a real locked-facts registry.
+            # ``locked_facts`` comes from the arc's registry (H17), which
+            # the narrate pipeline refreshes at the END of each turn. The
+            # rules read ``history[-1]``, i.e. the PREVIOUS turn's facts —
+            # so a death narrated this turn is never flagged by the fact
+            # it just created.
             moved_this_turn = (
                 state_before.get("location") != state_after.get("location")
             )
@@ -176,12 +179,16 @@ class SimulationRunner:
                     "narration": outcome.narration,
                     "moved_this_turn": moved_this_turn,
                     "location_known": location_known,
-                    "locked_facts": [],
+                    "locked_facts": list(state_after.get("locked_facts", []) or []),
                 }
             )
 
             if outcome.error is not None:
                 outcome_status = "pipeline_error"
+                break
+
+            if self._character_is_dead(state_after):
+                outcome_status = "character_death"
                 break
 
             if intent.action == "wait":
@@ -213,6 +220,21 @@ class SimulationRunner:
             final_state=self.session_snapshot(),
         )
         return outcome_status
+
+    @staticmethod
+    def _character_is_dead(snapshot: dict[str, Any]) -> bool:
+        """True when the snapshot reports the player character at 0 HP or below.
+
+        Snapshots without a ``character_hp`` key (stubs, pre-creation turns)
+        are treated as alive — absence of data is never a death.
+        """
+        hp = snapshot.get("character_hp")
+        return isinstance(hp, (int, float)) and hp <= 0
+
+    def _agent_retries(self) -> int:
+        """Retry count of the last agent decision (0 when the agent tracks none)."""
+        retries = getattr(self.agent, "last_retries", 0)
+        return retries if isinstance(retries, int) else 0
 
     def _agent_accepts_history(self) -> bool:
         """True iff agent.decide accepts a history kwarg (anti-deadlock)."""
