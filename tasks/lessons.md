@@ -1,5 +1,49 @@
 # Lessons Learned
 
+## 2026-07-20 — Audit specs↔code : une fonction testée n'est pas une fonction câblée
+
+- **La couverture de tests ne prouve pas le câblage.** Les trois plus gros
+  trous trouvés ce jour-là étaient tous du code *correct et testé* que
+  **rien n'appelait en production** : `resolve_death_save` (jets de mort —
+  6 tests verts, 0 appelant, un PJ à terre bloquait la partie pour
+  toujours), `SemanticIndexer.index_quest`, et le paramètre `atmosphere`
+  des générateurs. Un `grep` du symbole hors `tests/` en dit plus qu'un
+  rapport de couverture. À faire systématiquement en fin de chantier.
+
+- **Auditer une spec, c'est chercher l'appelant, pas la définition.** Les
+  agents qui vérifiaient « la spec est-elle implémentée ? » ont d'abord
+  répondu ✅ sur la seule existence du module. Le prompt qui a payé
+  demandait explicitement : *pour chaque exigence, trouve le chemin
+  d'appel depuis la production*.
+
+- **Distinguer « écart » et « supersession ».** Sur ~24 specs, la majorité
+  des divergences étaient des décisions assumées (texte libre remplaçant
+  les slash commands, lobby remplaçant `/create_character`, tour qui
+  attend indéfiniment). Sans cette catégorie dans le prompt d'audit, le
+  rapport enterre les vrais trous sous du bruit.
+
+- **Un fixture de logs qui tourne au début de session ne protège rien.**
+  `_suppress_file_logging` retirait les handlers une fois, puis un test
+  appelait `run_bot()` → `setup_logging()` et ré-attachait un FileHandler
+  pour toute la suite. Résultat : la suite écrivait dans la télémétrie de
+  prod. La redirection doit se faire par **variable d'environnement lue à
+  l'appel**, pas par nettoyage d'état à un instant t.
+
+- **Un test unitaire ne doit pas appeler un point d'entrée de processus.**
+  `test_run_bot_requires_token_env` ne teste qu'une `KeyError`, mais
+  exécutait au passage la configuration globale du logging. Patcher
+  l'effet de bord coûte une ligne.
+
+- **Mesurer la pollution avant/après plutôt que la raisonner.** Compter
+  les octets des trois puits de logs autour d'un `pytest` a transformé un
+  soupçon (« ça a piégé deux diagnostics ») en chiffre (+86 Ko, +3,3 Ko de
+  télémétrie corrompue), puis en preuve de correction (0/0).
+
+- **Attention à `git add -A` quand plusieurs sessions partagent l'arbre.**
+  Un chantier lancé en parallèle éditait `bot/cogs/session.py` pendant que
+  je committais : `git add -A` l'aurait avalé. Commiter par liste de
+  fichiers explicite dès qu'un autre travail est en vol.
+
 ## 2026-07-19 — Première CI, sessions live : ce que le réel a appris
 
 - **Vérifier qu'un tag majeur flottant existe avant d'écrire `@vN`.**
