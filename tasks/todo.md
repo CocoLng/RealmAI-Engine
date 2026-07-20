@@ -220,6 +220,45 @@ sessions pilotées par script tester autonome (pattern du skill).
   (`TestTurnReminder`, concurrency bugs 2-4 reformulés). Le bot de test est
   arrêté ; l'état est persisté, la campagne reprend au `/resume`.
 
+### 2.4 — Porte de cohérence câblée (2026-07-20)
+
+- [x] **Noyau partagé** : `memory/coherence_rules.py` — 11 règles de cohérence
+      (4 bloquantes / 7 observées), définies une seule fois, consommées par
+      le simulateur (`tests/simulation/`) et la production (`bot/pipeline/`).
+- [x] **Adaptateurs simulateur** : règles intégrées dans
+      `tests/simulation/rules/coherence.py` (logs sur le niveau dédié
+      `memory.coherence_simulator`), avec `CoherenceRuleMeta` pour la
+      traçabilité.
+- [x] **Orchestration et gestion des verdicts** : `memory/narration_guard.py`
+      implémente `check_narration()` (évaluation des règles d'un résultat de
+      narration) et retourne un `GuardVerdict` (blocking/observed). Câblée en
+      production dans `bot/pipeline/narrate.py:390` lors du tier 1 de
+      narration.
+- [x] **Politique de retry et tier 3** : narration échouée sur une règle
+      bloquante → retry une fois avec prompt correctif, puis fallback vers
+      `narrator.template_narration` (tier 3 sans LLM, structure pure). Câblée
+      dans `bot/pipeline/narrate.py:420-440`.
+- [x] **Locked facts de beats** : `world/story_arc.py:append_beat_locked_facts`
+      injecte les faits verrouillés en phase 2 (après évaluation du beat).
+      Appelée dans `bot/pipeline/orchestrator.py:838`. Intégrée au snapshot
+      cohérence pour prévenir les violations.
+- [x] **Télémétrie et promotion** : logger `memory.coherence` capture tous les
+      verdicts (`OBSERVED` / `BLOCKING`). Source d'audit pour promouvoir
+      règles OBSERVE → BLOCK : dépouiller les logs après N sessions réelles,
+      vérifier stabilité de `R1.phantom_npc`, `R1.hp_mismatch`,
+      `R1.location_mismatch` avant passage aux règles bloquantes.
+- [x] **Vérification** : `uv run pytest -q` → 3024 passed, 1 skipped (50+ tests
+      nouveaux). `uv run ruff check .` → all checks passed. `uv run mypy .` →
+      no issues found in 355 source files. Wiring grip : 4/4 symbols prouvés
+      appelés hors tests (`check_narration`, `build_coherence_snapshot`,
+      `append_beat_locked_facts`, `template_narration`).
+
+**Suivi ouvert** : après N sessions réelles en prod (objectif : ~10), dépouiller
+les logs `memory.coherence` pour vérifier stabilité des trois règles
+observées (`R1.phantom_npc`, `R1.hp_mismatch`, `R1.location_mismatch`).
+Promotion à bloquantes justifiée si taux < 0,5 % de faux positifs confirmés
+par replay manuel.
+
 -----
 
 # TEMPS 3 — Grand nettoyage
