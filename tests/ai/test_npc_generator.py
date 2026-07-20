@@ -96,8 +96,11 @@ def test_generate_preserves_valid_secrets_and_knowledge():
     assert "dragon" in sheet.secrets[0].lower()
 
 
-def test_generate_with_archetype_context():
-    """When archetype_context is provided, it is included in the prompt."""
+def test_generate_with_archetype():
+    """When an archetype is provided, its authored content reaches the prompt."""
+    from engine.npc_archetypes import ARCHETYPES
+
+    archetype = ARCHETYPES[0]
     client = MagicMock()
     client.chat_json.return_value = {
         "personality": "Rusé et calculateur.",
@@ -110,22 +113,28 @@ def test_generate_with_archetype_context():
         npc_name="Varon",
         location_context="Le marché noir de Duskwall",
         campaign_theme="intrigue urbaine",
-        archetype_context="Informateur — vend des secrets au plus offrant.",
+        archetype=archetype,
     )
 
     assert isinstance(sheet, NPCSheet)
     assert "Rusé" in sheet.personality
 
-    # Verify archetype was included in the prompt
+    # Verify the full authored block was included in the prompt
     args, _kwargs = client.chat_json.call_args
     messages = args[1]
     user_msg = messages[-1]["content"]
     assert "NPC Archetype:" in user_msg
-    assert "Informateur" in user_msg
+    assert archetype.label in user_msg
+    assert archetype.hook in user_msg
+    assert archetype.dialogue_pattern in user_msg
 
 
-def test_generate_archetype_fallback_on_empty_secrets():
-    """With archetype_context, fallback secrets use the NPC name."""
+def test_generate_archetype_fallback_uses_authored_content():
+    """With an archetype, empty LLM lists fall back to the authored hook and
+    traits — never to the generic sentences."""
+    from engine.npc_archetypes import ARCHETYPES
+
+    archetype = ARCHETYPES[0]
     client = MagicMock()
     client.chat_json.return_value = {
         "personality": "Silencieux.",
@@ -136,16 +145,16 @@ def test_generate_archetype_fallback_on_empty_secrets():
     generator = NPCGenerator(client)
     sheet = generator.generate(
         npc_name="Kael",
-        location_context="La tour abandonnée",
+        location_context="La tour abandonnée — un donjon en ruine.",
         campaign_theme="dark fantasy",
-        archetype_context="Assassin — travaille dans l'ombre.",
+        archetype=archetype,
     )
 
     assert isinstance(sheet, NPCSheet)
-    assert len(sheet.secrets) == 1
-    assert "Kael" in sheet.secrets[0]
+    assert sheet.secrets == [archetype.hook]
     assert len(sheet.knowledge) == 1
-    assert "tour abandonnée" in sheet.knowledge[0]
+    assert archetype.traits[0] in sheet.knowledge[0]
+    assert "La tour abandonnée" in sheet.knowledge[0]
 
 
 # ---------------------------------------------------------------------------

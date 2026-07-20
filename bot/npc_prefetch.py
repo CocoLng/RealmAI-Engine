@@ -24,6 +24,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from db.repositories.npc_repo import NPCRepository
+from engine.npc_archetypes import draw_archetypes
 from bot.prefetch_gate import generation_gate, wait_player_idle
 
 if TYPE_CHECKING:
@@ -72,6 +73,9 @@ async def prefetch_npc_sheets(
         location_ctx = f"{location.name} — {location.description}"
 
     generated = 0
+    # One draw pool per batch: NPCs sharing a location never share an
+    # archetype (spec npc-archetypes §1.3 — anti-doublon par lieu).
+    used_archetypes: set[str] = set()
     for name in list(getattr(session, "npcs", None) or {}):
         npc = session.npcs.get(name)
         if npc is None or not _sheet_is_empty(npc):
@@ -92,12 +96,15 @@ async def prefetch_npc_sheets(
                         "NPC prefetch lost race for %r — result dropped", name,
                     )
                     continue
+                archetype = draw_archetypes(1, exclude=used_archetypes)[0]
+                used_archetypes.add(archetype.id)
                 sheet = await asyncio.to_thread(
                     generator.generate,
                     npc_name=name,
                     location_context=location_ctx,
                     campaign_theme=campaign_theme,
                     language=language,
+                    archetype=archetype,
                 )
             if not _sheet_is_empty(npc):
                 # A TALK action filled the sheet while our call was in

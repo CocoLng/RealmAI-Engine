@@ -106,6 +106,31 @@ def _persist_world(db_factory, session) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def test_prefetch_passes_distinct_archetypes_per_batch(db_factory) -> None:
+    """NPCs sharing a location never share an archetype (spec §1.3)."""
+
+    class ArchetypeRecorder(FakeGenerator):
+        def __init__(self) -> None:
+            super().__init__()
+            self.archetype_ids: list[str] = []
+
+        def generate(self, npc_name: str, **kwargs) -> NPCSheet:
+            archetype = kwargs.get("archetype")
+            assert archetype is not None, "prefetch must always pass an archetype"
+            self.archetype_ids.append(archetype.id)
+            return super().generate(npc_name, **kwargs)
+
+    gen = ArchetypeRecorder()
+    npcs = {name: _make_npc(name) for name in ("A", "B", "C", "D", "E")}
+    session = _make_session(npcs, gen)
+    _persist_world(db_factory, session)
+
+    count = await prefetch_npc_sheets(session, db_factory=db_factory)
+
+    assert count == 5
+    assert len(set(gen.archetype_ids)) == 5
+
+
 async def test_prefetch_fills_empty_sheets_and_persists(db_factory) -> None:
     gen = FakeGenerator()
     npcs = {"Jeanne": _make_npc("Jeanne"), "Père Thomas": _make_npc("Père Thomas")}

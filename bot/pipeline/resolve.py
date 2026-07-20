@@ -597,16 +597,21 @@ def resolve_talk(
         and not (npc.personality or npc.description)
     ):
         try:
+            from engine.npc_archetypes import draw_archetypes
+
             location_ctx = ""
             if session.current_location is not None:
                 loc = session.current_location
                 location_ctx = f"{loc.name} — {loc.description}"
             campaign_theme = getattr(session.campaign, "name", "")
+            # Rare race path (the prefetch normally wins): a single random
+            # draw, no per-location dedup — spec npc-archetypes §1.3.
             sheet = generator.generate(
                 npc_name=npc.name,
                 location_context=location_ctx,
                 campaign_theme=campaign_theme,
                 language=language,
+                archetype=draw_archetypes(1)[0],
             )
             npc.personality = sheet.personality
             npc.description = sheet.description

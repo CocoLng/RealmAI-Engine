@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from ai.client import OllamaClient
 from ai.language import language_instruction
 from ai.models import NPCSheet
+from engine.npc_archetypes import NPCArchetype, format_archetype_context
 
 if TYPE_CHECKING:
     from memory.indexer import SemanticIndexer
@@ -24,9 +25,10 @@ class NPCGenerator:
     The output is persisted onto the NPC entity by the caller so this
     expensive LLM call only happens once per NPC.
 
-    An optional ``archetype_context`` parameter allows the caller to inject
-    archetype information (personality traits, narrative hooks) to produce
-    richer, more thematic backstories.
+    An optional ``archetype`` (from :mod:`engine.npc_archetypes`) seeds the
+    prompt with authored content — contradictory traits, narrative hook,
+    dialogue pattern — and doubles as the fallback source when the LLM
+    returns empty lists.
     """
 
     MODEL = "qwen3.5:4b"
@@ -45,7 +47,7 @@ class NPCGenerator:
         location_context: str,
         campaign_theme: str,
         language: str = "fr",
-        archetype_context: str | None = None,
+        archetype: NPCArchetype | None = None,
         campaign_id: str = "",
     ) -> NPCSheet:
         """Generate a backstory sheet for ``npc_name``.
@@ -55,8 +57,9 @@ class NPCGenerator:
             location_context: Where the NPC is encountered — name + ambiance.
             campaign_theme: Broader campaign theme so secrets can hook in.
             language: ISO 639-1 language code for output.
-            archetype_context: Optional archetype info (personality traits,
-                narrative hooks) to produce richer backstories.
+            archetype: Optional authored archetype (traits, hook, dialogue
+                pattern) injected into the prompt and used as the fallback
+                source instead of generic sentences.
             campaign_id: Campaign identifier forwarded to the SemanticIndexer
                 when one is provided.  Defaults to ``""`` so existing callers
                 that omit it continue to work unchanged.
@@ -70,8 +73,8 @@ class NPCGenerator:
             f"\nLocation context:\n{location_context}",
             f"\nCampaign theme: {campaign_theme}",
         ]
-        if archetype_context:
-            parts.append(f"\nNPC Archetype:\n{archetype_context}")
+        if archetype is not None:
+            parts.append(f"\nNPC Archetype:\n{format_archetype_context(archetype)}")
         user_content = "\n".join(parts)
 
         system_prompt = language_instruction(language) + _SYSTEM_PROMPT
@@ -84,17 +87,20 @@ class NPCGenerator:
         secrets = [str(s).strip() for s in data.get("secrets", []) if str(s).strip()]
         knowledge = [str(k).strip() for k in data.get("knowledge", []) if str(k).strip()]
 
-        # NPCSheet requires min_length=1 for secrets and knowledge.
-        # Use archetype-aware fallbacks when the LLM returns empty lists.
+        # NPCSheet requires min_length=1 for secrets and knowledge. With an
+        # archetype, fall back to its authored content (the hook IS a
+        # playable secret) — never to the generic sentences. The generic
+        # path only survives for archetype-less callers (tests, tooling).
+        location_line = location_context.split(chr(10))[0].strip()[:60]
         if not secrets:
-            if archetype_context:
-                secrets = [f"{npc_name} cache un secret lié à son passé"]
+            if archetype is not None:
+                secrets = [archetype.hook]
             else:
                 secrets = ["A un secret qu'il/elle ne révèle pas facilement"]
             logger.warning("NPCGEN name=%r: empty secrets from LLM, using fallback", npc_name)
         if not knowledge:
-            if archetype_context:
-                knowledge = [f"Connaît bien {location_context.split(chr(10))[0].strip()[:60]}"]
+            if archetype is not None:
+                knowledge = [f"Connaît bien {location_line} — {archetype.traits[0]}"]
             else:
                 knowledge = ["Connaît bien les environs"]
             logger.warning("NPCGEN name=%r: empty knowledge from LLM, using fallback", npc_name)
