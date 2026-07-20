@@ -225,39 +225,43 @@ sessions pilotées par script tester autonome (pattern du skill).
 - [x] **Noyau partagé** : `memory/coherence_rules.py` — 11 règles de cohérence
       (4 bloquantes / 7 observées), définies une seule fois, consommées par
       le simulateur (`tests/simulation/`) et la production (`bot/pipeline/`).
-- [x] **Adaptateurs simulateur** : règles intégrées dans
-      `tests/simulation/rules/coherence.py` (logs sur le niveau dédié
-      `memory.coherence_simulator`), avec `CoherenceRuleMeta` pour la
-      traçabilité.
-- [x] **Orchestration et gestion des verdicts** : `memory/narration_guard.py`
-      implémente `check_narration()` (évaluation des règles d'un résultat de
-      narration) et retourne un `GuardVerdict` (blocking/observed). Câblée en
-      production dans `bot/pipeline/narrate.py:390` lors du tier 1 de
-      narration.
-- [x] **Politique de retry et tier 3** : narration échouée sur une règle
-      bloquante → retry une fois avec prompt correctif, puis fallback vers
-      `narrator.template_narration` (tier 3 sans LLM, structure pure). Câblée
-      dans `bot/pipeline/narrate.py:420-440`.
-- [x] **Locked facts de beats** : `world/story_arc.py:append_beat_locked_facts`
-      injecte les faits verrouillés en phase 2 (après évaluation du beat).
-      Appelée dans `bot/pipeline/orchestrator.py:838`. Intégrée au snapshot
-      cohérence pour prévenir les violations.
-- [x] **Télémétrie et promotion** : logger `memory.coherence` capture tous les
-      verdicts (`OBSERVED` / `BLOCKING`). Source d'audit pour promouvoir
-      règles OBSERVE → BLOCK : dépouiller les logs après N sessions réelles,
-      vérifier stabilité de `R1.phantom_npc`, `R1.hp_mismatch`,
-      `R1.location_mismatch` avant passage aux règles bloquantes.
-- [x] **Vérification** : `uv run pytest -q` → 3024 passed, 1 skipped (50+ tests
-      nouveaux). `uv run ruff check .` → all checks passed. `uv run mypy .` →
-      no issues found in 355 source files. Wiring grip : 4/4 symbols prouvés
-      appelés hors tests (`check_narration`, `build_coherence_snapshot`,
-      `append_beat_locked_facts`, `template_narration`).
+- [x] **Adaptateurs simulateur** : `tests/simulation/rules/hard.py` et
+      `soft.py` réécrits en adaptateurs minces du noyau (mapping state
+      simulateur → `CoherenceSnapshot`, violations → `IncoherenceAlert`) ;
+      `drift.py`, `rules/__init__.py` et `checker.py` inchangés. Suite
+      simulation verte sans aucun ajustement de fixture.
+- [x] **Orchestration** : `memory/narration_guard.py::check_narration()`
+      exécute les 11 règles et retourne un `GuardVerdict`
+      (blocking/observed). Câblée dans `call_narrator`
+      (`bot/pipeline/narrate.py`).
+- [x] **Politique retry → template** : violation bloquante → un retry
+      correctif (contraintes dérivées des `expected`), re-check, puis
+      `narrator.template_narration` (tier 3 sans LLM) si encore violé —
+      jamais d'incohérence bloquante publiée. Chemin nominal : zéro appel
+      LLM supplémentaire.
+- [x] **Locked facts de beats** : `BeatEffects.locked_facts` +
+      `narrative_hint` verrouillés à la complétion du beat via
+      `world/story_arc.py::append_beat_locked_facts` (idempotent), appelé
+      par `_apply_beat_effects` ; bloc `[LOCKED FACTS]` plafonné à 15
+      lignes, morts d'abord.
+- [x] **Télémétrie de promotion** : les violations OBSERVE sont loggées sur
+      le logger dédié `memory.coherence` (les bloquantes passent par les
+      warnings du pipeline). C'est la base de données pour promouvoir des
+      règles OBSERVE → BLOCK.
+- [x] **Vérification** : `uv run pytest -q` → 3024 passed, 1 skipped (50+
+      tests nouveaux). `uv run ruff check .` → all checks passed.
+      `uv run mypy .` → no issues found in 355 source files. Câblage
+      prouvé : 4/4 symboles appelés hors tests (`check_narration`,
+      `build_coherence_snapshot`, `append_beat_locked_facts`,
+      `template_narration`).
 
-**Suivi ouvert** : après N sessions réelles en prod (objectif : ~10), dépouiller
-les logs `memory.coherence` pour vérifier stabilité des trois règles
-observées (`R1.phantom_npc`, `R1.hp_mismatch`, `R1.location_mismatch`).
-Promotion à bloquantes justifiée si taux < 0,5 % de faux positifs confirmés
-par replay manuel.
+**Suivi ouvert** : après quelques sessions réelles (~10), dépouiller les logs
+`memory.coherence` et statuer sur la promotion de `R1.phantom_npc`,
+`R1.hp_mismatch`, `R1.location_mismatch` (faible taux de faux positifs
+confirmé par relecture des extraits loggés). Surveiller aussi le taux de
+succès du retry correctif dead-NPC (contrainte plus terse qu'avant) et le
+faux positif possible de `R1.npc_status` sur la personnification près d'un
+cadavre.
 
 -----
 
