@@ -1311,6 +1311,12 @@ class SessionCog(commands.Cog):
 
         schedule_location_prefetch(session, db_factory=self.bot.db_factory)
 
+        # RAG: campaigns saved before the creation-time seeding fix have no
+        # ChromaDB collection — rebuild it from the DB in the background.
+        from bot.semantic_backfill import schedule_semantic_backfill
+
+        schedule_semantic_backfill(session, db_factory=self.bot.db_factory)
+
         combat_active = combat_state is not None and combat_state.is_active
         player_count = len(session.characters)
         combat_msg = " (combat en cours !)" if combat_active else ""

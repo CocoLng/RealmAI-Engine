@@ -25,6 +25,56 @@ def semantic_memory(ephemeral_chromadb: chromadb.ClientAPI) -> SemanticMemory:
 
 
 class TestSemanticMemory:
+    def test_has_documents_false_when_collection_missing(
+        self, semantic_memory: SemanticMemory,
+    ) -> None:
+        assert semantic_memory.has_documents("never-seeded") is False
+
+    def test_has_documents_true_after_first_add(
+        self, semantic_memory: SemanticMemory,
+    ) -> None:
+        doc = SemanticDocument(
+            campaign_id="c-seeded",
+            doc_type=SemanticDocumentType.WORLD_LORE,
+            content="Campaign theme: Dark Fantasy",
+            metadata={},
+        )
+        semantic_memory.add_document(doc)
+        assert semantic_memory.has_documents("c-seeded") is True
+
+    def test_has_documents_filters_by_doc_type(
+        self, semantic_memory: SemanticMemory,
+    ) -> None:
+        """Director-notes-only collections (live pre-fix campaigns) must not
+        count as seeded: the /resume backfill checks for WORLD_LORE."""
+        note = SemanticDocument(
+            campaign_id="c-notes-only",
+            doc_type=SemanticDocumentType.PAST_EVENT,
+            content="[Story Director Note — Priority: low]\nNo issues.",
+            metadata={"source": "story_director"},
+        )
+        semantic_memory.add_document(note)
+        assert semantic_memory.has_documents("c-notes-only") is True
+        assert (
+            semantic_memory.has_documents(
+                "c-notes-only", doc_type=SemanticDocumentType.WORLD_LORE,
+            )
+            is False
+        )
+        lore = SemanticDocument(
+            campaign_id="c-notes-only",
+            doc_type=SemanticDocumentType.WORLD_LORE,
+            content="Campaign theme: Dark Fantasy",
+            metadata={},
+        )
+        semantic_memory.add_document(lore)
+        assert (
+            semantic_memory.has_documents(
+                "c-notes-only", doc_type=SemanticDocumentType.WORLD_LORE,
+            )
+            is True
+        )
+
     def test_add_and_query(self, semantic_memory: SemanticMemory) -> None:
         doc = SemanticDocument(
             campaign_id="c1",

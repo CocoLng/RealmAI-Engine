@@ -139,6 +139,81 @@ class TestIndexRevealedFact:
         assert "wall breaks" in doc.content
 
 
+class TestIndexNpcEntity:
+    """Backfill path — indexes a world NPC without requiring an NPCSheet."""
+
+    def _npc(self, name: str = "Aldric", **overrides):
+        from engine.character import AbilityScores, Race
+        from world.npc import NPC
+
+        defaults = dict(
+            name=name,
+            race=Race.HUMAN,
+            ability_scores=AbilityScores(
+                STR=10, DEX=10, CON=10, INT=10, WIS=10, CHA=10,
+            ),
+            hp=4,
+            max_hp=4,
+            ac=10,
+        )
+        defaults.update(overrides)
+        return NPC(**defaults)
+
+    def test_index_npc_entity_adds_npc_sheet_document(
+        self, indexer: SemanticIndexer, fake_semantic: MagicMock,
+    ) -> None:
+        npc = self._npc(
+            personality="Bourru mais loyal.",
+            description="Forgeron aux mains noircies.",
+            secrets=["Cache une lame elfique."],
+            knowledge=["Connaît le tunnel sous la forge."],
+        )
+        indexer.index_npc_entity("cmp_1", npc)
+        fake_semantic.add_document.assert_called_once()
+        doc = fake_semantic.add_document.call_args.args[0]
+        assert doc.doc_type == SemanticDocumentType.NPC_SHEET
+        assert "Bourru" in doc.content
+        assert "lame elfique" in doc.content
+        assert "tunnel" in doc.content
+
+    def test_index_npc_entity_shares_id_with_index_npc(
+        self, indexer: SemanticIndexer, fake_semantic: MagicMock,
+    ) -> None:
+        """Backfilled NPC and generation-time sheet dedupe onto one doc."""
+        sheet = NPCSheet(
+            personality="Bourru.",
+            description="Forgeron.",
+            secrets=["s"],
+            knowledge=["k"],
+        )
+        indexer.index_npc("cmp_1", "Aldric", sheet)
+        sheet_id = fake_semantic.add_document.call_args.args[0].id
+        fake_semantic.reset_mock()
+        indexer.index_npc_entity(
+            "cmp_1", self._npc(personality="Bourru.", description="Forgeron."),
+        )
+        entity_id = fake_semantic.add_document.call_args.args[0].id
+        assert entity_id == sheet_id
+
+    def test_index_npc_entity_skips_unhydrated_npc(
+        self, indexer: SemanticIndexer, fake_semantic: MagicMock,
+    ) -> None:
+        """A stub NPC (no personality, no description) is not worth a doc."""
+        indexer.index_npc_entity("cmp_1", self._npc())
+        fake_semantic.add_document.assert_not_called()
+
+    def test_index_npc_entity_tolerates_empty_lists(
+        self, indexer: SemanticIndexer, fake_semantic: MagicMock,
+    ) -> None:
+        """Unlike NPCSheet, empty secrets/knowledge must not block indexing."""
+        npc = self._npc(personality="Discrète.")
+        indexer.index_npc_entity("cmp_1", npc)
+        fake_semantic.add_document.assert_called_once()
+        doc = fake_semantic.add_document.call_args.args[0]
+        assert "Secrets" not in doc.content
+        assert "Knowledge" not in doc.content
+
+
 class TestIndexerHandlesEmpty:
     def test_indexing_empty_lore_string_is_a_no_op(
         self, indexer: SemanticIndexer, fake_semantic: MagicMock,

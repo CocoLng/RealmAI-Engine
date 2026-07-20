@@ -61,6 +61,30 @@ class SemanticMemory:
             ],
         )
 
+    def has_documents(
+        self,
+        campaign_id: str,
+        doc_type: SemanticDocumentType | None = None,
+    ) -> bool:
+        """True when the campaign's collection holds ≥1 (matching) document.
+
+        Used by the /resume backfill to decide whether the campaign was
+        seeded at creation time or predates the creation-time indexing.
+        The backfill filters on WORLD_LORE: live pre-fix campaigns own a
+        collection populated only by Director notes (past_event), which
+        must not count as a seeded world corpus.
+        """
+        try:
+            collection = self._client.get_collection(f"campaign_{campaign_id}")
+            if doc_type is None:
+                return collection.count() > 0
+            got = collection.get(
+                where={"doc_type": doc_type.value}, limit=1, include=[],
+            )
+        except Exception:
+            return False
+        return bool(got["ids"])
+
     def query(
         self,
         campaign_id: str,

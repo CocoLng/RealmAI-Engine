@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from ai.models import NPCSheet
     from memory.semantic import SemanticMemory
     from world.location import Location
+    from world.npc import NPC
     from world.story_arc import StoryBeat
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,36 @@ class SemanticIndexer:
         )
         self._semantic.add_document(doc)
         logger.debug("INDEX location campaign=%s name=%s", campaign_id, location.name)
+
+    def index_npc_entity(self, campaign_id: str, npc: "NPC") -> None:
+        """Index a hydrated world NPC directly (backfill path).
+
+        Same document ID as :meth:`index_npc`, so a backfilled NPC and a
+        generation-time sheet dedupe onto one document. Unlike
+        :class:`ai.models.NPCSheet` (min_length=1), empty secrets/knowledge
+        are tolerated — old saves may hold partial sheets. No-op when the
+        NPC is unhydrated (no personality and no description).
+        """
+        if not (npc.personality or npc.description):
+            return
+        content_parts = [f"NPC: {npc.name}"]
+        if npc.personality:
+            content_parts.append(f"Personality: {npc.personality}")
+        if npc.description:
+            content_parts.append(f"Description: {npc.description}")
+        if npc.knowledge:
+            content_parts.append("Knowledge: " + "; ".join(npc.knowledge))
+        if npc.secrets:
+            content_parts.append("Secrets: " + "; ".join(npc.secrets))
+        doc = SemanticDocument(
+            id=f"npc_sheet:{campaign_id}:{_slug(npc.name)}",
+            campaign_id=campaign_id,
+            doc_type=SemanticDocumentType.NPC_SHEET,
+            content="\n".join(content_parts),
+            metadata={"npc_name": npc.name},
+        )
+        self._semantic.add_document(doc)
+        logger.debug("INDEX npc_entity campaign=%s name=%s", campaign_id, npc.name)
 
     def index_lore(self, campaign_id: str, *, content: str, metadata: dict[str, str]) -> None:
         """Index world lore as a WORLD_LORE-tagged document. No-op if content is empty."""

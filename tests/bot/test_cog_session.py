@@ -209,6 +209,24 @@ class TestResume:
         assert mock_sched.call_args.args[0] is cog.bot.sessions[CHANNEL_ID]
 
     @pytest.mark.asyncio
+    @patch("bot.semantic_backfill.schedule_semantic_backfill")
+    @patch("bot.cogs.session.create_ai_services")
+    async def test_resume_schedules_semantic_backfill(
+        self,
+        mock_ai: MagicMock,
+        mock_backfill: MagicMock,
+        cog: SessionCog,
+        interaction: AsyncMock,
+        persisted_campaign: Campaign,
+        persisted_channel: int,
+    ) -> None:
+        """Pre-fix campaigns get their ChromaDB collection rebuilt on resume."""
+        await cog.resume.callback(cog, interaction)  # type: ignore[call-arg, arg-type]
+
+        mock_backfill.assert_called_once()
+        assert mock_backfill.call_args.args[0] is cog.bot.sessions[CHANNEL_ID]
+
+    @pytest.mark.asyncio
     async def test_resume_already_active(
         self, cog: SessionCog, interaction: AsyncMock,
     ) -> None:
