@@ -21,7 +21,6 @@ Total budget : **2500 tokens** (≥ layer1_max, enforced par `ContextBudget` Pyd
 - `Campaign` via `CampaignRepository`
 - `Location` courante via `LocationRepository`
 - PNJs de la location via `NPCRepository.list_by_location()`
-- Quests actives via `QuestRepository.list_by_campaign()`
 - Personnages joueurs + inventaires + combat state (passés en in-memory)
 
 **Sortie** : `GameStateSummary` Pydantic avec :
@@ -91,7 +90,7 @@ Budget 700 tokens. Tronqué en retirant les exchanges les plus anciens d'abord.
 SemanticDocument(
     id: str,
     campaign_id: str,
-    doc_type: Literal["WORLD_LORE", "NPC_SHEET", "PAST_EVENT", "LOCATION_DETAIL", "QUEST_DETAIL"],
+    doc_type: Literal["WORLD_LORE", "NPC_SHEET", "PAST_EVENT", "LOCATION_DETAIL"],
     content: str,
     metadata: dict,
 )

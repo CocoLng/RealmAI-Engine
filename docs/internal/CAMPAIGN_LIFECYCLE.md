@@ -140,7 +140,7 @@ Défini dans [bot/cogs/session.py](../../bot/cogs/session.py).
 
 ## 5. `/resume <campaign_id>`
 
-- Charge la `Campaign`, la `Location` courante, les `NPCs`, `Quests`, `StoryArc`, `PlayerCharacters`, **et le `CombatState` actif** (`campaigns.combat_state_json` — zones des combattants réalignées via `_sanitize_combat_zones` ; un blob illisible est droppé avec warning plutôt que de bloquer la reprise).
+- Charge la `Campaign`, la `Location` courante, les `NPCs`, `StoryArc`, `PlayerCharacters`, **et le `CombatState` actif** (`campaigns.combat_state_json` — zones des combattants réalignées via `_sanitize_combat_zones` ; un blob illisible est droppé avec warning plutôt que de bloquer la reprise).
 - Reconstruit un `GameSession` identique.
 - Ré-instancie les services IA.
 - La sliding window n'est pas rechargée en RAM au `/resume` (`session.memory_context` repart à `None`), mais dès le tour suivant `assemble_memory_prefix` relit les exchanges persistés depuis la DB — la continuité narrative est conservée (chantier G).

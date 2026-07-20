@@ -1,6 +1,6 @@
 """Campaign domain model.
 
-Groups players, NPCs, locations, and quests into a single game session.
+Groups players, NPCs, and locations into a single game session.
 """
 
 from datetime import datetime

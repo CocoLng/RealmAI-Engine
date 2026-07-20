@@ -184,7 +184,6 @@ Particularités :
 | `CampaignRepository` | save, get_by_id, list_all, update, delete |
 | `NPCRepository` | save, get_by_name, list_by_campaign, list_by_location, update ⚠, delete |
 | `LocationRepository` | save, get_by_name, list_by_campaign, update, delete |
-| `QuestRepository` | save, get_by_title, list_by_campaign, update, delete |
 | `ExchangeRepository` | save, get_recent(limit=12), get_range, get_unsummarized, count_unsummarized, delete_before |
 | `SummaryRepository` | save, get_recent(limit=4), get_latest, list_by_campaign |
 | `StoryArcRepository` | save, get_by_campaign, update, delete |
@@ -198,7 +197,6 @@ Particularités :
 Campaign (PK=id)
   ├─ NPCs (UNIQUE(campaign_id, name))
   ├─ Locations (UNIQUE(campaign_id, name))
-  ├─ Quests (UNIQUE(campaign_id, title))
   ├─ Exchanges (Layer 2)
   ├─ Summaries (Layer 3)
   ├─ StoryArc (1:1)
@@ -213,7 +211,7 @@ Tout est `CASCADE` delete : supprimer une `campaigns` row nettoie tout l'état S
 ## Test coverage
 
 - [tests/db/test_database.py](../../tests/db/test_database.py) — engine init, foreign keys, migration
-- [tests/db/test_db_repos.py](../../tests/db/test_db_repos.py) — CRUD pour 4 repos principaux (Campaign, NPC, Location, Quest)
+- [tests/db/test_db_repos.py](../../tests/db/test_db_repos.py) — CRUD pour 3 repos principaux (Campaign, NPC, Location)
 - [tests/db/test_mappers.py](../../tests/db/test_mappers.py) — bidirectionnel pour toutes les entités
 - [tests/db/test_player_character_repo.py](../../tests/db/test_player_character_repo.py)
 - [tests/db/test_campaign_channel_repo.py](../../tests/db/test_campaign_channel_repo.py)

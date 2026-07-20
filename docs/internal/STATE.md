@@ -84,7 +84,6 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - ✅ NPC Agent (dialogue + disposition delta + revealed info)
 - ✅ NPC Generator (fiches lazily à la 1ʳᵉ rencontre)
 - ✅ World Generator (avec item_descriptions validation)
-- ✅ Quest Generator
 - ✅ Arc Generator (10-15 beats, boss final, villain)
 - ✅ Story Director (coherence check périodique)
 - ✅ Entity Resolver (exact → lemmes FR → fuzzy → fallback LLM)
@@ -158,7 +157,6 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - Multi-narrator / multi-MJ
 - Voice chat integration
 - Dashboard admin
-- Quest completion automatique (objectives manuels)
 - Rewards auto-distribués (XP / gold) après combat
 - Skill checks hors combat (DC-based)
 - Narrator streaming (toute narration est renvoyée en block)
