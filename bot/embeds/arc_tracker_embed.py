@@ -19,7 +19,6 @@ def build_arc_tracker_embed(
     chapter_title: str,
     current_objective: str,
     recent_beats: list[str],
-    active_quests: list[str],
     last_updated_relative: str,
     progress_score: int = 0,
     objective_status_lines: list[str] | None = None,
@@ -35,7 +34,6 @@ def build_arc_tracker_embed(
       🗺️ Lieux pertinents
       👥 Vivants pertinents
       📜 Beats récents
-      📋 Quêtes actives
       Footer: Mise à jour : <last_updated_relative>
     """
     objective_status_lines = objective_status_lines or []
@@ -83,13 +81,6 @@ def build_arc_tracker_embed(
         embed.add_field(
             name="📜 Beats récents",
             value="\n".join(f"• {b[:200]}" for b in recent_beats[-3:]) or "—",
-            inline=False,
-        )
-
-    if active_quests:
-        embed.add_field(
-            name="📋 Quêtes actives",
-            value="\n".join(f"• {q[:200]}" for q in active_quests[-5:]) or "—",
             inline=False,
         )
 

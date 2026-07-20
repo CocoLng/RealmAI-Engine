@@ -4,6 +4,11 @@
 > Status: Approved
 > Depends on: Phase 2a (World Models & DB Persistence)
 > Unblocks: Phase 2c (AI Core)
+>
+> **Superseded en partie (2026-07-20)** : `active_quests` (Layer 1) et
+> `QUEST_DETAIL` (Layer 4) ont été retirés avec le sous-système quêtes —
+> les beats d'arc le remplacent. Voir
+> `2026-07-20-npc-archetypes-and-quest-retirement-design.md` §2.
 
 ---
 

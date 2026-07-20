@@ -159,7 +159,6 @@ class TestStoryDirectorDirection:
             "current_beat_atmosphere": "Dread hangs in the air as the spy draws near.",
             "forbidden_topics": ["map_in_cellar"],
             "required_mentions": ["Elena"],
-            "stale_quest_ids": [],
         }
         httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(brainstorm_response))
         httpx_mock.add_response(url=CHAT_URL, json=make_ollama_response(generate_response))
@@ -174,7 +173,6 @@ class TestStoryDirectorDirection:
         assert note.current_beat_atmosphere == "Dread hangs in the air as the spy draws near."
         assert note.forbidden_topics == ["map_in_cellar"]
         assert note.required_mentions == ["Elena"]
-        assert note.stale_quest_ids == []
 
     def test_check_coherence_direction_fields_default_when_absent(
         self,
@@ -200,7 +198,6 @@ class TestStoryDirectorDirection:
         assert note.current_beat_atmosphere == ""
         assert note.forbidden_topics == []
         assert note.required_mentions == []
-        assert note.stale_quest_ids == []
 
 
 class TestNoteInvalidationM11:

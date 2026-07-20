@@ -163,7 +163,6 @@ class GameSession:
     combat_state: CombatState | None
     current_location: Location | None
     npcs: dict[str, NPC]
-    quests: list[Quest]
     story_arc: StoryArc | None
     language: str
 

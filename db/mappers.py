@@ -19,7 +19,6 @@ from world.combat_trigger_def import CombatTriggerDef
 from world.combat_zone import Zone
 from world.location import Location
 from world.npc import NPC, DialogueExchange, NPCDisposition
-from world.quest import Quest, QuestObjective, QuestStatus
 
 from memory.models import CompressedSummary, ExchangeRole, NarrativeExchange
 
@@ -34,7 +33,6 @@ from db.models import (
     LocationRow,
     NPCRow,
     PlayerCharacterRow,
-    QuestRow,
     StoryArcRow,
     SummaryRow,
 )
@@ -327,42 +325,6 @@ def location_from_db(row: LocationRow) -> Location:
             row.name, exc,
         )
         return Location(**fields, combat_zones=[])
-
-
-# ---------------------------------------------------------------------------
-# Quest
-# ---------------------------------------------------------------------------
-
-
-def quest_to_db(quest: Quest, campaign_id: str) -> QuestRow:
-    """Convert a Quest domain model to a DB row."""
-    return QuestRow(
-        campaign_id=campaign_id,
-        title=quest.title,
-        description=quest.description,
-        status=quest.status.value,
-        objectives=[obj.model_dump() for obj in quest.objectives],
-        reward_xp=quest.reward_xp,
-        reward_gold=quest.reward_gold,
-        giver_npc=quest.giver_npc,
-    )
-
-
-def quest_from_db(row: QuestRow) -> Quest:
-    """Convert a QuestRow to a Quest domain model."""
-    return Quest(
-        title=row.title,
-        description=row.description,
-        status=QuestStatus(row.status),
-        objectives=_validate_list(
-            QuestObjective,
-            row.objectives,
-            context=f"Quest objectives title={row.title!r}",
-        ),
-        reward_xp=row.reward_xp,
-        reward_gold=row.reward_gold,
-        giver_npc=row.giver_npc,
-    )
 
 
 # ---------------------------------------------------------------------------

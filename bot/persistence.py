@@ -15,7 +15,6 @@ from db.repositories import (
     LocationRepository,
     NPCRepository,
     PlayerCharacterRepository,
-    QuestRepository,
     StoryArcRepository,
 )
 
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def persist_session(db_factory: Callable[[], Any], session: GameSession) -> None:
-    """Save campaign, characters, combat state, NPCs, quests, and story arc to DB.
+    """Save campaign, characters, combat state, NPCs, and story arc to DB.
 
     This is a **synchronous** helper designed to be called from
     ``asyncio.to_thread`` when used inside async code.
@@ -63,11 +62,6 @@ def persist_session(db_factory: Callable[[], Any], session: GameSession) -> None
         for npc in session.npcs.values():
             npc_repo.upsert(npc, session.campaign.id)
 
-        # Quests
-        quest_repo = QuestRepository(db_session)
-        for quest in session.quests:
-            quest_repo.upsert(quest, session.campaign.id)
-
         # Story arc
         if session.story_arc:
             arc_repo = StoryArcRepository(db_session)
@@ -81,29 +75,3 @@ def persist_session(db_factory: Callable[[], Any], session: GameSession) -> None
         raise
     finally:
         db_session.close()
-
-    # Semantic indexing runs AFTER the commit: it is a read-only side
-    # effect on another store and must never endanger the DB snapshot.
-    _index_quests(session)
-
-
-def _index_quests(session: GameSession) -> None:
-    """Feed the campaign's quests into the semantic memory (QUEST_DETAIL).
-
-    Best-effort, mirroring the other indexation hooks: no indexer (ChromaDB
-    unavailable → ``semantic_indexer is None``) means silently skipping, and
-    a ChromaDB failure is logged without propagating — indexing must never
-    break a game action. Document IDs are derived from the quest title, so
-    re-indexing the same quest creates no duplicate.
-    """
-    indexer = getattr(session, "semantic_indexer", None)
-    if indexer is None:
-        return
-    for quest in session.quests:
-        try:
-            indexer.index_quest(session.campaign.id, quest)
-        except Exception:
-            logger.warning(
-                "INDEX quest failed campaign=%s quest=%r",
-                session.campaign.id, quest.title, exc_info=True,
-            )

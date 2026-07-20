@@ -20,7 +20,6 @@ from db.repositories import (
     LocationRepository,
     NPCRepository,
     PlayerCharacterRepository,
-    QuestRepository,
 )
 from engine.character import AbilityScores, CharacterClass, Race, create_character
 from engine.combat import CombatEndReason, CombatSide, CombatState, Combatant
@@ -28,7 +27,6 @@ from engine.inventory import create_inventory
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, NPCDisposition
-from world.quest import Quest, QuestStatus
 
 
 # ---------------------------------------------------------------------------
@@ -1186,29 +1184,6 @@ class TestPersistSessionRoundTrip:
         assert len(npcs) == 1
         assert npcs[0].name == "Barkeep"
         assert npcs[0].disposition == NPCDisposition.FRIENDLY
-
-    def test_quests_roundtrip(self, db_factory):
-        """Save quests for a campaign, reload, verify."""
-        campaign = Campaign(id="rt-3", name="Quest Test")
-        quest = Quest(
-            title="Find the key",
-            description="A key is lost",
-            status=QuestStatus.ACTIVE,
-        )
-
-        db_session = db_factory()
-        CampaignRepository(db_session).save(campaign)
-        QuestRepository(db_session).save(quest, campaign.id)
-        db_session.commit()
-        db_session.close()
-
-        db_session = db_factory()
-        quests = QuestRepository(db_session).list_by_campaign("rt-3")
-        db_session.close()
-
-        assert len(quests) == 1
-        assert quests[0].title == "Find the key"
-        assert quests[0].status == QuestStatus.ACTIVE
 
     def test_no_combat_state_returns_none(self, db_factory):
         """Campaign without combat -> combat_state_json is None."""

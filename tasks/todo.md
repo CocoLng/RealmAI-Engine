@@ -340,20 +340,27 @@ n'appelait en production*.
 
 ### 4.2 — Ouvert, décisions à prendre
 
-- [ ] **Bibliothèque d'archétypes NPC** (spec `world-generation-variety` §3,
-      20 archétypes / 5 catégories) — **jamais écrite, laissée ouverte
-      exprès** : c'est de l'écriture de contenu de jeu, elle doit porter tes
-      choix de ton et d'univers. Elle débloquerait d'un coup deux hooks
-      dormants : le paramètre `archetype_context` de `ai/npc_generator.py`
-      (jamais fourni en prod) et le remplacement de ses fallbacks génériques
-      en dur (« A un secret qu'il/elle ne révèle pas facilement »).
-- [ ] **Le sous-système quêtes est dormant** — aucun code de prod ne *crée*
-      de `Quest` aujourd'hui ; `session.quests` n'est peuplé qu'au resume
-      depuis la DB. L'indexation `QUEST_DETAIL` est branchée et correcte,
-      mais restera vide tant qu'un générateur ne produira pas de quêtes.
-      Écart plus large que la mémoire : à trancher (génère-t-on des quêtes,
-      ou les beats d'arc les remplacent-ils définitivement ?).
-- [ ] **~10 fonctions dormantes** restantes, toutes correctes et testées
+- [x] **Bibliothèque d'archétypes NPC — écrite et câblée (2026-07-20)**.
+      `engine/npc_archetypes.py` : 20 archétypes / 5 catégories, contenu
+      d'auteur (traits contradictoires, hook jouable, tic de dialogue
+      performable par un 4b). Tirage équilibré par catégorie, anti-doublon
+      par lieu dans le prefetch H8, tirage simple dans le chemin lazy de
+      `resolve.py`. `NPCGenerator` prend un `NPCArchetype` (l'ancien
+      `archetype_context` jamais fourni est supprimé) et ses fallbacks
+      dérivent du hook écrit. Spec :
+      `2026-07-20-npc-archetypes-and-quest-retirement-design.md` §1.
+- [x] **Sous-système quêtes — tranché : les beats le remplacent
+      définitivement (2026-07-20)**. Retiré : `world/quest.py`,
+      `quest_repo`, `QuestRow` + mappers, `session.quests`, save/resume,
+      `active_quests` (Layer 1 + arc tracker + embed), `index_quest` +
+      `QUEST_DETAIL`, `stale_quest_ids` (Director), règle simulateur
+      `R3.quest_silent_progress`. Motifs : les `BeatObjective` (y compris
+      optionnels) subsument le modèle, `quest_generator` était déjà
+      supprimé comme code mort, `stale_quest_ids` n'avait aucun
+      consommateur. Le contenu annexe passe par les hooks d'archétypes +
+      `suggested_hooks` du Director. Les DB existantes gardent une table
+      `quests` orpheline vide (aucune migration destructive). Spec : idem, §2.
+- [ ] **~9 fonctions dormantes** restantes, toutes correctes et testées
       (`is_combat_over` wrapper legacy, `consume_bonus_action`,
       `get_exhaustion_level`, `compute_spell_attack_bonus`,
       `restore_spell_slots` — pas de repos long —, `list_archetypes`,

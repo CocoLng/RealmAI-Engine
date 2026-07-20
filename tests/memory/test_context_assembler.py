@@ -11,7 +11,6 @@ from db.repositories.campaign_repo import CampaignRepository
 from db.repositories.exchange_repo import ExchangeRepository
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
-from db.repositories.quest_repo import QuestRepository
 from memory.context_assembler import ContextAssembler
 from memory.models import (
     ContextBudget,
@@ -25,7 +24,6 @@ from memory.token_utils import estimate_tokens
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC
-from world.quest import Quest
 
 
 @pytest.fixture()
@@ -50,13 +48,12 @@ def mock_ollama_client() -> MagicMock:
 @pytest.fixture()
 def campaign_with_data(
     db_session: Session, sample_campaign: Campaign,
-    sample_location: Location, sample_npc: NPC, sample_quest: Quest,
+    sample_location: Location, sample_npc: NPC,
 ) -> Campaign:
     campaign = sample_campaign.model_copy(update={"current_location": "Neverwinter"})
     CampaignRepository(db_session).save(campaign)
     LocationRepository(db_session).save(sample_location, campaign.id)
     NPCRepository(db_session).save(sample_npc, campaign.id)
-    QuestRepository(db_session).save(sample_quest, campaign.id)
     db_session.commit()
     return campaign
 

@@ -28,7 +28,6 @@ Total budget : **2500 tokens** (≥ layer1_max, enforced par `ContextBudget` Pyd
 - `campaign_name`, `current_location`, `location_description`
 - `player_characters: list[CharacterSummary]` (name, race, class, level, hp/max, ac, conditions)
 - `nearby_npcs: list[str]`
-- `active_quests: list[str]`
 - `combat: CombatSummary | None` (round, current turn, combatants)
 - `inventory_highlights`
 - `current_story_beat`, `upcoming_story_beat`, `villain_context`

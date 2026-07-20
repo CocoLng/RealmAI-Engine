@@ -135,9 +135,9 @@ on every persisted exchange.
 ### `world/` — domain models (Pydantic v2)
 
 In-memory game state, no DB awareness:
-`Campaign`, `Location`, `NPC`, `Quest`, `StoryArc` (+ `StoryBeat` +
+`Campaign`, `Location`, `NPC`, `StoryArc` (+ `StoryBeat` +
 `ObjectiveState`), `CombatZone`, `CombatTriggerDef`. Enums:
-`Disposition`, `QuestStatus`, `EncounterType`, `ObjectiveKind`, `GateKind`,
+`Disposition`, `EncounterType`, `ObjectiveKind`, `GateKind`,
 `ZoneTag`.
 
 ### `db/` — persistence
@@ -148,14 +148,15 @@ In-memory game state, no DB awareness:
   tables, then auto `ALTER TABLE ADD COLUMN` for any model column an existing
   table lacks (safe `DEFAULT` for NOT NULL), plus a `schema_version` stamp. No
   Alembic; `data/` stays dev-only and disposable (`scripts/reset_dev_data.py`).
-- `models.py` — 11 SQLAlchemy tables (`campaigns`, `npcs`, `locations`,
-  `quests`, `exchanges`, `summaries`, `story_arcs`, `player_characters`,
-  `campaign_channels`, `guild_configs`, `hint_usage`).
+- `models.py` — 10 SQLAlchemy tables (`campaigns`, `npcs`, `locations`,
+  `exchanges`, `summaries`, `story_arcs`, `player_characters`,
+  `campaign_channels`, `guild_configs`, `hint_usage`). Les DB créées avant
+  2026-07-20 gardent une table `quests` orpheline et vide — inoffensive.
 - `mappers.py` — bidirectional `to_db` / `from_db` per entity with JSON
   serialization of nested lists/dicts. Corrupted entries are skipped + logged
   rather than crashing the load (`_validate_list` / `_validate_dict`
   helpers).
-- `repositories/` — 11 CRUD repos. Mutations go through `upsert()` —
+- `repositories/` — 10 CRUD repos. Mutations go through `upsert()` —
   explicit get-then-write, not exception-driven.
 
 ### `bot/` — Discord layer
@@ -297,7 +298,7 @@ PhaseTransitionEvent has consumed: bool so we never re-narrate.
 
 ### SQLite (relational source of truth)
 
-11 tables, all under one SQLite file at `data/realmai.db`:
+10 tables, all under one SQLite file at `data/realmai.db`:
 
 | Table | Purpose |
 |---|---|
@@ -305,7 +306,6 @@ PhaseTransitionEvent has consumed: bool so we never re-narrate.
 | `player_characters` | Pydantic `Character` JSON column + structured stats |
 | `npcs` | NPC sheets with `dialogue_history`, `secrets`, `knowledge`, `aliases` |
 | `locations` | Map nodes with `combat_zones`, `combat_triggers`, `state_flags`, `unlocked_exits` |
-| `quests` | Active quest list per campaign |
 | `story_arcs` | 10-15 beats with `objectives[]`, `villain_stat_block`, completion state |
 | `exchanges` | Sliding window source (Layer 2) |
 | `summaries` | Auto-generated summaries (Layer 3) |

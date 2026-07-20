@@ -65,13 +65,13 @@ Le moteur de règles est en Python pur (déterministe, testé à ~98%). Les LLM 
 - `context_assembler.py` : orchestre et tronque par priorité pour respecter le budget total (2500 tokens). En prod, le pipeline consomme `assemble_memory_prefix()` (couches 2-3-4) — le scene snapshot du narrateur joue le rôle de la Layer 1.
 
 ### `world/` — domaine métier (Pydantic v2)
-Modèles in-memory : `Campaign`, `NPC`, `Location`, `Quest`, `StoryArc` (+ `StoryBeat`). Enums : `Disposition`, `QuestStatus`, `EncounterType`.
+Modèles in-memory : `Campaign`, `NPC`, `Location`, `StoryArc` (+ `StoryBeat`). Enums : `Disposition`, `EncounterType`.
 
 ### `db/` — persistance
 - `database.py` : moteur SQLite + migrations incrémentales (`ALTER TABLE`).
-- `models.py` : 11 tables SQLAlchemy (`campaigns`, `npcs`, `locations`, `quests`, `exchanges`, `summaries`, `story_arcs`, `player_characters`, `campaign_channels`, `guild_configs`, `hint_usage`).
+- `models.py` : 10 tables SQLAlchemy (`campaigns`, `npcs`, `locations`, `exchanges`, `summaries`, `story_arcs`, `player_characters`, `campaign_channels`, `guild_configs`, `hint_usage`).
 - `mappers.py` : `to_db`/`from_db` pour chaque entité (sérialisation JSON des listes/dicts).
-- `repositories/` : 11 repositories CRUD.
+- `repositories/` : 10 repositories CRUD.
 
 ### `bot/` — couche Discord
 - `bot.py` : `RealmBot`, chargement des 7 cogs + `test_bridge` (si `TEST_MODE=true`).

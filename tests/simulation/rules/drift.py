@@ -8,7 +8,6 @@ from tests.simulation.records import IncoherenceAlert
 
 # Actions that are expected to plausibly cause certain state changes.
 _DISPOSITION_CAUSING_ACTIONS = {"talk", "attack", "free_form", "cast_spell"}
-_QUEST_CAUSING_ACTIONS = {"talk", "search", "attack", "use_item", "free_form", "move"}
 _CONDITION_CAUSING_ACTIONS = {"attack", "cast_spell", "use_item", "defend", "free_form"}
 
 
@@ -47,36 +46,6 @@ def check_disposition_silent_change(
             )
     return alerts
 
-
-def check_quest_silent_progress(
-    narration: str,
-    state: Any,
-    diff: dict[str, list[Any]],
-    history: list[Any],
-) -> list[IncoherenceAlert]:
-    """R3.quest_silent_progress — quest progressed but no plausible action."""
-    alerts: list[IncoherenceAlert] = []
-    last_action = _last_intent_action(history)
-    if last_action in _QUEST_CAUSING_ACTIONS:
-        return []
-    for path, change in diff.items():
-        if path.startswith("quests.") and (
-            path.endswith(".completed_objectives") or path.endswith(".status")
-        ):
-            alerts.append(
-                IncoherenceAlert(
-                    severity="drift",
-                    category="quest_silent_progress",
-                    turn=getattr(state, "current_turn", 0),
-                    rule="R3.quest_silent_progress",
-                    narration_snippet=narration[:200],
-                    expected=(
-                        f"{path}: {change[0]} → {change[1]} but last action was "
-                        f"'{last_action}'"
-                    ),
-                )
-            )
-    return alerts
 
 
 def check_condition_phantom(

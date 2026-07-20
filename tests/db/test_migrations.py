@@ -17,7 +17,6 @@ DOMAIN_TABLES = {
     "campaigns",
     "npcs",
     "locations",
-    "quests",
     "exchanges",
     "summaries",
     "story_arcs",

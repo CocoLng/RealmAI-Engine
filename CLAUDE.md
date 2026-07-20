@@ -119,7 +119,7 @@ Background: STORY DIRECTOR every 6 interactions, or on any of:
 - **CRITICAL**: Do NOT use Ollama native tool calling (broken with Qwen 3.5). Use `response_format={"type": "json_object"}` instead.
 ### Memory System (4 layers, ~1500-2500 tokens per call)
 
-1. **Structured state** (SQLite) — HP, AC, inventory, quests. Source of truth.
+1. **Structured state** (SQLite) — HP, AC, inventory, story arc. Source of truth.
 1. **Sliding window** — last 10-12 exchanges for continuity.
 1. **Compressed summaries** — auto-generated every 20 exchanges
    (`memory/summarizer.py:SUMMARY_INTERVAL`). Distinct from the Story
@@ -137,7 +137,7 @@ Background: STORY DIRECTOR every 6 interactions, or on any of:
 
 - **Locked facts**: world facts the LLM cannot contradict (Python/DB managed)
 - **NPC registry**: status, disposition per player, secrets, personality prompt
-- **Story Director**: periodic check for contradictions, stale quests, abandoned threads
+- **Story Director**: periodic check for contradictions and abandoned threads
 
 -----
 
@@ -159,6 +159,7 @@ realmAI-engine/
 │   ├── npc_ai/           # scripted (minions), elite, boss_brain, legendary
 │   ├── npc_stat_block.py # NPC combat stats, LLM-authored values clamped here
 │   ├── npc_library.py    # Combat archetypes by tier
+│   ├── npc_archetypes.py # Narrative archetypes (authored content, 5 categories)
 │   ├── inventory.py      # Items, equipment, weight, attunement (dormant)
 │   ├── spells.py         # Spells and effects
 │   ├── conditions.py     # Status conditions
@@ -183,7 +184,7 @@ realmAI-engine/
 │   ├── narration_guard.py           # Dead-NPC / monotony guards
 │   └── context_assembler.py
 ├── world/            # World state models (Pydantic)
-│   ├── campaign.py · location.py · npc.py · quest.py
+│   ├── campaign.py · location.py · npc.py
 │   ├── story_arc.py       # Beats, objectives, locked facts
 │   └── combat_zone.py · combat_trigger_def.py
 ├── bot/              # Discord bot

@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 from db.repositories.campaign_repo import CampaignRepository
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
-from db.repositories.quest_repo import QuestRepository
 from engine.character import Character
 from engine.combat import CombatSide, CombatState, Combatant
 from engine.inventory import Inventory
@@ -15,7 +14,6 @@ from memory.token_utils import estimate_tokens
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC
-from world.quest import Quest
 
 
 class TestStateBuilder:
@@ -70,19 +68,6 @@ class TestStateBuilder:
         builder = StateBuilder(db_session)
         summary = builder.build(campaign.id)
         assert "Gundren Rockseeker (friendly)" in summary.nearby_npcs
-
-    def test_build_with_active_quests(
-        self,
-        db_session: Session,
-        sample_campaign: Campaign,
-        sample_quest: Quest,
-    ) -> None:
-        CampaignRepository(db_session).save(sample_campaign)
-        QuestRepository(db_session).save(sample_quest, sample_campaign.id)
-        db_session.commit()
-        builder = StateBuilder(db_session)
-        summary = builder.build(sample_campaign.id)
-        assert "Find the Lost Mine (active)" in summary.active_quests
 
     def test_build_with_characters(
         self,
@@ -159,7 +144,7 @@ class TestStateBuilder:
         self, db_session: Session,
     ) -> None:
         """Under a tight budget, combat and story-arc lines must survive —
-        quest/inventory lines are the expendable ones (audit low: truncation
+        NPC/inventory lines are the expendable ones (audit low: truncation
         was cutting the combat/arc tail instead)."""
         from memory.models import CharacterSummary, CombatSummary, GameStateSummary
 
@@ -174,7 +159,6 @@ class TestStateBuilder:
                 ),
             ],
             nearby_npcs=[f"Npc{i} (neutral)" for i in range(10)],
-            active_quests=[f"Quest {i} (active) with a long title" for i in range(10)],
             combat=CombatSummary(
                 is_active=True, round_number=2, current_turn="Thorin",
                 combatants=[

@@ -9,7 +9,6 @@ from tests.simulation.records import IncoherenceAlert
 from tests.simulation.rules.drift import (
     check_condition_phantom,
     check_disposition_silent_change,
-    check_quest_silent_progress,
 )
 from tests.simulation.rules.hard import (
     check_hp_mismatch,
@@ -45,7 +44,6 @@ ALL_RULES: list[Rule] = [
     check_unknown_proper_noun,
     # Drift
     check_disposition_silent_change,
-    check_quest_silent_progress,
     check_condition_phantom,
 ]
 

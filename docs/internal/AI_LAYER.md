@@ -7,9 +7,9 @@ Couche LLM pour narration, interprétation, génération de contenu et résoluti
 - **Ollama local** `http://localhost:11434` (via `httpx`)
 - **Modèles** :
   - `qwen3.5:4b` — rapide (~50-70 tok/s), utilisé pour classification (interpreter, NPC agent, NPC generator)
-  - `qwen3.5:9b` — riche (~25-35 tok/s), utilisé pour narration, génération de monde/quests/arc, story director
+  - `qwen3.5:9b` — riche (~25-35 tok/s), utilisé pour narration, génération de monde/arc, story director
   - Jamais chargés simultanément (limitation M3 Pro 18GB)
-- **Thinking mode** (`think=true`) activé pour : arc generation, world generation, quest generation, story director. Token budget cappé à `_THINKING_TOKEN_CAP = 4096`.
+- **Thinking mode** (`think=true`) activé pour : arc generation, world generation, story director. Token budget cappé à `_THINKING_TOKEN_CAP = 4096`.
 - **JSON mode** : toujours `format: "json"` dans l'appel HTTP. Les sorties sont validées par Pydantic v2.
 
 ## Fichier par fichier

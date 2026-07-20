@@ -185,7 +185,7 @@ Puis `advance_beat(arc)` incrémente `current_beat_index`.
 **Acteur** : `bot.pipeline.narrate.assemble_context()` (la façade `ActionPipeline._assemble_context()` y délègue). Le contexte du tour = préfixe mémoire caché sur `session.memory_context` (résumés + fenêtre glissante + RAG, pré-calculé en fin de tour précédent par `ContextAssembler.assemble_memory_prefix`) + locked facts + scene snapshot (`describe_scene_for_narrator`, qui joue le rôle de la Layer 1).
 
 Construit une chaîne markdown avec :
-- Layer 1 : état structuré (HP/AC/inventory highlights/location/NPCs/quest active) — max 450 tokens.
+- Layer 1 : état structuré (HP/AC/inventory highlights/location/NPCs) — max 450 tokens.
 - Layer 2 : 12 derniers exchanges narratifs — 700 tokens.
 - Layer 3 : derniers résumés compressés — 400 tokens.
 - Layer 4 : résultats RAG ChromaDB pertinents (lore, fiches NPC, past events) — 350 tokens.

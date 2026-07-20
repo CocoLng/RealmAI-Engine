@@ -7,11 +7,9 @@ from sqlalchemy.orm import Session
 from db.repositories.campaign_repo import CampaignRepository
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
-from db.repositories.quest_repo import QuestRepository
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, DialogueExchange, NPCDisposition
-from world.quest import Quest, QuestStatus
 
 
 # ---------------------------------------------------------------------------
@@ -748,82 +746,6 @@ class TestLocationRepository:
 
 
 # ---------------------------------------------------------------------------
-# QuestRepository
-# ---------------------------------------------------------------------------
-
-
-class TestQuestRepository:
-    """Quest CRUD tests."""
-
-    def test_save_and_get(self, db_session: Session, sample_campaign: Campaign, sample_quest: Quest) -> None:
-        CampaignRepository(db_session).save(sample_campaign)
-        repo = QuestRepository(db_session)
-        repo.save(sample_quest, sample_campaign.id)
-        db_session.commit()
-
-        result = repo.get_by_title("Find the Lost Mine", sample_campaign.id)
-        assert result is not None
-        assert result.status == QuestStatus.ACTIVE
-        assert len(result.objectives) == 2
-        assert result.objectives[1].is_complete is True
-
-    def test_get_missing_returns_none(self, db_session: Session) -> None:
-        repo = QuestRepository(db_session)
-        assert repo.get_by_title("Nothing", "no-campaign") is None
-
-    def test_list_by_campaign(self, db_session: Session, sample_campaign: Campaign, sample_quest: Quest) -> None:
-        CampaignRepository(db_session).save(sample_campaign)
-        repo = QuestRepository(db_session)
-        repo.save(sample_quest, sample_campaign.id)
-        repo.save(Quest(title="Side Quest"), sample_campaign.id)
-        db_session.commit()
-
-        results = repo.list_by_campaign(sample_campaign.id)
-        assert len(results) == 2
-
-    def test_update_status(self, db_session: Session, sample_campaign: Campaign, sample_quest: Quest) -> None:
-        CampaignRepository(db_session).save(sample_campaign)
-        repo = QuestRepository(db_session)
-        repo.save(sample_quest, sample_campaign.id)
-        db_session.commit()
-
-        updated = sample_quest.model_copy(update={"status": QuestStatus.COMPLETED})
-        repo.update(updated, sample_campaign.id)
-        db_session.commit()
-
-        result = repo.get_by_title(sample_quest.title, sample_campaign.id)
-        assert result is not None
-        assert result.status == QuestStatus.COMPLETED
-
-    def test_update_missing_raises(self, db_session: Session, sample_quest: Quest) -> None:
-        repo = QuestRepository(db_session)
-        with pytest.raises(ValueError, match="not found"):
-            repo.update(sample_quest, "no-campaign")
-
-    def test_delete(self, db_session: Session, sample_campaign: Campaign, sample_quest: Quest) -> None:
-        CampaignRepository(db_session).save(sample_campaign)
-        repo = QuestRepository(db_session)
-        repo.save(sample_quest, sample_campaign.id)
-        db_session.commit()
-
-        repo.delete(sample_quest.title, sample_campaign.id)
-        db_session.commit()
-
-        assert repo.get_by_title(sample_quest.title, sample_campaign.id) is None
-
-    def test_unique_constraint(self, db_session: Session, sample_campaign: Campaign, sample_quest: Quest) -> None:
-        CampaignRepository(db_session).save(sample_campaign)
-        repo = QuestRepository(db_session)
-        repo.save(sample_quest, sample_campaign.id)
-        db_session.commit()
-
-        repo.save(sample_quest, sample_campaign.id)
-        with pytest.raises(IntegrityError):
-            db_session.commit()
-        db_session.rollback()
-
-
-# ---------------------------------------------------------------------------
 # Cascade deletes
 # ---------------------------------------------------------------------------
 
@@ -837,14 +759,12 @@ class TestCascadeDeletes:
         sample_campaign: Campaign,
         sample_npc: NPC,
         sample_location: Location,
-        sample_quest: Quest,
     ) -> None:
         camp_repo = CampaignRepository(db_session)
         camp_repo.save(sample_campaign)
 
         NPCRepository(db_session).save(sample_npc, sample_campaign.id)
         LocationRepository(db_session).save(sample_location, sample_campaign.id)
-        QuestRepository(db_session).save(sample_quest, sample_campaign.id)
         db_session.commit()
 
         camp_repo.delete(sample_campaign.id)
@@ -852,11 +772,10 @@ class TestCascadeDeletes:
 
         assert NPCRepository(db_session).list_by_campaign(sample_campaign.id) == []
         assert LocationRepository(db_session).list_by_campaign(sample_campaign.id) == []
-        assert QuestRepository(db_session).list_by_campaign(sample_campaign.id) == []
 
 
 # ---------------------------------------------------------------------------
-# C5 — Idempotent upsert on PC/NPC/Quest/StoryArc
+# C5 — Idempotent upsert on PC/NPC/StoryArc
 # ---------------------------------------------------------------------------
 
 
@@ -885,27 +804,6 @@ class TestUpsertIdempotent:
         loaded = repo.get_by_name(sample_npc.name, sample_campaign.id)
         assert loaded is not None
         assert loaded.hp == 1
-        assert len(repo.list_by_campaign(sample_campaign.id)) == 1
-
-    def test_quest_upsert_inserts_then_updates(
-        self,
-        db_session: Session,
-        sample_campaign: Campaign,
-        sample_quest: Quest,
-    ) -> None:
-        CampaignRepository(db_session).save(sample_campaign)
-        repo = QuestRepository(db_session)
-
-        repo.upsert(sample_quest, sample_campaign.id)
-        db_session.commit()
-
-        sample_quest.status = QuestStatus.COMPLETED
-        repo.upsert(sample_quest, sample_campaign.id)
-        db_session.commit()
-
-        loaded = repo.get_by_title(sample_quest.title, sample_campaign.id)
-        assert loaded is not None
-        assert loaded.status == QuestStatus.COMPLETED
         assert len(repo.list_by_campaign(sample_campaign.id)) == 1
 
     def test_player_character_upsert_inserts_then_updates(

@@ -3,6 +3,12 @@
 **Date** : 2026-04-11
 **Statut** : Draft
 
+> **Notes 2026-07-20** : la bibliothèque d'archétypes NPC (§3) est livrée —
+> `engine/npc_archetypes.py`, contenu et déviations documentés dans
+> `2026-07-20-npc-archetypes-and-quest-retirement-design.md` §1. Les
+> références à `ai/quest_generator.py` sont caduques : le générateur de
+> quêtes a été supprimé et le sous-système quêtes retiré (même spec, §2).
+
 ---
 
 ## Contexte

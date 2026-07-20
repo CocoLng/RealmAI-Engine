@@ -914,10 +914,6 @@ class TestBridge(commands.Cog):
                 {"name": npc.name, "disposition": npc.disposition.value}
                 for npc in session.npcs.values()
             ],
-            "quests": [
-                {"title": q.title, "status": q.status.value}
-                for q in session.quests
-            ],
         }
 
         if session.combat_state is not None:

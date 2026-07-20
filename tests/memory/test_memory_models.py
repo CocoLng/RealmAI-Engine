@@ -66,7 +66,6 @@ class TestGameStateSummary:
             current_location="Neverwinter",
             location_description="A bustling city",
             nearby_npcs=["Gundren"],
-            active_quests=["Find the Lost Mine"],
             inventory_highlights=["Healing Potion x3"],
         )
         assert gss.nearby_npcs == ["Gundren"]

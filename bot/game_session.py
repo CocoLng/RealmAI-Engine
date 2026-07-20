@@ -14,7 +14,6 @@ from engine.spells import SpellcasterState
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC
-from world.quest import Quest
 from world.story_arc import StoryArc
 
 from ai.client import OllamaClient, OllamaUnavailableError
@@ -60,7 +59,6 @@ class GameSession:
     """
     current_location: Location | None = None
     npcs: dict[str, NPC] = field(default_factory=dict)
-    quests: list[Quest] = field(default_factory=list)
     story_arc: StoryArc | None = None
     character_kits: dict[int, str] = field(default_factory=dict)
     """Kit canonical name per player (e.g. ``"Shadow Blade"``). Captured at

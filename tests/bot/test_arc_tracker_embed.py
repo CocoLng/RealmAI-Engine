@@ -11,7 +11,6 @@ class TestBuildArcTrackerEmbed:
             chapter_title="Chapter 1 — The Beginning",
             current_objective="Find the lost map.",
             recent_beats=["Found a clue.", "Met the elder."],
-            active_quests=["Main: Lost Map", "Side: Help Elena"],
             last_updated_relative="il y a 2 minutes",
         )
         assert isinstance(embed, discord.Embed)
@@ -23,7 +22,6 @@ class TestBuildArcTrackerEmbed:
             chapter_title="X",
             current_objective="Find the map.",
             recent_beats=[],
-            active_quests=[],
             last_updated_relative="now",
         )
         assert embed.description is not None
@@ -34,7 +32,6 @@ class TestBuildArcTrackerEmbed:
             chapter_title="X",
             current_objective="Y",
             recent_beats=["A", "B", "C", "D", "E"],
-            active_quests=[],
             last_updated_relative="now",
         )
         beat_field = next((f for f in embed.fields if "beat" in f.name.lower()), None)
@@ -45,31 +42,11 @@ class TestBuildArcTrackerEmbed:
         assert "A" not in beat_field.value
         assert "B" not in beat_field.value
 
-    def test_active_quests_field_includes_last_five(self) -> None:
-        embed = build_arc_tracker_embed(
-            chapter_title="X",
-            current_objective="Y",
-            recent_beats=[],
-            active_quests=[f"Quest {i}" for i in range(7)],
-            last_updated_relative="now",
-        )
-        quest_field = next(
-            (f for f in embed.fields if "quête" in f.name.lower() or "quest" in f.name.lower()),
-            None,
-        )
-        assert quest_field is not None
-        # New embed renders the LAST 5 quests (most recent)
-        assert "Quest 2" in quest_field.value
-        assert "Quest 6" in quest_field.value
-        assert "Quest 0" not in quest_field.value
-        assert "Quest 1" not in quest_field.value
-
     def test_empty_objective_uses_fallback(self) -> None:
         embed = build_arc_tracker_embed(
             chapter_title="X",
             current_objective="",
             recent_beats=[],
-            active_quests=[],
             last_updated_relative="now",
         )
         assert embed.description is not None
@@ -80,7 +57,6 @@ class TestBuildArcTrackerEmbed:
             chapter_title="X",
             current_objective="Y",
             recent_beats=[],
-            active_quests=[],
             last_updated_relative="il y a 4 actions",
         )
         # Footer or a dedicated field
@@ -99,7 +75,6 @@ class TestBuildArcTrackerEmbed:
             chapter_title="Acte 2",
             current_objective="Trouver le témoin",
             recent_beats=[],
-            active_quests=[],
             last_updated_relative="à l'instant",
             progress_score=60,
             objective_status_lines=["✅ Done", "◐ Partial", "◯ Pending"],
@@ -117,7 +92,6 @@ class TestBuildArcTrackerEmbed:
             chapter_title="Acte 2",
             current_objective="Trouver le témoin",
             recent_beats=[],
-            active_quests=[],
             last_updated_relative="à l'instant",
             progress_score=33,
             objective_status_lines=["✅ Examiner la cape", "◯ Parler à Kaelen"],
@@ -134,7 +108,6 @@ class TestBuildArcTrackerEmbed:
             chapter_title="X",
             current_objective="Y",
             recent_beats=[],
-            active_quests=[],
             last_updated_relative="now",
         )
         assert embed.title is not None

@@ -7,10 +7,12 @@ Usage:
 
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 
 from db.database import get_engine, get_session_factory
 
@@ -22,9 +24,11 @@ def reset_dev_data() -> None:
 
     with SessionFactory() as session:
         # Deleting campaigns cascades to all child tables:
-        # npcs, locations, quests, exchanges, summaries,
+        # npcs, locations, exchanges, summaries,
         # player_characters, campaign_channels, story_arcs
-        result = session.execute(text("DELETE FROM campaigns"))
+        # Session.execute is typed Result[Any], but DML statements always
+        # return a CursorResult (the only Result carrying rowcount).
+        result = cast(CursorResult[Any], session.execute(text("DELETE FROM campaigns")))
         deleted = result.rowcount
         session.commit()
 

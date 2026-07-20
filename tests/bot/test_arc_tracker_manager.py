@@ -22,7 +22,7 @@ class TestArcTrackerManager:
         data = ArcTrackerData(
             chapter_title="Ch.1",
             current_objective="X",
-            recent_beats=[], active_quests=[],
+            recent_beats=[],
             last_updated_relative="now",
         )
         msg_id = await manager.ensure_pinned(
@@ -43,7 +43,7 @@ class TestArcTrackerManager:
         manager = ArcTrackerManager(store=store)
         data = ArcTrackerData(
             chapter_title="X", current_objective="Y",
-            recent_beats=[], active_quests=[], last_updated_relative="now",
+            recent_beats=[], last_updated_relative="now",
         )
         msg_id = await manager.ensure_pinned(
             channel=channel, campaign_id="cmp_1", channel_id=999, data=data,
@@ -63,7 +63,7 @@ class TestArcTrackerManager:
         manager = ArcTrackerManager(store=store)
         data = ArcTrackerData(
             chapter_title="X", current_objective="Y",
-            recent_beats=[], active_quests=[], last_updated_relative="now",
+            recent_beats=[], last_updated_relative="now",
         )
         await manager.update(
             channel=channel, campaign_id="cmp_1", channel_id=999, data=data,
@@ -84,7 +84,7 @@ class TestArcTrackerManager:
         manager = ArcTrackerManager(store=store)
         data = ArcTrackerData(
             chapter_title="X", current_objective="Y",
-            recent_beats=[], active_quests=[], last_updated_relative="now",
+            recent_beats=[], last_updated_relative="now",
         )
         await manager.update(
             channel=channel, campaign_id="cmp_1", channel_id=999, data=data,

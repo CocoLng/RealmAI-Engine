@@ -29,7 +29,6 @@ class ArcTrackerData:
     chapter_title: str
     current_objective: str
     recent_beats: list[str] = field(default_factory=list)
-    active_quests: list[str] = field(default_factory=list)
     last_updated_relative: str = "à l'instant"
 
     # engine-truth progress fields (task F1)
@@ -70,7 +69,6 @@ class ArcTrackerManager:
             chapter_title=data.chapter_title,
             current_objective=data.current_objective,
             recent_beats=data.recent_beats,
-            active_quests=data.active_quests,
             last_updated_relative=data.last_updated_relative,
             progress_score=data.progress_score,
             objective_status_lines=data.objective_status_lines,
@@ -102,7 +100,6 @@ class ArcTrackerManager:
             chapter_title=data.chapter_title,
             current_objective=data.current_objective,
             recent_beats=data.recent_beats,
-            active_quests=data.active_quests,
             last_updated_relative=data.last_updated_relative,
             progress_score=data.progress_score,
             objective_status_lines=data.objective_status_lines,
@@ -168,7 +165,6 @@ def build_arc_tracker_data_from_progress(
     arc: StoryArc | None,
     progress: BeatProgress | None,
     recent_beats: list[str] | None = None,
-    active_quests: list[str] | None = None,
 ) -> ArcTrackerData:
     """Build an ArcTrackerData from engine truth.
 
@@ -212,7 +208,6 @@ def build_arc_tracker_data_from_progress(
         chapter_title=chapter_title,
         current_objective=current_objective,
         recent_beats=recent_beats or [],
-        active_quests=active_quests or [],
         last_updated_relative="à l'instant",
         progress_score=progress_score,
         objective_status_lines=status_lines,

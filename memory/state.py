@@ -1,6 +1,6 @@
 """Layer 1 — Structured state builder.
 
-Reads from existing SQLite repositories (Campaign, NPC, Location, Quest)
+Reads from existing SQLite repositories (Campaign, NPC, Location)
 and accepts in-memory objects (Character, CombatState, Inventory) to build
 a compact GameStateSummary for prompt injection.
 """
@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from db.repositories.campaign_repo import CampaignRepository
 from db.repositories.location_repo import LocationRepository
 from db.repositories.npc_repo import NPCRepository
-from db.repositories.quest_repo import QuestRepository
 from engine.character import Character
 from engine.combat import CombatState
 from engine.inventory import Inventory
@@ -36,7 +35,6 @@ class StateBuilder:
         self._campaign_repo = CampaignRepository(session)
         self._npc_repo = NPCRepository(session)
         self._location_repo = LocationRepository(session)
-        self._quest_repo = QuestRepository(session)
 
     def build(
         self,
@@ -68,14 +66,6 @@ class StateBuilder:
                 for npc in npcs
                 if npc.is_alive
             ]
-
-        # Active quests
-        quests = self._quest_repo.list_by_campaign(campaign_id)
-        active_quests = [
-            f"{q.title} ({q.status.value})"
-            for q in quests
-            if q.status.value in ("active", "available")
-        ]
 
         # Player characters
         char_summaries: list[CharacterSummary] = []
@@ -154,7 +144,6 @@ class StateBuilder:
             location_description=location_description,
             player_characters=char_summaries,
             nearby_npcs=nearby_npcs,
-            active_quests=active_quests,
             combat=combat_summary,
             inventory_highlights=inventory_highlights,
             current_story_beat=current_story_beat,
@@ -166,7 +155,7 @@ class StateBuilder:
         """Render the GameStateSummary into a text block for the prompt.
 
         Lines are ordered by importance: campaign/location/players, then
-        combat and story arc, then NPCs/quests/items. End-of-text
+        combat and story arc, then NPCs/items. End-of-text
         truncation therefore sacrifices the expendable lines first and
         never the combat or arc context.
         """
@@ -208,9 +197,6 @@ class StateBuilder:
 
         if summary.nearby_npcs:
             lines.append(f"Nearby NPCs: {', '.join(summary.nearby_npcs)}")
-
-        if summary.active_quests:
-            lines.append(f"Active Quests: {', '.join(summary.active_quests)}")
 
         if summary.inventory_highlights:
             lines.append(

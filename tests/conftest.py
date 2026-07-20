@@ -23,7 +23,6 @@ from memory.models import CompressedSummary, ExchangeRole, NarrativeExchange
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, NPCDisposition
-from world.quest import Quest, QuestObjective, QuestStatus
 
 
 # ---------------------------------------------------------------------------
@@ -128,21 +127,6 @@ def sample_location() -> Location:
     )
 
 
-@pytest.fixture()
-def sample_quest() -> Quest:
-    """A test quest with objectives."""
-    return Quest(
-        title="Find the Lost Mine",
-        description="Locate Wave Echo Cave",
-        status=QuestStatus.ACTIVE,
-        objectives=[
-            QuestObjective(description="Talk to Gundren"),
-            QuestObjective(description="Travel to Phandalin", is_complete=True),
-        ],
-        reward_xp=500,
-        reward_gold=100,
-        giver_npc="Gundren Rockseeker",
-    )
 
 
 @pytest.fixture()

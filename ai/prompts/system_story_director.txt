@@ -12,8 +12,7 @@ Return JSON only:
   "current_objective": "Short sentence describing what the players are pursuing right now",
   "current_beat_atmosphere": "Mood/feeling the next narration should evoke for the current beat (tension, relief, dread). Descriptive, not prescriptive — DO NOT tell the narrator what to make happen. The Beat Progression Engine controls plot moves.",
   "forbidden_topics": ["List of facts the narrator must NOT re-reveal (already known)"],
-  "required_mentions": ["NPCs or items the next narration should weave back in"],
-  "stale_quest_ids": ["IDs of quests that have been ignored too long"]
+  "required_mentions": ["NPCs or items the next narration should weave back in"]
 }
 
 - coherence_issues: list of specific narrative problems (empty list if none)
@@ -27,6 +26,5 @@ Direction fields (fed back into the next Narrator prompt):
 - "current_beat_atmosphere": "Mood/feeling the next narration should evoke for the current beat (tension, relief, dread). Descriptive, not prescriptive — DO NOT suggest plot moves. The Beat Progression Engine decides when beats advance."
 - "forbidden_topics": ["List of facts the narrator must NOT re-reveal (already known)"]
 - "required_mentions": ["NPCs or items the next narration should weave back in"]
-- "stale_quest_ids": ["IDs of quests that have been ignored too long"]
 
 These direction fields are NOT shown to the player — they steer the narrator on the next turn.

@@ -180,7 +180,6 @@ class TestDirectorNoteDirection:
         assert note.current_beat_atmosphere == ""
         assert note.forbidden_topics == []
         assert note.required_mentions == []
-        assert note.stale_quest_ids == []
 
     def test_new_payload_carries_direction(self) -> None:
         note = DirectorNote(
@@ -191,7 +190,6 @@ class TestDirectorNoteDirection:
             current_beat_atmosphere="Tension creeps in as shadows lengthen.",
             forbidden_topics=["map_hidden_in_cellar"],
             required_mentions=["Aldric", "Elena"],
-            stale_quest_ids=["quest_42"],
         )
         assert note.current_objective.startswith("Retrieve")
         assert note.current_beat_atmosphere.startswith("Tension")

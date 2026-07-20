@@ -70,7 +70,6 @@ class DirectorNote(BaseModel):
     current_beat_atmosphere: str = ""
     forbidden_topics: list[str] = Field(default_factory=list)
     required_mentions: list[str] = Field(default_factory=list)
-    stale_quest_ids: list[str] = Field(default_factory=list)
 
 
 class NPCResponse(BaseModel):

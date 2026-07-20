@@ -4,6 +4,11 @@
 **Phase:** 2a (first sub-system of Phase 2 — AI Layer)
 **Scope:** Minimal viable domain models + SQLAlchemy persistence with repository pattern
 
+> **Superseded en partie (2026-07-20)** : le sous-système quêtes décrit ici
+> (`world/quest.py`, `QuestRow`, `quest_repo.py`) a été retiré — les beats
+> d'arc le remplacent définitivement. Décision et périmètre :
+> `2026-07-20-npc-archetypes-and-quest-retirement-design.md` §2.
+
 ---
 
 ## Context

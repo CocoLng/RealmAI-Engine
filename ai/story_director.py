@@ -127,7 +127,6 @@ class StoryDirector:
             current_beat_atmosphere=str(data.get("current_beat_atmosphere", "")),
             forbidden_topics=list(data.get("forbidden_topics") or []),
             required_mentions=list(data.get("required_mentions") or []),
-            stale_quest_ids=list(data.get("stale_quest_ids") or []),
         )
 
         logger.info(

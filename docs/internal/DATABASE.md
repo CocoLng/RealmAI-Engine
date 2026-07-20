@@ -2,7 +2,7 @@
 
 ## Séparation domaine / stockage
 
-- `world/` contient les **modèles de domaine** en Pydantic v2 (`Campaign`, `NPC`, `Location`, `Quest`, `StoryArc`). Utilisés dans toute la codebase en in-memory.
+- `world/` contient les **modèles de domaine** en Pydantic v2 (`Campaign`, `NPC`, `Location`, `StoryArc`). Utilisés dans toute la codebase en in-memory.
 - `db/models.py` contient les **modèles SQLAlchemy** (suffixe `Row` : `CampaignRow`, `NPCRow`, …). Utilisés uniquement par les repos/mappers.
 - `db/mappers.py` fournit `{entity}_to_db()` / `{entity}_from_db()` bidirectionnels.
 - `db/repositories/` wrap la DB avec une API CRUD orientée domaine.
@@ -16,14 +16,13 @@ Défini dans [db/database.py](../../db/database.py).
 - **Réconciliation de schéma additive** via [db/migrations.py](../../db/migrations.py)::`ensure_schema` : `create_all()` crée les tables manquantes, puis toute colonne définie par un modèle et absente d'une table existante est ajoutée par `ALTER TABLE … ADD COLUMN`. Une table `schema_version` est stampée après succès (`SCHEMA_VERSION = 1`) ; le run **refuse** une DB stampée par un code plus récent (protection anti-downgrade).
 - Pas d'Alembic, pas de `PRAGMA user_version` : l'ajout d'une colonne est automatique dès qu'elle apparaît sur un modèle SQLAlchemy. Les changements structurels (rename, changement de type, backfill) exigeront une migration explicite, séquencée par un bump de `SCHEMA_VERSION`.
 
-## Schéma — 11 tables
+## Schéma — 10 tables
 
 | Table | PK | FK | Rôle |
 |---|---|---|---|
 | `campaigns` | `id` (uuid) | — | Métadonnées campagne |
 | `npcs` | `id` (auto) | `campaign_id` CASCADE | PNJs, UNIQUE(campaign_id, name) |
 | `locations` | `id` (auto) | `campaign_id` CASCADE | Locations, UNIQUE(campaign_id, name) |
-| `quests` | `id` (auto) | `campaign_id` CASCADE | Quêtes, UNIQUE(campaign_id, title) |
 | `exchanges` | `id` (uuid) | `campaign_id` CASCADE | Layer 2 sliding window |
 | `summaries` | `id` (uuid) | `campaign_id` CASCADE | Layer 3 résumés compressés |
 | `story_arcs` | `campaign_id` | `campaign_id` CASCADE | Arc 1:1 avec campagne, stocké en JSON blob |
@@ -70,12 +69,6 @@ combat_triggers (JSON), npc_roles (JSON)
 `combat_triggers` est un dict JSON keyé par nom d'item/mechanism → `CombatTriggerDef` (`item_name`, `spawn_npcs`, `reveal_narration`, `consumed`). Consommé par `bot.combat_entry` pour déclencher les ambushes via `INTERACT`. Idempotence : `consumed=True` bloque une re-exécution.
 
 `npc_roles` est un dict JSON `{npc_name: archetype_role}` peuplé par le world generator depuis `npc_details[*].role`. Utilisé par `scene_hydration` pour dispatcher un NPC martial vers son archétype engine (captain, soldier, mage, …).
-
-#### `quests`
-```
-id, campaign_id, title, description, status,
-objectives (JSON), reward_xp, reward_gold, giver_npc
-```
 
 #### `exchanges`
 ```
@@ -147,16 +140,6 @@ Location(name, description,
 
 ⚠ `npcs_present` est `list[str]` — résolu en vrais PNJs par `scene_hydration.hydrate_scene()`.
 
-### `Quest` ([world/quest.py](../../world/quest.py))
-```python
-Quest(title, description, status: QuestStatus,
-      objectives: list[QuestObjective],
-      reward_xp, reward_gold, giver_npc)
-
-QuestObjective(description, is_complete)
-QuestStatus ∈ {AVAILABLE, ACTIVE, COMPLETED, FAILED}
-```
-
 ### `StoryArc` ([world/story_arc.py](../../world/story_arc.py))
 ```python
 StoryArc(campaign_id, theme, premise,
@@ -194,7 +177,7 @@ Particularités :
 
 ## Repositories (`db/repositories/`)
 
-11 repos, tous suivent le pattern `__init__(session: Session)` et ne commit pas eux-mêmes — le caller doit `db_session.commit()`.
+10 repos, tous suivent le pattern `__init__(session: Session)` et ne commit pas eux-mêmes — le caller doit `db_session.commit()`.
 
 | Repo | Méthodes principales |
 |---|---|

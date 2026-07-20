@@ -13,7 +13,6 @@ from engine.spells import create_spellcaster_state
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, DialogueExchange, NPCDisposition
-from world.quest import Quest, QuestStatus
 
 from db.mappers import (
     backfill_character_features,
@@ -27,8 +26,6 @@ from db.mappers import (
     npc_to_db,
     player_character_from_db,
     player_character_to_db,
-    quest_from_db,
-    quest_to_db,
 )
 from db.models import PlayerCharacterRow
 
@@ -244,57 +241,8 @@ class TestLocationMapper:
         assert restored.arrival_hook == ""
 
 
-class TestQuestMapper:
-    """Quest mapper round-trip tests."""
-
-    def test_roundtrip(self, sample_quest: Quest) -> None:
-        row = quest_to_db(sample_quest, "camp-1")
-        assert row.campaign_id == "camp-1"
-        restored = quest_from_db(row)
-        assert restored == sample_quest
-
-    def test_objectives_serialization(self, sample_quest: Quest) -> None:
-        row = quest_to_db(sample_quest, "c")
-        assert isinstance(row.objectives, list)
-        assert len(row.objectives) == 2
-        assert row.objectives[0]["description"] == "Talk to Gundren"
-        assert row.objectives[1]["is_complete"] is True
-
-    def test_empty_objectives(self) -> None:
-        quest = Quest(title="Empty")
-        row = quest_to_db(quest, "c")
-        restored = quest_from_db(row)
-        assert restored.objectives == []
-
-    def test_all_statuses(self) -> None:
-        for status in QuestStatus:
-            quest = Quest(title="Test", status=status)
-            row = quest_to_db(quest, "c")
-            restored = quest_from_db(row)
-            assert restored.status == status
-
-    def test_status_stored_as_string(self, sample_quest: Quest) -> None:
-        row = quest_to_db(sample_quest, "c")
-        assert row.status == "active"
-
-
 class TestCorruptedDataResilience:
     """A single corrupted JSON entry must not crash the whole entity load."""
-
-    def test_corrupted_objective_is_skipped(
-        self, sample_quest: Quest, caplog,
-    ) -> None:
-        row = quest_to_db(sample_quest, "c")
-        # Inject a malformed objective alongside the valid ones.
-        row.objectives = [
-            row.objectives[0],
-            {"not": "valid"},
-            row.objectives[1],
-        ]
-        restored = quest_from_db(row)
-        # Bad entry dropped; valid ones survive.
-        assert len(restored.objectives) == 2
-        assert restored.objectives[0].description == sample_quest.objectives[0].description
 
     def test_corrupted_zone_drops_all_zones(self) -> None:
         """H4 — one bad zone disables ALL zones for the location.

@@ -8,7 +8,6 @@ from engine.inventory import create_inventory
 from engine.spells import create_spellcaster_state
 from world.campaign import Campaign
 from world.npc import NPC, NPCDisposition
-from world.quest import Quest, QuestStatus
 
 
 def _make_campaign() -> Campaign:
@@ -89,16 +88,12 @@ class TestCreateAIServices:
         assert session.semantic_indexer is None
 
 
-class TestGameSessionNpcsQuests:
-    """Tests for npcs and quests fields on GameSession."""
+class TestGameSessionNpcs:
+    """Tests for the npcs field on GameSession."""
 
     def test_session_has_npcs_field(self) -> None:
         session = GameSession(campaign=Campaign(id="t1", name="test"))
         assert session.npcs == {}
-
-    def test_session_has_quests_field(self) -> None:
-        session = GameSession(campaign=Campaign(id="t2", name="test"))
-        assert session.quests == []
 
     def test_session_npcs_can_store_npc(self) -> None:
         session = GameSession(campaign=Campaign(id="t3", name="test"))
@@ -114,10 +109,3 @@ class TestGameSessionNpcsQuests:
         )
         session.npcs["Barkeep"] = npc
         assert session.npcs["Barkeep"].name == "Barkeep"
-
-    def test_session_quests_can_store_quest(self) -> None:
-        session = GameSession(campaign=Campaign(id="t4", name="test"))
-        quest = Quest(title="Find the key", description="A key is lost", status=QuestStatus.ACTIVE)
-        session.quests.append(quest)
-        assert len(session.quests) == 1
-        assert session.quests[0].title == "Find the key"

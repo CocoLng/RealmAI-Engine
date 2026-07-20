@@ -42,7 +42,6 @@ class GameStateSummary(BaseModel):
     location_description: str = ""
     player_characters: list[CharacterSummary] = Field(default_factory=list)
     nearby_npcs: list[str] = Field(default_factory=list)
-    active_quests: list[str] = Field(default_factory=list)
     combat: CombatSummary | None = None
     inventory_highlights: list[str] = Field(default_factory=list)
     current_story_beat: str = ""
@@ -102,7 +101,6 @@ class SemanticDocumentType(StrEnum):
     NPC_SHEET = "npc_sheet"
     PAST_EVENT = "past_event"
     LOCATION_DETAIL = "location_detail"
-    QUEST_DETAIL = "quest_detail"
 
 
 class SemanticDocument(BaseModel):

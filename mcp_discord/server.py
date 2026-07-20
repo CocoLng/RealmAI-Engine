@@ -243,7 +243,7 @@ async def discord_get_game_state() -> dict[str, Any]:
     The TestBridge serializes the active GameSession and returns it as JSON.
 
     Returns:
-        campaign, characters, combat_active, combat_state, location, npcs, quests
+        campaign, characters, combat_active, combat_state, location, npcs
     """
     bot = await _get_bot()
     result = await bot.send_test_command("game_state")

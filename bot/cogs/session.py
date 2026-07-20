@@ -30,7 +30,6 @@ from db.repositories import (
     LocationRepository,
     NPCRepository,
     PlayerCharacterRepository,
-    QuestRepository,
     StoryArcRepository,
 )
 from engine.inventory import create_inventory
@@ -1137,7 +1136,6 @@ class SessionCog(commands.Cog):
                     chapter_title="Chapitre 1 — Début de la campagne",
                     current_objective="Découvrez le monde et le pourquoi de votre quête.",
                     recent_beats=[],
-                    active_quests=[],
                     last_updated_relative="à l'instant",
                 ),
             )
@@ -1222,10 +1220,6 @@ class SessionCog(commands.Cog):
             npc_repo = NPCRepository(db_session)
             npcs = npc_repo.list_by_campaign(campaign_id)
 
-            # Load quests
-            quest_repo = QuestRepository(db_session)
-            quests = quest_repo.list_by_campaign(campaign_id)
-
             # Load story arc
             arc_repo = StoryArcRepository(db_session)
             try:
@@ -1282,7 +1276,6 @@ class SessionCog(commands.Cog):
             current_location=location,
             combat_state=combat_state,
             npcs={npc.name: npc for npc in npcs},
-            quests=quests,
             story_arc=story_arc,
             language=language,
         )
@@ -1303,16 +1296,15 @@ class SessionCog(commands.Cog):
         player_count = len(session.characters)
         combat_msg = " (combat en cours !)" if combat_active else ""
         npc_count = len(session.npcs)
-        quest_count = len(session.quests)
         logger.info(
-            "SESSION resume campaign=%s channel=%s characters=%d npcs=%d quests=%d combat=%s",
-            campaign.id, channel_id, player_count, npc_count, quest_count,
+            "SESSION resume campaign=%s channel=%s characters=%d npcs=%d combat=%s",
+            campaign.id, channel_id, player_count, npc_count,
             combat_active,
         )
 
         await interaction.followup.send(
             f"Session reprise ! Campagne **{campaign.name}** "
-            f"-- {player_count} personnage(s), {npc_count} PNJ(s), {quest_count} quete(s){combat_msg}.",
+            f"-- {player_count} personnage(s), {npc_count} PNJ(s){combat_msg}.",
         )
 
         # Surface AI initialization warnings to the campaign channel.
@@ -1685,7 +1677,7 @@ class SessionCog(commands.Cog):
     # ------------------------------------------------------------------
 
     def _persist_session(self, session: GameSession) -> None:
-        """Save campaign, characters, combat state, NPCs, and quests to DB."""
+        """Save campaign, characters, combat state, NPCs, and story arc to DB."""
         persist_session(self.bot.db_factory, session)
 
 

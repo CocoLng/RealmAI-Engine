@@ -78,25 +78,6 @@ class LocationRow(Base):
     npc_roles: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
-class QuestRow(Base):
-    """Quests table."""
-
-    __tablename__ = "quests"
-    __table_args__ = (UniqueConstraint("campaign_id", "title"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    campaign_id: Mapped[str] = mapped_column(
-        ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
-    )
-    title: Mapped[str] = mapped_column(String, nullable=False)
-    description: Mapped[str] = mapped_column(String, default="")
-    status: Mapped[str] = mapped_column(String, nullable=False)
-    objectives: Mapped[list] = mapped_column(JSON, default=list)
-    reward_xp: Mapped[int] = mapped_column(default=0)
-    reward_gold: Mapped[int] = mapped_column(default=0)
-    giver_npc: Mapped[str | None] = mapped_column(String, nullable=True)
-
-
 class ExchangeRow(Base):
     """Narrative exchanges table (Layer 2 memory)."""
 

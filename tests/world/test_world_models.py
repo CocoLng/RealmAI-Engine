@@ -7,7 +7,6 @@ from engine.character import AbilityScores, CharacterClass, Race
 from world.campaign import Campaign
 from world.location import Location
 from world.npc import NPC, NPCDisposition
-from world.quest import Quest, QuestObjective, QuestStatus
 
 
 # ---------------------------------------------------------------------------
@@ -154,67 +153,6 @@ class TestLocation:
         data = sample_location.model_dump()
         restored = Location.model_validate(data)
         assert restored == sample_location
-
-
-# ---------------------------------------------------------------------------
-# Quest
-# ---------------------------------------------------------------------------
-
-
-class TestQuestStatus:
-    """QuestStatus enum tests."""
-
-    def test_all_values_exist(self) -> None:
-        assert len(QuestStatus) == 4
-
-    def test_string_values(self) -> None:
-        assert QuestStatus.AVAILABLE == "available"
-        assert QuestStatus.FAILED == "failed"
-
-
-class TestQuestObjective:
-    """QuestObjective model tests."""
-
-    def test_valid_construction(self) -> None:
-        obj = QuestObjective(description="Kill the dragon")
-        assert obj.description == "Kill the dragon"
-        assert obj.is_complete is False
-
-    def test_complete_objective(self) -> None:
-        obj = QuestObjective(description="Done", is_complete=True)
-        assert obj.is_complete is True
-
-
-class TestQuest:
-    """Quest model tests."""
-
-    def test_valid_construction(self, sample_quest: Quest) -> None:
-        assert sample_quest.title == "Find the Lost Mine"
-        assert sample_quest.status == QuestStatus.ACTIVE
-        assert len(sample_quest.objectives) == 2
-        assert sample_quest.reward_xp == 500
-
-    def test_defaults(self) -> None:
-        quest = Quest(title="Simple Quest")
-        assert quest.description == ""
-        assert quest.status == QuestStatus.AVAILABLE
-        assert quest.objectives == []
-        assert quest.reward_xp == 0
-        assert quest.reward_gold == 0
-        assert quest.giver_npc is None
-
-    def test_reward_xp_negative_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            Quest(title="Bad", reward_xp=-1)
-
-    def test_reward_gold_negative_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            Quest(title="Bad", reward_gold=-1)
-
-    def test_model_roundtrip(self, sample_quest: Quest) -> None:
-        data = sample_quest.model_dump()
-        restored = Quest.model_validate(data)
-        assert restored == sample_quest
 
 
 # ---------------------------------------------------------------------------

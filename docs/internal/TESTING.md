@@ -91,7 +91,7 @@ Dans [mcp_discord/](../../mcp_discord/). Serveur MCP stdio exposé à Claude Cod
 | `discord_click_button(message_id, button_label, player)` | Simule un clic bouton |
 | `discord_select_option(message_id, value, player)` | Simule un select |
 | `discord_wait_for_response(timeout)` | Bloque jusqu'à réponse |
-| `discord_get_game_state()` | Renvoie `GameSession` live (campaign, chars, combat, npcs, quests) |
+| `discord_get_game_state()` | Renvoie `GameSession` live (campaign, chars, combat, npcs) |
 
 ### Variables d'env
 

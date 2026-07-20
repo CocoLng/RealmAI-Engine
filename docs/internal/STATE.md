@@ -26,7 +26,7 @@ Synthèse factuelle de ce qui est **implémenté, partiellement implémenté, ou
 | Phase | État | Contenu |
 |---|---|---|
 | **Phase 1 — Engine** | 🟢 Terminée | `engine/` complet, ~98% coverage |
-| **Phase 2a — World + DB** | 🟢 Terminée | `world/`, `db/`, 11 repos, mappers |
+| **Phase 2a — World + DB** | 🟢 Terminée | `world/`, `db/`, 10 repos, mappers |
 | **Phase 2b — Memory 4 couches** | 🟢 Terminée | `memory/`, ChromaDB, context assembler — modules écrits tôt mais **branchés en prod seulement au chantier G** (2026-07-18) |
 | **Phase 2c — AI Core** | 🟢 Terminée | `ai/` (8 services), prompts, entity resolver |
 | **Phase 3 — Discord Bot** | 🟢 Fonctionnelle | Cogs, pipeline, views, embeds, lobby d'onboarding, combat 5e, beat progression — bout en bout |
@@ -101,7 +101,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 
 ### Persistance
 - ✅ 10 tables SQLAlchemy + migrations `ALTER TABLE` incrémentales
-- ✅ 11 repositories
+- ✅ 10 repositories
 - ✅ Mappers bidirectionnels domaine ↔ DB
 - ✅ Sérialisation JSON des champs nested
 - ✅ Foreign keys CASCADE
@@ -159,7 +159,7 @@ Suite à une première campagne live (2026-04-07) avec 7 actions et 0 mutations 
 - Voice chat integration
 - Dashboard admin
 - Quest completion automatique (objectives manuels)
-- Rewards auto-distribués (XP / gold) après combat/quest
+- Rewards auto-distribués (XP / gold) après combat
 - Skill checks hors combat (DC-based)
 - Narrator streaming (toute narration est renvoyée en block)
 - Tests end-to-end avec vrai Ollama
