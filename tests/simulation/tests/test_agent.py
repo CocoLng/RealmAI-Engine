@@ -163,6 +163,49 @@ class TestAutonomousAgentDecide:
         assert intent.action == "defend"
 
 
+class TestLastRetries:
+    """``last_retries`` is what the runner records as TurnRecord.agent_retries."""
+
+    def test_zero_on_first_try_success(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {
+            "reasoning": "r", "action": "look", "args": {}, "raw_text": None
+        }
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b")
+        agent.decide(observation="TURN 1\n...")
+        assert agent.last_retries == 0
+
+    def test_counts_failed_attempts_before_success(self) -> None:
+        client = MagicMock()
+        client.chat_json.side_effect = [
+            {"reasoning": "x", "action": "dance"},  # invalid
+            {"reasoning": "z", "action": "look", "args": {}, "raw_text": None},
+        ]
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=3)
+        agent.decide(observation="TURN 1\n...")
+        assert agent.last_retries == 1
+
+    def test_counts_all_attempts_when_exhausted(self) -> None:
+        client = MagicMock()
+        client.chat_json.return_value = {"action": "dance"}
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=2)
+        agent.decide(observation="TURN 1\n...")
+        assert agent.last_retries == 2
+
+    def test_resets_between_turns(self) -> None:
+        client = MagicMock()
+        client.chat_json.side_effect = [
+            {"reasoning": "x", "action": "dance"},  # turn 1 fails once
+            {"reasoning": "z", "action": "look", "args": {}, "raw_text": None},
+            {"reasoning": "z", "action": "look", "args": {}, "raw_text": None},
+        ]
+        agent = AutonomousAgent(client=client, model="qwen3.5:4b", max_retries=3)
+        agent.decide(observation="TURN 1\n...")
+        assert agent.last_retries == 1
+        agent.decide(observation="TURN 2\n...")
+        assert agent.last_retries == 0
+
+
 class FakeStateForLegality:
     def __init__(self, **kwargs) -> None:
         self.combat_active = kwargs.get("combat_active", False)

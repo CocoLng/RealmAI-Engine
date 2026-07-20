@@ -261,6 +261,17 @@ def _snapshot_from_session(session) -> dict:
         if villain:
             factions_known.append(villain)
 
+    # Locked world facts the narrator must never contradict (audit H17).
+    # They ride the story arc and are refreshed at the end of every turn
+    # by bot/pipeline/narrate.py::_sync_locked_facts. Surfaced as plain
+    # dicts because R1.locked_fact_violation reads ``fact["text"]``.
+    locked_facts: list[dict[str, str]] = []
+    if session.story_arc is not None:
+        locked_facts = [
+            {"id": fact.id, "text": fact.text}
+            for fact in (getattr(session.story_arc, "locked_facts", None) or [])
+        ]
+
     snap: dict = {
         "campaign_id": session.campaign.id if session.campaign else None,
         "location": getattr(session.current_location, "name", None),
@@ -276,6 +287,7 @@ def _snapshot_from_session(session) -> dict:
         "inventory_equipped": equipped,
         "locations_known": locations_known,
         "factions_known": factions_known,
+        "locked_facts": locked_facts,
     }
     if char is not None:
         snap["character_name"] = char.name

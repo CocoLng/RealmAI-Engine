@@ -154,6 +154,105 @@ async def test_runner_stops_on_agent_stuck(
 
 
 @pytest.mark.asyncio
+async def test_runner_stops_on_character_death(
+    tmp_path: Path, mock_agent, mock_checker, stub_driver
+) -> None:
+    """A run must stop the moment the character drops to 0 HP (spec §5)."""
+    snapshots = [
+        {"character_hp": 5, "character_max_hp": 15},   # before turn 1
+        {"character_hp": 0, "character_max_hp": 15},   # after turn 1 — dead
+        {"character_hp": 0, "character_max_hp": 15},   # finalize
+    ]
+    snapshot_iter = iter(snapshots)
+
+    config = SimulationConfig(
+        seed=1, max_turns=10, run_dir=tmp_path, max_wall_time_s=60
+    )
+    runner = SimulationRunner(
+        config=config,
+        agent=mock_agent,
+        driver=stub_driver,
+        checker=mock_checker,
+        session_snapshot=lambda: next(snapshot_iter),
+    )
+    status = await runner.run()
+    assert status == "character_death"
+    assert stub_driver.execute.await_count == 1
+    assert "character_death" in (tmp_path / "report.md").read_text()
+    assert '"character_hp": 0' in (tmp_path / "final_state.json").read_text()
+
+
+@pytest.mark.asyncio
+async def test_runner_does_not_stop_when_character_alive(
+    tmp_path: Path, mock_agent, mock_checker, stub_driver
+) -> None:
+    """Positive HP — and snapshots without any HP field — must not stop the run."""
+    config = SimulationConfig(
+        seed=1, max_turns=2, run_dir=tmp_path, max_wall_time_s=60
+    )
+    runner = SimulationRunner(
+        config=config,
+        agent=mock_agent,
+        driver=stub_driver,
+        checker=mock_checker,
+        session_snapshot=lambda: {"character_hp": 1, "location": "Cave"},
+    )
+    assert await runner.run() == "max_turns_reached"
+
+
+@pytest.mark.asyncio
+async def test_runner_plumbs_locked_facts_into_history(
+    tmp_path: Path, mock_agent, mock_checker, stub_driver
+) -> None:
+    """Locked facts from the snapshot must reach the history the rules read."""
+    facts = [{"id": "npc_dead:Garm", "text": "Garm est mort(e)."}]
+    config = SimulationConfig(
+        seed=1, max_turns=2, run_dir=tmp_path, max_wall_time_s=60
+    )
+    runner = SimulationRunner(
+        config=config,
+        agent=mock_agent,
+        driver=stub_driver,
+        checker=mock_checker,
+        session_snapshot=lambda: {"character_hp": 10, "locked_facts": facts},
+    )
+    await runner.run()
+    assert runner._history[-1]["locked_facts"] == facts
+    # Turn 2's check must see turn 1's facts.
+    history_seen = mock_checker.check.call_args_list[1].kwargs["history"]
+    assert history_seen[-1]["locked_facts"] == facts
+
+
+@pytest.mark.asyncio
+async def test_runner_records_agent_retries(
+    tmp_path: Path, mock_checker, stub_driver
+) -> None:
+    """The transcript must carry the agent's real retry count, not a hardcoded 0."""
+
+    class _RetryingAgent:
+        last_retries = 0
+
+        def decide(self, observation: str, history=None) -> AgentIntent:
+            self.last_retries = 2
+            return AgentIntent(
+                reasoning="test", action="look", args={}, raw_text=None
+            )
+
+    config = SimulationConfig(
+        seed=1, max_turns=1, run_dir=tmp_path, max_wall_time_s=60
+    )
+    runner = SimulationRunner(
+        config=config,
+        agent=_RetryingAgent(),
+        driver=stub_driver,
+        checker=mock_checker,
+        session_snapshot=lambda: {"character_hp": 10},
+    )
+    await runner.run()
+    assert runner.recorder.records[0].agent_retries == 2
+
+
+@pytest.mark.asyncio
 async def test_runner_computes_real_diff(
     tmp_path: Path, mock_agent, mock_checker
 ) -> None:

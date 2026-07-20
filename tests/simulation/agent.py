@@ -62,6 +62,9 @@ class AutonomousAgent:
         self.policy = policy
         self._system_prompt = _load_system_prompt() + "\n\n" + self._policy_addendum()
         self._few_shots = _load_few_shots()
+        self.last_retries = 0
+        """Failed attempts of the LAST ``decide`` call — read by the runner
+        to fill ``TurnRecord.agent_retries``. Reset at the start of each call."""
 
     def _policy_addendum(self) -> str:
         """Return a policy-specific addendum to append to the system prompt."""
@@ -104,6 +107,7 @@ class AutonomousAgent:
         anti_deadlock_hint = self._anti_deadlock_hint(history or [])
         hint: str | None = anti_deadlock_hint
         last_err: str | None = None
+        self.last_retries = 0
         for attempt in range(self.max_retries):
             messages = self._build_messages(observation, corrective_hint=hint)
             try:
@@ -114,6 +118,7 @@ class AutonomousAgent:
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("LLM call failed attempt=%d: %s", attempt, e)
+                self.last_retries = attempt + 1
                 hint = (
                     "Previous response could not be parsed. Return strict JSON. "
                     + (anti_deadlock_hint or "")
@@ -127,6 +132,7 @@ class AutonomousAgent:
                 return intent
             except (ValidationError, ValueError, json.JSONDecodeError) as e:
                 last_err = str(e)
+                self.last_retries = attempt + 1
                 hint = (
                     "Your previous response was invalid. Return EXACTLY one JSON "
                     "object matching the schema. Errors: "
