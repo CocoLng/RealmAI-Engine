@@ -678,3 +678,115 @@ class TestLowConfidenceFlow:
         await cog.on_message(_campaign_message(bot))  # type: ignore[arg-type]
 
         assert factory.process_interpreted_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Multi-intentions — chaînage borné
+# ---------------------------------------------------------------------------
+
+
+def _result_with_pending(pending: list[str]) -> ActionPipelineResult:
+    return ActionPipelineResult(
+        narrative="Fait.",
+        tone="dramatic",
+        mechanics_text="",
+        interpreted_action=InterpretedAction(
+            action_type=ActionType.PICKUP,
+            actor_name="Aldric",
+            target_name="Clé",
+            raw_input="je ramasse la clé et je vais au nord",
+            pending_intents=pending,
+        ),
+    )
+
+
+class SequencedPipelineFactory(FakePipelineFactory):
+    """Renvoie un output différent par appel à process (1er, 2e, ...)."""
+
+    def __init__(self, outputs: list[Any]) -> None:
+        super().__init__(outputs[0])
+        self._outputs = outputs
+
+    def __call__(self, **kwargs: Any) -> Any:
+        pipeline = super().__call__(**kwargs)
+        original_process = pipeline.process
+
+        async def process(player_text: str, progress_callback: Any = None) -> Any:
+            index = min(len(self.process_calls), len(self._outputs) - 1)
+            self.output = self._outputs[index]
+            return await original_process(player_text, progress_callback)
+
+        pipeline.process = process
+        return pipeline
+
+
+class TestPendingIntentChaining:
+    @pytest.mark.asyncio
+    async def test_chains_one_pending_intent_out_of_combat(self) -> None:
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+        factory = SequencedPipelineFactory([
+            _result_with_pending(["je vais au nord"]),
+            _success_output(),  # la 2e action ne chaîne plus rien
+        ])
+        cog._pipeline_factory = factory
+
+        await cog.on_message(_campaign_message(bot))  # type: ignore[arg-type]
+
+        assert factory.process_calls == [
+            "je danse",  # raw_text du message (mention strippée)
+            "je vais au nord",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_budget_caps_total_at_two_actions(self) -> None:
+        """Même si chaque action re-déclare des intentions, cap global à 2."""
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+        factory = SequencedPipelineFactory([
+            _result_with_pending(["intention 2"]),
+            _result_with_pending(["intention 3"]),  # budget épuisé → drop
+        ])
+        cog._pipeline_factory = factory
+
+        await cog.on_message(_campaign_message(bot))  # type: ignore[arg-type]
+
+        assert len(factory.process_calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_chaining_when_combat_active_after_first_action(self) -> None:
+        session = _make_session(player_id=1)
+        bot = _make_bot(sessions={1: session})
+        cog = _make_cog(bot)
+
+        combat_state = MagicMock()
+        combat_state.is_active = True
+
+        class CombatStartingFactory(FakePipelineFactory):
+            def __call__(self, **kwargs: Any) -> Any:
+                pipeline = super().__call__(**kwargs)
+                original_process = pipeline.process
+
+                async def process(
+                    player_text: str, progress_callback: Any = None,
+                ) -> Any:
+                    session.combat_state = combat_state  # l'action bootstrap un combat
+                    return await original_process(player_text, progress_callback)
+
+                pipeline.process = process
+                return pipeline
+
+        factory = CombatStartingFactory(
+            _result_with_pending(["je fouille son corps"]),
+        )
+        cog._pipeline_factory = factory
+        session.combat_turn_manager = None
+
+        msg = _campaign_message(bot)
+        await cog.on_message(msg)  # type: ignore[arg-type]
+
+        assert factory.process_calls == ["je danse"]  # pas de 2e passe
+        # L'intention abandonnée est annoncée.
+        assert msg.channel.send.await_count >= 2  # progress + annonce drop

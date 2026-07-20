@@ -54,6 +54,11 @@ _SEND_ERRORS: tuple[type[BaseException], ...] = (
     aiohttp.ClientConnectionError,
 )
 
+MAX_CHAINED_INTENTS = 2
+"""Nombre MAXIMAL d'actions exécutées pour un seul message joueur
+(la première + les intentions chaînées). Cap appliqué côté cog : quel que
+soit le découpage du 4b, jamais plus de 2 narrations par message."""
+
 _MENTION_RE = re.compile(r"<@!?(\d+)>")
 
 # Short OOC reactions that should not trigger the LLM pipeline.
@@ -85,6 +90,24 @@ def _strip_bot_mention(content: str, bot_user_id: int) -> str:
         content,
     )
     return cleaned.strip()
+
+
+def _build_dropped_intents_embed(
+    dropped: list[str], language: str,
+) -> discord.Embed:
+    """Annonce des intentions non exécutées — jamais de perte silencieuse."""
+    if language == "fr":
+        title = "⏭ Intention(s) non exécutée(s)"
+        hint = "Retape-la pour la jouer."
+    else:
+        title = "⏭ Unplayed intent(s)"
+        hint = "Type it again to play it."
+    lines = "\n".join(f"• {intent}" for intent in dropped)
+    return discord.Embed(
+        title=title,
+        description=f"{lines}\n\n{hint}",
+        color=0x95A5A6,
+    )
 
 
 class ActionHandlerCog(commands.Cog):
@@ -154,6 +177,8 @@ class ActionHandlerCog(commands.Cog):
         message: discord.Message,
         session: Any,
         raw_text: str,
+        *,
+        chain_budget: int = MAX_CHAINED_INTENTS - 1,
     ) -> None:
         """Run one free-text action end to end.
 
@@ -222,6 +247,66 @@ class ActionHandlerCog(commands.Cog):
             "ACTION done campaign=%s elapsed=%.1fs",
             session.campaign.id, time.monotonic() - start,
         )
+
+        await self._chain_pending_intents(
+            message, session, result, chain_budget,
+        )
+
+    async def _chain_pending_intents(
+        self,
+        message: discord.Message,
+        session: Any,
+        result: PipelineOutput | None,
+        chain_budget: int,
+    ) -> None:
+        """Exécute la prochaine intention en attente, ou annonce l'abandon.
+
+        Règles (spec 2026-07-20-interpreter-robustness) :
+        - cap global ``MAX_CHAINED_INTENTS`` actions par message joueur ;
+        - jamais de chaînage quand un combat est actif (y compris un combat
+          bootstrappé par la première action) ;
+        - toute intention abandonnée est annoncée — pas de perte silencieuse.
+        """
+        if not isinstance(result, ActionPipelineResult):
+            return
+        pending = [
+            intent
+            for intent in result.interpreted_action.pending_intents
+            if intent.strip()
+        ]
+        if not pending:
+            return
+
+        in_combat = (
+            session.combat_state is not None and session.combat_state.is_active
+        )
+        next_intent = (
+            pending[0] if (chain_budget > 0 and not in_combat) else None
+        )
+        dropped = pending[1:] if next_intent is not None else pending
+
+        if dropped:
+            try:
+                await message.channel.send(
+                    embed=_build_dropped_intents_embed(
+                        dropped, session.language,
+                    ),
+                )
+            except _SEND_ERRORS:
+                logger.warning(
+                    "ACTION dropped-intents send failed campaign=%s",
+                    session.campaign.id,
+                )
+
+        if next_intent is not None:
+            logger.info(
+                "ACTION chained intent campaign=%s budget=%d text=%r",
+                session.campaign.id, chain_budget, next_intent[:100],
+            )
+            await self._run_pipeline(
+                message, session, next_intent,
+                chain_budget=chain_budget - 1,
+            )
 
     async def _process_and_render(
         self,

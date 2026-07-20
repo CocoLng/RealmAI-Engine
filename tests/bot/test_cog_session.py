@@ -1523,6 +1523,7 @@ class TestActionHandlerConsumesForceDirectorFlag:
 
         action = MagicMock(spec=InterpretedAction)
         action.action_type = ActionType.TALK
+        action.pending_intents = []
         fake_result = ActionPipelineResult(
             narrative="test",
             tone="dramatic",
