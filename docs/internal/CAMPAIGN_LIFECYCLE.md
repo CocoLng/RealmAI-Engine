@@ -41,8 +41,10 @@ est assurée par `SessionCog` dans [bot/cogs/session.py](../../bot/cogs/session.
 lobby pour re-render, plus le résultat de la pré-génération
 (`pregen_phase`, `pregen_task`, `story_arc`, `current_location`, `pregen_error`).
 
-Statuts joueur : `JOINED → CREATING → READY` (ou `CANCELLED` si le joueur
-abandonne en cours de création).
+Statuts joueur : `JOINED → CREATING → READY`. `LobbyPlayerStatus.CANCELLED`
+existe et est rendu par `lobby_embed`, mais aucun chemin de code ne l'assigne
+aujourd'hui — un abandon de création laisse le joueur en `CREATING` jusqu'à
+ce qu'il re-clique **Rejoindre** (ou **Quitter**, qui le retire du roster).
 
 ### 2.a Génération IA (background task)
 
@@ -74,7 +76,7 @@ Chaque joueur clique sur **Rejoindre** (`LobbyView.join`) → `lobby.add_player(
    - `STATS` : bouton « Optimisé pour \<Classe\> » (`CLASS_STAT_PRESETS`) ou « Aléatoire » (`roll_4d6_drop_lowest` + `auto_assign_random`).
    - `SKILLS` : choix parmi `CLASS_SKILL_CHOICES`.
    - `KIT_MOTIV` : kit de départ ([engine/starter_gear.py](../../engine/starter_gear.py)) + motivation narrative.
-   - `REVIEW` : **Confirmer** / **Recommencer** / **Annuler** (annuler repasse le joueur en `CANCELLED`).
+   - `REVIEW` : **Confirmer** / **Recommencer** (retour à `RACE_CLASS`, nom et concept conservés) / **Annuler** (abandonne le flow sans appeler `on_complete` — le joueur peut re-cliquer **Rejoindre**).
 2. À la confirmation, le callback `on_setup_complete` du cog :
    - `create_inventory()` puis `apply_starter_kit(kit, inventory)` pour le kit choisi.
    - `create_spellcaster_state(char_class, level=1)` (None si non-caster).
