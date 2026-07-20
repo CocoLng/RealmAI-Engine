@@ -564,7 +564,8 @@ def _describe_actor(session: "GameSession", actor_name: str) -> str:
     actions. If nothing matches, falls back to just the name — the
     narrator still works, it just gets less texture.
 
-    Also surfaces the player's ``kit`` and ``motivation`` (captured at
+    Also surfaces the character's ``concept`` (free text typed in the
+    identity modal) and the player's ``kit`` / ``motivation`` (captured at
     onboarding) when the actor maps to a PC — these anchor the narrator's
     framing turn after turn and keep a Shadow Blade mercenary reading as
     a sellsword, not a destined hero.
@@ -604,6 +605,11 @@ def _describe_actor(session: "GameSession", actor_name: str) -> str:
             f"niveau {character.level}."
         ),
     ]
+
+    # Concept typed at character creation (optional): the player's own words
+    # about who this character is. Omitted entirely when left blank.
+    if character.concept.strip():
+        lines.append(f"Concept : {character.concept.strip()}.")
 
     if pc_user_id is not None:
         kits = getattr(session, "character_kits", None)

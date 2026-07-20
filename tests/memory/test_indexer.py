@@ -7,6 +7,7 @@ from ai.models import NPCSheet
 from memory.indexer import SemanticIndexer
 from memory.models import SemanticDocument, SemanticDocumentType
 from memory.semantic import SemanticMemory
+from world.quest import Quest, QuestObjective, QuestStatus
 from world.story_arc import StoryBeat
 
 
@@ -157,9 +158,27 @@ class TestIndexQuest:
     def test_index_quest_adds_quest_detail_document(
         self, indexer: SemanticIndexer, fake_semantic: MagicMock,
     ) -> None:
-        indexer.index_quest("cmp_1", "quest_main_42", "Retrieve the lost map of Eldoria.")
+        quest = Quest(
+            title="Retrieve the lost map",
+            description="Retrieve the lost map of Eldoria.",
+            status=QuestStatus.ACTIVE,
+            objectives=[
+                QuestObjective(description="Find the smuggler", is_complete=True),
+                QuestObjective(description="Recover the map"),
+            ],
+        )
+        indexer.index_quest("cmp_1", quest)
         fake_semantic.add_document.assert_called_once()
         doc = fake_semantic.add_document.call_args.args[0]
         assert doc.doc_type == SemanticDocumentType.QUEST_DETAIL
         assert "lost map" in doc.content
-        assert doc.metadata.get("quest_id") == "quest_main_42"
+        assert "Recover the map" in doc.content
+        assert doc.metadata.get("quest_id") == "Retrieve the lost map"
+        assert doc.metadata.get("status") == "active"
+        assert doc.id == "quest_detail:cmp_1:retrieve_the_lost_map"
+
+    def test_index_quest_without_content_is_a_no_op(
+        self, indexer: SemanticIndexer, fake_semantic: MagicMock,
+    ) -> None:
+        indexer.index_quest("cmp_1", Quest(title="Placeholder"))
+        fake_semantic.add_document.assert_not_called()
