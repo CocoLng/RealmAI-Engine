@@ -8,8 +8,8 @@ Commit at the end of a phase, do not co author claude.
 > jour (24 specs / 21 plans / 36 fiches) est clos aussi — voir **TEMPS 4**
 > pour ce qui reste ouvert.
 >
-> ⚠️ **14 commits ne sont pas poussés** et 4 worktrees d'agents traînent
-> (tous mergés) — cf. §3.1.
+> **Poussé et nettoyé** : `main == origin/main`, CI verte sur le HEAD.
+> Plus aucun worktree ni branche de chantier — l'arbre est à `main` seul.
 
 ## Objectif, en trois temps
 
@@ -224,31 +224,26 @@ sessions pilotées par script tester autonome (pattern du skill).
 
 # TEMPS 3 — Grand nettoyage
 
-### 3.1 — Git ⚠️ destructif, à lancer par l'utilisateur
+### 3.1 — Git ✅ fait le 2026-07-20
 
-Les 6 branches de chantier sont toutes ancêtres de `main`. **La session du
-2026-07-20 en a ajouté 4** (3 worktrees d'agents + le chantier lobby), toutes
-mergées dans `main` — donc supprimables aussi.
+8 worktrees retirés et 9 branches supprimées, chacune vérifiée ancêtre de
+`main` par `git merge-base --is-ancestor` avant suppression (pas seulement
+par le listing de `git branch --merged`). `git branch` ne rend plus qu'une
+ligne. Résidus locaux non versionnés purgés au passage : `.coverage` stale,
+`.worktrees/` vide, tous les `__pycache__`.
 
-```bash
-# Chantiers de l'audit 2026-06-10
-git worktree remove .claude/worktrees/chantier-c-save-load
-git worktree remove .claude/worktrees/chantier-d-orchestrator
-git worktree remove .claude/worktrees/chantier-f-anti-cheat
-git worktree remove .claude/worktrees/chantier-g-memory
-git worktree remove .claude/worktrees/generation-robustness
-git branch -d chantier/save-load-session worktree-chantier-d-orchestrator \
-  feat/memory-coherence chantier/anti-cheat-clamps fix/generation-robustness \
-  worktree-generation-robustness
-
-# Worktrees d'agents de la session 2026-07-20 (tous mergés)
-git worktree list | grep 'worktrees/agent-' | awk '{print $1}' | \
-  xargs -n1 git worktree remove
-git branch --merged main | grep 'worktree-agent-' | xargs -r git branch -d
-```
-
-Vérifier avant : `git branch --merged main`. **13 commits ne sont pas encore
-poussés** au 2026-07-20.
+Reste, à ta main :
+- [ ] `origin/copilot/write-code-of-conduct-and-security` — branche distante
+      obsolète (divergente, −19 000 lignes vs `main`). Son seul apport utile,
+      `CODE_OF_CONDUCT.md` + `SECURITY.md`, a été cherry-piqué. Supprimable :
+      `git push origin --delete copilot/write-code-of-conduct-and-security`.
+- [ ] `logs/` fait 11 Mo (191 `realm_*.log` de sessions réelles). Gitignoré,
+      donc sans impact sur le dépôt, et `beat_progression.jsonl` est de la
+      vraie télémétrie à conserver. Purger les vieux `realm_*.log` seulement
+      si l'espace gêne.
+- [ ] `.env.bak-20260719` — backup de `.env` (contient des secrets). Laissé
+      en place volontairement : à supprimer toi-même une fois sûr que le
+      `TEST_CHANNEL_ID` courant est le bon.
 
 ### 3.2 — Documentation périmée
 
