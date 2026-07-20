@@ -83,6 +83,9 @@ class Interpreter:
                 :func:`bot.llm_retry.retry_llm_call` only retries raised
                 exceptions, and a silent fallback used to convert a 4b
                 hiccup into a DEFEND that consumed the player's turn (H11).
+                Le filet de sécurité vit en aval : après épuisement des
+                retries, bot.pipeline.interpret.call_interpreter forge un
+                IMPROVISE basse confidence soumis à confirmation du joueur.
             OllamaUnavailableError: When the Ollama server is unreachable.
         """
         user_content = self._build_user_message(

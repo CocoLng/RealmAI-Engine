@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ai.client import LLMParseError
 from ai.interpreter import Interpreter
 from ai.models import InterpretedAction
 from ai.scene_context import SceneContext
@@ -50,6 +51,14 @@ if TYPE_CHECKING:
     from bot.game_session import GameSession
 
 logger = logging.getLogger(__name__)
+
+FALLBACK_IMPROVISE_CONFIDENCE = 0.3
+"""Confidence du IMPROVISE forgé après épuisement des retries interpreter.
+
+Volontairement sous CONFIDENCE_CLARIFY_THRESHOLD (orchestrator) : le fallback
+passe TOUJOURS par le gate de confirmation — le joueur valide avant que le
+tour soit consommé (leçon H11 : jamais de fallback silencieux).
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +169,11 @@ async def call_interpreter(
     """Call the Interpreter LLM and return its structured result.
 
     Moved verbatim from ``action_pipeline.py:_call_interpreter``.
-    Retries are handled by :func:`bot.llm_retry.retry_llm_call`.
+    Retries are handled by :func:`bot.llm_retry.retry_llm_call`. When every
+    retry fails on ``LLMParseError`` (sortie 4b inexploitable), un IMPROVISE
+    de secours est forgé avec ``FALLBACK_IMPROVISE_CONFIDENCE`` — le gate de
+    confiance de l'orchestrator le soumet alors à confirmation du joueur.
+    ``OllamaUnavailableError`` propage toujours : serveur down = vraie panne.
     """
     campaign_id: str = getattr(interpreter, "campaign_id", "?")
 
@@ -172,10 +185,23 @@ async def call_interpreter(
             language=language,
         )
 
-    return await retry_llm_call(
-        _do,
-        log_label=f"ACTION campaign={campaign_id} interpret",
-    )
+    try:
+        return await retry_llm_call(
+            _do,
+            log_label=f"ACTION campaign={campaign_id} interpret",
+        )
+    except LLMParseError:
+        logger.warning(
+            "ACTION campaign=%s interpret fallback→IMPROVISE raw=%r",
+            campaign_id, player_text[:100],
+        )
+        return InterpretedAction(
+            action_type=ActionType.IMPROVISE,
+            actor_name=actor_name,
+            improvise_description=player_text,
+            raw_input=player_text,
+            confidence=FALLBACK_IMPROVISE_CONFIDENCE,
+        )
 
 
 def auto_resolve_weapon_name(
