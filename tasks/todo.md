@@ -223,8 +223,15 @@ sessions pilotées par script tester autonome (pattern du skill).
 ### 2.4 — Porte de cohérence câblée (2026-07-20)
 
 - [x] **Noyau partagé** : `memory/coherence_rules.py` — 11 règles de cohérence
-      (4 bloquantes / 7 observées), définies une seule fois, consommées par
-      le simulateur (`tests/simulation/`) et la production (`bot/pipeline/`).
+      (2 bloquantes jour 1 : `R1.npc_status`, `R1.zone_violation` ; 9
+      observées), définies une seule fois, consommées par le simulateur
+      (`tests/simulation/`) et la production (`bot/pipeline/`). La revue
+      finale a déclassé `R1.item_use_without_owning` et
+      `R1.locked_fact_violation` en OBSERVE (faux positifs prouvés :
+      armes des PNJ, confirmations de faits matchant le regex de
+      négation) — mitigations posées quand même : attribution de sujet,
+      skip des faits auto-négateurs, exclusion des faits verrouillés le
+      tour même, grâce du tour de mise à mort (`freshly_dead`).
 - [x] **Adaptateurs simulateur** : `tests/simulation/rules/hard.py` et
       `soft.py` réécrits en adaptateurs minces du noyau (mapping state
       simulateur → `CoherenceSnapshot`, violations → `IncoherenceAlert`) ;
@@ -244,24 +251,28 @@ sessions pilotées par script tester autonome (pattern du skill).
       `world/story_arc.py::append_beat_locked_facts` (idempotent), appelé
       par `_apply_beat_effects` ; bloc `[LOCKED FACTS]` plafonné à 15
       lignes, morts d'abord.
-- [x] **Télémétrie de promotion** : les violations OBSERVE sont loggées sur
-      le logger dédié `memory.coherence` (les bloquantes passent par les
-      warnings du pipeline). C'est la base de données pour promouvoir des
-      règles OBSERVE → BLOCK.
-- [x] **Vérification** : `uv run pytest -q` → 3024 passed, 1 skipped (50+
+- [x] **Télémétrie de promotion** : violations OBSERVE **et** BLOCK loggées
+      sur le logger dédié `memory.coherence`. C'est la base de données pour
+      promouvoir des règles OBSERVE → BLOCK.
+- [x] **Vérification** : `uv run pytest -q` → 3032 passed, 1 skipped (~60
       tests nouveaux). `uv run ruff check .` → all checks passed.
       `uv run mypy .` → no issues found in 355 source files. Câblage
       prouvé : 4/4 symboles appelés hors tests (`check_narration`,
       `build_coherence_snapshot`, `append_beat_locked_facts`,
-      `template_narration`).
+      `template_narration`). Mergé dans main (`af5d711`), gates
+      re-vérifiés sur le résultat mergé.
 
 **Suivi ouvert** : après quelques sessions réelles (~10), dépouiller les logs
 `memory.coherence` et statuer sur la promotion de `R1.phantom_npc`,
-`R1.hp_mismatch`, `R1.location_mismatch` (faible taux de faux positifs
-confirmé par relecture des extraits loggés). Surveiller aussi le taux de
-succès du retry correctif dead-NPC (contrainte plus terse qu'avant) et le
-faux positif possible de `R1.npc_status` sur la personnification près d'un
-cadavre.
+`R1.hp_mismatch`, `R1.location_mismatch`, `R1.item_use_without_owning`,
+`R1.locked_fact_violation` (faible taux de faux positifs confirmé par
+relecture des extraits loggés). Surveiller aussi le taux de succès du retry
+correctif dead-NPC (contrainte plus terse qu'avant) et le faux positif
+possible de `R1.npc_status` sur la personnification près d'un cadavre.
+Cleanup candidat : `find_dead_npc_violations` et `run_rules` n'ont plus
+d'appelant prod (API gardées pour compat) ; `known_locations` du snapshot
+prod = lieu courant + sorties (déviation documentée vs spec « tous les
+lieux ») — à trancher avant toute promotion de `R1.location_mismatch`.
 
 -----
 

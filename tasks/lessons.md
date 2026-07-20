@@ -307,3 +307,21 @@
   cette session a été vérifiée en retirant le correctif et en constatant le
   rouge (`git stash push <fichier>`, ou un `and False` temporaire sur la
   branche concernée) avant de la déclarer acquise.
+- **Un subagent peut commiter sur le checkout principal même quand la session
+  vit dans un worktree.** Le subagent de la tâche 7 du chantier porte de
+  cohérence a commité `tasks/todo.md` sur `main` au lieu de la branche du
+  worktree — détecté parce que `git log` du worktree ne montrait pas son SHA.
+  Avant de marquer une tâche complete : `git branch --contains <sha>` sur
+  chaque commit rapporté.
+- **Un modèle économique sur une tâche de doc fabrique des détails plausibles.**
+  L'entrée de board rédigée par le subagent citait un fichier
+  (`tests/simulation/rules/coherence.py`), un logger
+  (`memory.coherence_simulator`) et une classe (`CoherenceRuleMeta`) qui
+  n'existent nulle part. Toute entrée de board/doc écrite par un subagent se
+  relit contre le diff réel, pas contre son rapport.
+- **Un test sur MagicMock ne prouve pas qu'on lit les bons champs.** Les deux
+  criticals de la revue finale (accessor `zones` vs `combat_zones`, grâce du
+  tour de mise à mort) étaient des bugs écrits dans le plan, implémentés
+  fidèlement, et invisibles des tests parce que `MagicMock` répond à
+  n'importe quel attribut. Chaque builder/adaptateur qui mappe un modèle réel
+  reçoit au moins un test de couture sur les vrais modèles Pydantic.

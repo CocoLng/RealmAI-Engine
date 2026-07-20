@@ -244,3 +244,38 @@ du beat, écrite et sanitizée en amont.
   prompt, arc generator produisant des `locked_facts` valides sur
   fixture.
 - Gates : `pytest` complet, `ruff check .`, `mypy .` verts.
+
+---
+
+## Errata post-implémentation (2026-07-20, revue finale de branche)
+
+La revue finale a prouvé que **quatre défauts venaient de cette spec/du
+plan, pas de l'implémentation** — corrigés avant merge :
+
+1. **C1 (critique)** : le code du plan lisait `Location.zones` — champ
+   inexistant, le vrai est `combat_zones`. La règle `R1.zone_violation`
+   était armée avec un ensemble de zones valides toujours vide (toute
+   mention de « zone X » en combat aurait bloqué). Le test MagicMock du
+   plan masquait le bug ; un test sur un vrai `Location` le verrouille.
+2. **C2 (critique)** : sourcer `dead_npcs` en direct depuis la session
+   détruisait la grâce du tour de mise à mort (`trivial_kill` tue AVANT la
+   narration → la narration de la mort elle-même était bloquée → template
+   sur chaque kill). Corrigé par exclusion du tué du tour (`freshly_dead`
+   threadé par l'orchestrateur).
+3. **Modes jour 1 amendés (décision utilisateur)** :
+   `R1.item_use_without_owning` et `R1.locked_fact_violation` passent en
+   OBSERVE — faux positifs prouvés (armes des PNJ sans attribution de
+   sujet ; confirmations de faits matchant `_NEGATION_RE`, « sans »
+   ubiquitaire en français). BLOCK jour 1 = `R1.npc_status` +
+   `R1.zone_violation`. Mitigations posées pour préparer la promotion :
+   attribution de sujet (2ᵉ personne / nom de joueur), skip des faits
+   auto-négateurs, exclusion des faits verrouillés le tour même.
+4. **Sémantique du self-report affinée** : `npcs_mentioned` ne flague
+   seul que si le nom est absent du texte (résurrections pronominales) ;
+   nom visible → l'heuristique verbe actif décide. Limite acceptée : un
+   verbe hors liste (« accueille ») près d'un nom visible ne flague plus.
+
+Déviation documentée restante : `known_locations` du snapshot prod = lieu
+courant + sorties (la spec §1.4 disait « tous les lieux de la campagne ») —
+impact OBSERVE uniquement, à trancher avant promotion de
+`R1.location_mismatch`.
