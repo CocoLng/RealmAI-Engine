@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from ai.models import NPCSheet
     from memory.semantic import SemanticMemory
     from world.location import Location
+    from world.quest import Quest
     from world.story_arc import StoryBeat
 
 logger = logging.getLogger(__name__)
@@ -133,16 +134,30 @@ class SemanticIndexer:
         self._semantic.add_document(doc)
         logger.debug("INDEX fact campaign=%s len=%d", campaign_id, len(fact))
 
-    def index_quest(self, campaign_id: str, quest_id: str, description: str) -> None:
-        """Index a quest description as a QUEST_DETAIL-tagged document."""
-        if not description.strip():
+    def index_quest(self, campaign_id: str, quest: "Quest") -> None:
+        """Index a quest as a QUEST_DETAIL-tagged document.
+
+        The quest title is its identity (the repositories key quests by
+        ``(campaign_id, title)``). No-op for a quest that carries neither
+        description nor objectives — there would be nothing to retrieve.
+        """
+        if not quest.description.strip() and not quest.objectives:
             return
+        content_parts = [f"Quest: {quest.title} [{quest.status.value}]"]
+        if quest.description.strip():
+            content_parts.append(quest.description)
+        if quest.objectives:
+            content_parts.append("Objectives:")
+            content_parts += [
+                f"- [{'x' if obj.is_complete else ' '}] {obj.description}"
+                for obj in quest.objectives
+            ]
         doc = SemanticDocument(
-            id=f"quest_detail:{campaign_id}:{_slug(quest_id)}",
+            id=f"quest_detail:{campaign_id}:{_slug(quest.title)}",
             campaign_id=campaign_id,
             doc_type=SemanticDocumentType.QUEST_DETAIL,
-            content=description,
-            metadata={"quest_id": quest_id},
+            content="\n".join(content_parts),
+            metadata={"quest_id": quest.title, "status": quest.status.value},
         )
         self._semantic.add_document(doc)
-        logger.debug("INDEX quest campaign=%s quest=%s", campaign_id, quest_id)
+        logger.debug("INDEX quest campaign=%s quest=%s", campaign_id, quest.title)

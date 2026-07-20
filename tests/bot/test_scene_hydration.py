@@ -1192,6 +1192,71 @@ def test_describe_scene_actor_enrichment_fallback_when_unknown():
     assert "Inconnu" in out
 
 
+def test_describe_scene_actor_enrichment_surfaces_concept():
+    """The concept typed at character creation must reach the narrator.
+
+    Spec 2026-04-26 §4.1bis: the concept is "read by the narrator prompts".
+    """
+    pc_char = create_character(
+        name="Roub",
+        race=Race.HUMAN,
+        char_class=CharacterClass.ROGUE,
+        ability_scores=AbilityScores(
+            STR=10, DEX=15, CON=12, INT=10, WIS=10, CHA=10,
+        ),
+        concept="Vétéran grisonnant",
+    )
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = None
+    session.characters = {77: pc_char}
+    session.inventories = {}
+
+    out = describe_scene_for_narrator(session, actor_name="Roub")
+
+    assert "Concept : Vétéran grisonnant" in out
+
+
+def test_describe_scene_actor_omits_concept_when_empty():
+    """An empty concept (optional field) must leave no trace in the prompt."""
+    pc_char = create_character(
+        name="Roub",
+        race=Race.HUMAN,
+        char_class=CharacterClass.ROGUE,
+        ability_scores=AbilityScores(
+            STR=10, DEX=15, CON=12, INT=10, WIS=10, CHA=10,
+        ),
+    )
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = None
+    session.characters = {77: pc_char}
+    session.inventories = {}
+
+    out = describe_scene_for_narrator(session, actor_name="Roub")
+
+    assert "Concept" not in out
+
+
+def test_describe_scene_concept_surfaced_from_combat_roster():
+    """In combat the actor resolves from the roster — concept follows."""
+    pc = _build_pc_combatant("Thorin")
+    pc.character.concept = "Nain exilé"
+    state = _build_active_combat_state(combatants=[pc])
+    session = MagicMock()
+    session.current_location = None
+    session.npcs = {}
+    session.combat_state = state
+    session.characters = {}
+    session.inventories = {}
+
+    out = describe_scene_for_narrator(session, actor_name="Thorin")
+
+    assert "Concept : Nain exilé" in out
+
+
 def test_describe_scene_actor_enrichment_surfaces_kit_and_motivation():
     """When the session holds the player's kit + motivation, the narrator
     context must surface them so the LLM honors the chosen role."""
