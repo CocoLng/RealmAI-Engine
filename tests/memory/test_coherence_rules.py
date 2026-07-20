@@ -1,4 +1,4 @@
-"""Unit tests for the shared coherence-rule core (hard rules)."""
+"""Unit tests for the shared coherence-rule core (hard + soft rules, registry)."""
 
 from memory.coherence_rules import (
     CoherenceSnapshot,
@@ -190,6 +190,10 @@ class TestCheckUnknownProperNoun:
     def test_substring_of_known_name_passes(self) -> None:
         snap = CoherenceSnapshot(known_npc_names=["Elara, la Gardienne"])
         assert check_unknown_proper_noun("Gardienne des lieux, Elara veille.", snap) == []
+
+    def test_known_faction_passes(self) -> None:
+        snap = CoherenceSnapshot(known_factions=["Confrérie du Sel"])
+        assert check_unknown_proper_noun("La Confrérie du Sel approche.", snap) == []
 
 
 class TestRegistry:

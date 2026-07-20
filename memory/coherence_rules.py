@@ -33,6 +33,8 @@ class CoherenceSnapshot(BaseModel):
     player_names: list[str] = Field(default_factory=list)
     current_location: str | None = None
     known_locations: list[str] = Field(default_factory=list)
+    known_factions: list[str] = Field(default_factory=list)
+    """Known faction names (R2.unknown_proper_noun) — empty in prod for now."""
     moved_this_turn: bool = False
     actor_inventory: list[str] = Field(default_factory=list)
     player_hp_ratio: float = 1.0
@@ -431,6 +433,7 @@ def check_unknown_proper_noun(
         {n.lower() for n in snap.known_npc_names}
         | {p.lower() for p in snap.player_names}
         | {loc.lower() for loc in snap.known_locations}
+        | {f.lower() for f in snap.known_factions}
     )
     seen: set[str] = set()
     for match in _PROPER_NOUN_RE.finditer(narration):
