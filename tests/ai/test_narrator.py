@@ -867,6 +867,7 @@ class TestLocalizedTemplates:
             language="en",
         )
         assert "Le combat" not in result.narrative
+        assert "{action}" not in result.narrative
 
 
 class TestTemplateNarration:

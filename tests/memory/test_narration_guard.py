@@ -147,6 +147,10 @@ class TestRepetitionGuard:
     def test_unknown_campaign_is_silent(self) -> None:
         assert narration_guard.find_repetition("camp-inconnu", _LONG_SENTENCE) is None
 
+    def test_empty_narration_not_recorded(self) -> None:
+        narration_guard.record_narration("camp-guard", "   ")
+        assert narration_guard.find_repetition("camp-guard", _LONG_SENTENCE) is None
+
 
 class TestCheckNarration:
     def test_blocking_and_observed_are_split_by_mode(self) -> None:
@@ -196,7 +200,3 @@ class TestRecentNarrationsWindow:
             "c4", narrative=eight, snapshot=None, npcs_mentioned=[],
         )
         assert "R2.repetition" in {v.rule for v in verdict.observed}
-
-    def test_empty_narration_not_recorded(self) -> None:
-        narration_guard.record_narration("camp-guard", "   ")
-        assert narration_guard.find_repetition("camp-guard", _LONG_SENTENCE) is None
