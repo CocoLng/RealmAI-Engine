@@ -390,7 +390,7 @@ class TestLockedFactsFlow:
         )
 
         assert len(narrator.calls) == 2
-        assert "MORT" in narrator.calls[1]["action_result_text"]
+        assert "CONTRAINTE ABSOLUE (cohérence)" in narrator.calls[1]["action_result_text"]
         assert "Grim" in narrator.calls[1]["action_result_text"]
         assert "cadavre" in result.narrative
         narration_guard.reset("camp-guard-retry")

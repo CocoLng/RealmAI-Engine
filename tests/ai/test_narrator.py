@@ -867,4 +867,14 @@ class TestLocalizedTemplates:
             language="en",
         )
         assert "Le combat" not in result.narrative
+
+
+class TestTemplateNarration:
+    def test_public_template_never_calls_llm(self) -> None:
+        client = MagicMock()
+        narrator = Narrator(client)
+        result = narrator.template_narration("Attaque réussie", "8 dégâts", "fr")
+        client.chat.assert_not_called()
+        assert "8 dégâts" in result.narrative
+        assert result.tone == "dramatic"
         assert "{action}" not in result.narrative

@@ -673,6 +673,16 @@ class PipelineRunner:
         await self._emit(progress_callback, PipelinePhase.NARRATING)
         from ai.story_director import cached_note_for
         director_note = cached_note_for(self.campaign_id)
+        moved_this_turn = interpreted.action_type in (ActionType.MOVE, ActionType.FLEE)
+        coherence_snapshot = (
+            narrate.build_coherence_snapshot(
+                self.session,
+                actor_name=self.actor_name,
+                inventory=self.inventory,
+                moved_this_turn=moved_this_turn,
+            )
+            if self.session is not None else None
+        )
         narration = await narrate.call_narrator(
             narrator=self.narrator,
             outcome=outcome,
@@ -680,6 +690,7 @@ class PipelineRunner:
             language=self.language,
             campaign_id=self.campaign_id,
             director_note=director_note,
+            snapshot=coherence_snapshot,
         )
 
         # Memory hook (audit H9): persist this turn's exchanges and refresh

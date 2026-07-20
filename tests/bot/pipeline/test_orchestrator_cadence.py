@@ -69,6 +69,7 @@ def _make_session(campaign_turn_count: int) -> MagicMock:
     session.story_arc = None
     session.npcs = {}
     session.language = "fr"
+    session.current_location = None
     session.combat_state = None
     session.inventory = None
     session.npc_agent = None
