@@ -134,3 +134,84 @@ class TestCheckLockedFactViolation:
             LockedFactSnapshot(id="beat:3:hint", text="Le pont de pierre est effondré."),
         ])
         assert check_locked_fact_violation("La forêt s'étend devant vous.", snap) == []
+
+
+from memory.coherence_rules import (  # noqa: E402
+    RULES,
+    RuleMode,
+    check_npc_name_drift,
+    check_repetition,
+    check_tense_drift,
+    check_unknown_proper_noun,
+    run_rules,
+)
+
+
+class TestCheckRepetition:
+    def test_eight_identical_words_are_flagged(self) -> None:
+        prev = "La lourde porte de chêne s'ouvre dans un grincement sinistre ce soir."
+        snap = CoherenceSnapshot(recent_narrations=[prev])
+        violations = check_repetition(
+            "La lourde porte de chêne s'ouvre dans un grincement sinistre encore.",
+            snap,
+        )
+        assert len(violations) == 1
+        assert violations[0].rule == "R2.repetition"
+        assert violations[0].severity == "soft"
+
+    def test_fresh_narration_passes(self) -> None:
+        snap = CoherenceSnapshot(recent_narrations=["Le vent souffle sur la lande."])
+        assert check_repetition("Un corbeau croasse au loin.", snap) == []
+
+
+class TestCheckNpcNameDrift:
+    def test_two_edit_variant_is_flagged(self) -> None:
+        snap = CoherenceSnapshot(known_npc_names=["Elara"])
+        violations = check_npc_name_drift("Elera vous fait signe.", snap)
+        assert len(violations) == 1
+        assert violations[0].rule == "R2.npc_name_drift"
+
+    def test_exact_name_passes(self) -> None:
+        snap = CoherenceSnapshot(known_npc_names=["Elara"])
+        assert check_npc_name_drift("Elara vous fait signe.", snap) == []
+
+
+class TestCheckTenseDrift:
+    def test_mixed_tenses_in_one_sentence_flagged(self) -> None:
+        violations = check_tense_drift(
+            "Tu as poussé la porte et le garde crie aussitôt.",
+            CoherenceSnapshot(),
+        )
+        assert len(violations) == 1
+        assert violations[0].rule == "R2.tense_drift"
+
+
+class TestCheckUnknownProperNoun:
+    def test_substring_of_known_name_passes(self) -> None:
+        snap = CoherenceSnapshot(known_npc_names=["Elara, la Gardienne"])
+        assert check_unknown_proper_noun("Gardienne des lieux, Elara veille.", snap) == []
+
+
+class TestRegistry:
+    def test_registry_has_the_eleven_ported_rules(self) -> None:
+        assert set(RULES) == {
+            "R1.npc_status", "R1.phantom_npc", "R1.item_use_without_owning",
+            "R1.hp_mismatch", "R1.location_mismatch", "R1.zone_violation",
+            "R1.locked_fact_violation",
+            "R2.repetition", "R2.npc_name_drift", "R2.tense_drift",
+            "R2.unknown_proper_noun",
+        }
+
+    def test_initial_modes_match_the_spec(self) -> None:
+        blocking = {rid for rid, (_, mode) in RULES.items() if mode is RuleMode.BLOCK}
+        assert blocking == {
+            "R1.npc_status", "R1.item_use_without_owning",
+            "R1.zone_violation", "R1.locked_fact_violation",
+        }
+
+    def test_run_rules_aggregates_all_rules(self) -> None:
+        snap = CoherenceSnapshot(dead_npcs=["Aldric"])
+        violations = run_rules("Aldric sourit puis Baldur attaque.", snap)
+        rules_hit = {v.rule for v in violations}
+        assert "R1.npc_status" in rules_hit
+        assert "R1.phantom_npc" in rules_hit

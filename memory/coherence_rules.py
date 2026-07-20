@@ -10,6 +10,8 @@ No LLM calls, no I/O, no Discord/DB imports — pure functions only.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from difflib import SequenceMatcher
 from enum import StrEnum
 from typing import Literal
 
@@ -314,4 +316,165 @@ def check_locked_fact_violation(
                 snippet=_snippet_around(narration, subject),
                 expected=f"Locked fact: '{fact.text}'",
             ))
+    return violations
+
+
+# --- Soft rules (R2.*) ---
+
+def _levenshtein(a: str, b: str) -> int:
+    """Iterative Levenshtein distance (ported from the simulator)."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
+        prev = curr
+    return prev[-1]
+
+
+_PASSE_COMPOSE_RE = re.compile(
+    r"\b(a|ont|avons|avez|ai|as)\s+([a-zà-ÿ]+[ée]|fait|pris|vu|dit|allé)\b",
+    re.IGNORECASE,
+)
+_PRESENT_VERB_RE = re.compile(
+    r"\b(regarde|marche|parle|attaque|saute|voit|entend|crie|court|se tient)\b",
+    re.IGNORECASE,
+)
+
+
+def check_repetition(
+    narration: str, snap: CoherenceSnapshot,
+) -> list[CoherenceViolation]:
+    """R2.repetition — ≥ 8 consecutive words shared with a recent narration."""
+    words = narration.split()
+    for prev_text in snap.recent_narrations:
+        if not prev_text:
+            continue
+        sm = SequenceMatcher(a=prev_text.split(), b=words, autojunk=False)
+        match = sm.find_longest_match()
+        if match.size >= 8:
+            snippet = " ".join(words[match.b: match.b + match.size])
+            return [CoherenceViolation(
+                rule="R2.repetition", severity="soft",
+                snippet=snippet[:200],
+                expected="Same ≥10-word phrase appeared in the last 5 turns",
+            )]
+    return []
+
+
+def check_npc_name_drift(
+    narration: str, snap: CoherenceSnapshot,
+) -> list[CoherenceViolation]:
+    """R2.npc_name_drift — proper noun ≤ 2 edits from a known NPC name."""
+    violations: list[CoherenceViolation] = []
+    known_canonical = _canonical_names(snap.known_npc_names)
+    targets: list[str] = []
+    for n in snap.known_npc_names:
+        targets.append(n)
+        words = n.split()
+        if words:
+            head = words[0].rstrip(",.;:!?")
+            if head and head.lower() != n.lower():
+                targets.append(head)
+    seen: set[str] = set()
+    for match in _PROPER_NOUN_RE.finditer(narration):
+        word = match.group(1)
+        if word in _PROPER_NOUN_WHITELIST:
+            continue
+        if word.lower() in known_canonical or word.lower() in seen:
+            continue
+        for npc_name in targets:
+            if (
+                _levenshtein(word.lower(), npc_name.lower()) <= 2
+                and word.lower() != npc_name.lower()
+            ):
+                violations.append(CoherenceViolation(
+                    rule="R2.npc_name_drift", severity="soft",
+                    snippet=_snippet_around(narration, word),
+                    expected=f"'{word}' is 1-2 edits from known NPC '{npc_name}'",
+                ))
+                seen.add(word.lower())
+                break
+    return violations
+
+
+def check_tense_drift(
+    narration: str, snap: CoherenceSnapshot,
+) -> list[CoherenceViolation]:
+    """R2.tense_drift — passé composé and present verbs in the same sentence."""
+    violations: list[CoherenceViolation] = []
+    for sentence in re.split(r"[.!?]", narration):
+        if not sentence.strip():
+            continue
+        if _PASSE_COMPOSE_RE.search(sentence) and _PRESENT_VERB_RE.search(sentence):
+            violations.append(CoherenceViolation(
+                rule="R2.tense_drift", severity="soft",
+                snippet=sentence.strip()[:200],
+                expected="Sentence mixes passé composé and present-tense verbs",
+            ))
+    return violations
+
+
+def check_unknown_proper_noun(
+    narration: str, snap: CoherenceSnapshot,
+) -> list[CoherenceViolation]:
+    """R2.unknown_proper_noun — broader phantom check incl. locations."""
+    violations: list[CoherenceViolation] = []
+    known_names = (
+        {n.lower() for n in snap.known_npc_names}
+        | {p.lower() for p in snap.player_names}
+        | {loc.lower() for loc in snap.known_locations}
+    )
+    seen: set[str] = set()
+    for match in _PROPER_NOUN_RE.finditer(narration):
+        word = match.group(1)
+        if word in _PROPER_NOUN_WHITELIST or word.lower() in seen:
+            continue
+        seen.add(word.lower())
+        if any(word.lower() in name for name in known_names):
+            continue
+        violations.append(CoherenceViolation(
+            rule="R2.unknown_proper_noun", severity="soft",
+            snippet=_snippet_around(narration, word),
+            expected=f"'{word}' is not a known NPC, player, location, or faction",
+        ))
+    return violations
+
+
+# --- Registry ---
+
+RuleFn = Callable[[str, CoherenceSnapshot], list[CoherenceViolation]]
+
+RULES: dict[str, tuple[RuleFn, RuleMode]] = {
+    # Hard — anchored in engine state.
+    "R1.npc_status": (check_npc_status, RuleMode.BLOCK),
+    "R1.item_use_without_owning": (check_item_use_without_owning, RuleMode.BLOCK),
+    "R1.zone_violation": (check_zone_violation, RuleMode.BLOCK),
+    "R1.locked_fact_violation": (check_locked_fact_violation, RuleMode.BLOCK),
+    # Hard but noisy in prod conditions — observe first (spec, amendé).
+    "R1.hp_mismatch": (check_hp_mismatch, RuleMode.OBSERVE),
+    "R1.location_mismatch": (check_location_mismatch, RuleMode.OBSERVE),
+    "R1.phantom_npc": (check_phantom_npc, RuleMode.OBSERVE),
+    # Soft — heuristics.
+    "R2.repetition": (check_repetition, RuleMode.OBSERVE),
+    "R2.npc_name_drift": (check_npc_name_drift, RuleMode.OBSERVE),
+    "R2.tense_drift": (check_tense_drift, RuleMode.OBSERVE),
+    "R2.unknown_proper_noun": (check_unknown_proper_noun, RuleMode.OBSERVE),
+}
+
+
+def run_rules(
+    narration: str, snap: CoherenceSnapshot,
+) -> list[CoherenceViolation]:
+    """Run every registered rule in order and aggregate the violations."""
+    violations: list[CoherenceViolation] = []
+    for rule_fn, _mode in RULES.values():
+        violations.extend(rule_fn(narration, snap))
     return violations
